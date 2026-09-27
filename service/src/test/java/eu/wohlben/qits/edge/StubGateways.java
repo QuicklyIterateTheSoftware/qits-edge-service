@@ -246,7 +246,10 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
           "X-Qits-User",
           "X-Qits-User-Id",
           "X-Qits-Roles",
-          "Cookie");
+          "Cookie",
+          // What a socket's credential became on the way through — the JWT a token stands for,
+          // never the token.
+          "Authorization");
 
   private Vertx vertx;
   private final Map<String, HttpServer> servers = new HashMap<>();

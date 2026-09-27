@@ -490,6 +490,14 @@ on the way back in puts the refusal where the reason is known. docker's `service
 parameters are read and dropped: the audience the token carries *is* the permission, and
 per-repository grants would be a change to the platform's claim model rather than to this process.
 
+**An opaque token logs docker in too:** `docker login registry.<env>.<domain> -u token -p qits_tok_…`
+(any username). At step 3 the edge sees a `qits_tok_` password, grants nothing, and introspects it
+instead — the same call and the same cache as the gated path below — answering the docker-shaped
+body with the JWT the token stands for and the `expires_in` that JWT has **left**. docker then
+presents that JWT as an ordinary Bearer, and comes back to the realm when it runs out, which is where
+a revoked token stops working. An unknown or revoked token is the realm's `401 UNAUTHORIZED`; an idp
+that cannot be reached, its `502 UNAVAILABLE`. A client id and secret behave exactly as before.
+
 ### HTTP Basic, for the clients that cannot do the dance
 
 maven, npm and git send `Authorization: Basic` and nothing else — none of them reads a Bearer
@@ -511,6 +519,14 @@ tiers. **Refusals are not cached**: a rotated secret must start working the mome
 
 The `401` stays the Bearer challenge whatever the credential was — docker is the client that reads
 it — and carries `error="invalid_token"` when a credential was presented and refused.
+
+**The password may be an opaque token instead of a secret**, in two spellings: git's
+`oauth2:qits_tok_…`, and `<any username>:qits_tok_…` for every client that only knows a user and a
+password — maven's `settings.xml`, npm, `docker login`. The password's `qits_tok_` prefix is what
+decides it, and it is looked for first: such a pair is never spent at idp as a client secret, nor
+parsed as the JWT an `oauth2:` password otherwise is. It takes the token path below, and what goes
+upstream is the JWT, exactly as for a Bearer — on a WebSocket upgrade too, because the upgrade copies
+the header map the check has already rewritten.
 
 ### Opaque tokens, introspected per request
 

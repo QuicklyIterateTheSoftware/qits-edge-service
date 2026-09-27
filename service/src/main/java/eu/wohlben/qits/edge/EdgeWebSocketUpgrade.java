@@ -36,11 +36,20 @@ import org.jboss.logging.Logger;
  * upstream connection in a {@code try/catch} that has no other job.
  *
  * <p><b>What an upstream sees is unchanged</b> from the proxy's upgrade path: the inbound headers
- * as {@link EdgeRouter} prepared them — identity asserted, forwarded headers applied — minus {@code
- * Host}, which the client fills in from the socket it opened, with {@code Connection} normalised to
- * {@code Upgrade}. An upstream that refuses the upgrade answers with its own status; the refusal is
- * relayed as that status and the connection is closed rather than pooled, because a connection that
- * has carried a {@code connect()} handshake is not one this class can prove clean.
+ * as {@link EdgeRouter} prepared them — identity asserted, forwarded headers applied, and the
+ * credential already rewritten — minus {@code Host}, which the client fills in from the socket it
+ * opened, with {@code Connection} normalised to {@code Upgrade}. An upstream that refuses the
+ * upgrade answers with its own status; the refusal is relayed as that status and the connection is
+ * closed rather than pooled, because a connection that has carried a {@code connect()} handshake is
+ * not one this class can prove clean.
+ *
+ * <p><b>The credential is settled before this class runs, never here.</b> {@link EdgeRouter} calls
+ * {@link #handle} only from its proxy step, which runs after {@link EdgeAuth#checkCredential} has
+ * passed — and that check rewrites {@code Authorization} on the inbound header map this class
+ * copies. So a socket opened with an opaque {@code qits_tok_} value, or with a client id and
+ * secret, reaches its upstream carrying {@code Bearer <the JWT it was validated with>}, exactly as
+ * a plain request does; and a refused credential is answered 401 before any upstream connection is
+ * acquired.
  */
 final class EdgeWebSocketUpgrade {
 

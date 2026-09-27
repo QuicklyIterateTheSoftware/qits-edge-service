@@ -57,6 +57,10 @@ import org.jboss.logging.Logger;
  * <p>The token itself is validated OFFLINE against idp's published keys ({@link IdpKeys}), so idp
  * is on the login path and not on the per-pull path.
  *
+ * <p>An opaque {@code qits_tok_} value stored with {@code docker login -u token -p qits_tok_…} is
+ * the one realm credential that is not a client secret: step 3 introspects it instead of granting,
+ * and hands docker the JWT it stands for ({@link #realmToken}).
+ *
  * <h2>The other half: clients that cannot do the dance</h2>
  *
  * <p>maven, npm and git send HTTP Basic and nothing else — there is no client in any of them that
@@ -920,6 +924,13 @@ public class EdgeAuth {
       return;
     }
     String credential = basic.substring(BASIC.length()).trim();
+    String opaque = TokenValue.fromBasic(credential);
+    if (opaque != null) {
+      // `docker login -u <anything> -p qits_tok_…`. The token is not a client secret, so nothing is
+      // granted: it is introspected, and the JWT it stands for is what docker is handed.
+      realmToken(request, opaque);
+      return;
+    }
     if (!isClientCredentials(credential)) {
       // A header that says Basic and carries no client id and secret — an empty credential store,
       // a truncated helper answer. There is nothing to ask idp, and asking would hold the client
@@ -934,15 +945,59 @@ public class EdgeAuth {
     grants
         .grant(basic)
         .onSuccess(answer -> relay(request, answer))
+        .onFailure(failure -> realmUnavailable(request));
+  }
+
+  /**
+   * The realm's answer to an opaque token: the JWT it currently stands for, docker-shaped.
+   *
+   * <p>The same introspection {@link #checkToken} runs, cache included — so a token docker logs in
+   * with and a token maven sends on every request are one answer at idp, not two. What docker gets
+   * is the introspection's {@code accessToken}, and its {@code expires_in} is what that JWT has
+   * LEFT rather than idp's original figure: a cached answer is up to {@link
+   * AuthConfig#tokenCacheTtlMs()} old, and docker schedules its re-fetch from this number. docker
+   * then presents the JWT as an ordinary Bearer, validated offline like any other, and comes back
+   * here when it runs out — which is where a revoked token stops working.
+   *
+   * <p>Every arm ends a response, the requirement {@link #token} states: a refusal is the realm's
+   * existing 401, an unreachable idp its existing 502.
+   */
+  private void realmToken(HttpServerRequest request, String token) {
+    introspectToken(token)
+        .onSuccess(
+            known -> {
+              if (known.refusal() != null) {
+                LOG.debugf("the realm refused a token: %s", known.refusal());
+                realmRefused(request, TOKEN_REFUSED);
+                return;
+              }
+              long remaining =
+                  Math.max(0, (known.tokenExpiresAtMillis() - System.currentTimeMillis()) / 1000);
+              issue(request, known.accessToken(), remaining);
+            })
         .onFailure(
-            failure ->
-                request
-                    .response()
-                    .setStatusCode(502)
-                    .putHeader(HttpHeaders.CONTENT_TYPE, "application/json; charset=utf-8")
-                    .end(
-                        dockerErrors("UNAVAILABLE", "the identity provider could not be reached")
-                            .encode()));
+            failure -> {
+              LOG.warnf("the realm could not introspect a token: %s", failure.getMessage());
+              realmUnavailable(request);
+            });
+  }
+
+  /** The realm's 502: idp could not be reached, whichever of its doors was asked. */
+  private static void realmUnavailable(HttpServerRequest request) {
+    request
+        .response()
+        .setStatusCode(502)
+        .putHeader(HttpHeaders.CONTENT_TYPE, "application/json; charset=utf-8")
+        .end(dockerErrors("UNAVAILABLE", "the identity provider could not be reached").encode());
+  }
+
+  /** The realm's 401 for a credential idp refused — no challenge, see {@link #relay}. */
+  private static void realmRefused(HttpServerRequest request, String message) {
+    request
+        .response()
+        .setStatusCode(401)
+        .putHeader(HttpHeaders.CONTENT_TYPE, "application/json; charset=utf-8")
+        .end(dockerErrors("UNAUTHORIZED", message).encode());
   }
 
   /**
@@ -965,23 +1020,21 @@ public class EdgeAuth {
   private void relay(HttpServerRequest request, IdpGrants.Grant answer) {
     if (answer.status() != 200) {
       LOG.warnf("idp refused a token request with %d", answer.status());
-      request
-          .response()
-          .setStatusCode(401)
-          .putHeader(HttpHeaders.CONTENT_TYPE, "application/json; charset=utf-8")
-          .end(
-              dockerErrors("UNAUTHORIZED", "the identity provider refused these credentials")
-                  .encode());
+      realmRefused(request, "the identity provider refused these credentials");
       return;
     }
     JsonObject issued = new JsonObject(answer.body());
-    String accessToken = issued.getString("access_token");
+    issue(request, issued.getString("access_token"), issued.getValue("expires_in"));
+  }
+
+  /** The Distribution spec's token response, for a JWT from either a grant or an introspection. */
+  private static void issue(HttpServerRequest request, String accessToken, Object expiresIn) {
     JsonObject dockerToken = new JsonObject();
     // `token` is what the docker CLI reads; `access_token` is the same string under the name the
     // OAuth2 half of the spec uses, and clients differ about which they look for. Both, always.
     dockerToken.put("token", accessToken);
     dockerToken.put("access_token", accessToken);
-    dockerToken.put("expires_in", issued.getValue("expires_in"));
+    dockerToken.put("expires_in", expiresIn);
     dockerToken.put("issued_at", Instant.now().toString());
     request
         .response()

@@ -1859,6 +1859,43 @@ class EdgeRoutingTest {
   }
 
   @Test
+  void aWebSocketOpenedWithATokenReachesTheServiceCarryingTheJwt() {
+    // The upgrade is the edge's own path, but the credential is settled before it: the router runs
+    // the check, the check rewrites Authorization on the inbound map, and the handshake copies that
+    // map. So a terminal opened with a token is a terminal holding the JWT, as a plain request is.
+    activateCi();
+    String seen =
+        client().handshake("ci.dev.acme.example.com", "/terminal", bearer(StubGateways.TOKEN));
+    assertTrue(seen.lines().anyMatch("upstream=mirror-dev"::equals), seen);
+    String authorization =
+        seen.lines()
+            .filter(l -> l.startsWith("authorization="))
+            .map(l -> l.substring("authorization=".length()))
+            .findFirst()
+            .orElseThrow();
+    assertTrue(authorization.startsWith("Bearer "), authorization);
+    assertFalse(authorization.contains(TokenValue.PREFIX), "the token itself never travels");
+    SignedJwt forwarded = SignedJwt.parse(authorization.substring("Bearer ".length()));
+    assertEquals(StubGateways.TOKEN_SUBJECT, forwarded.claims().getString("sub"));
+    assertTrue(forwarded.signatureMatches(TestTokens.IDP.getPublic()));
+  }
+
+  @Test
+  void aWebSocketOpenedWithARefusedTokenIsA401BeforeAnyUpstream() {
+    // Refused at the gate, which runs before the upgrade path exists for this request: the stub
+    // upstream would have answered 101, so a 401 here is the edge's own and no socket was opened.
+    activateCi();
+    Map<String, String> headers = new java.util.HashMap<>(upgrade());
+    headers.put("Authorization", "Bearer " + StubGateways.UNKNOWN_TOKEN);
+    EdgeClient.Answer answer =
+        client().send(HttpMethod.GET, "ci.dev.acme.example.com", "/terminal", null, headers);
+    assertEquals(401, answer.status(), answer.body());
+    assertTrue(
+        answer.headers().get("www-authenticate").startsWith("Bearer realm="),
+        answer.headers().get("www-authenticate"));
+  }
+
+  @Test
   void aRefusedUpgradeAnswersTheUpstreamsOwnStatus() {
     // The upstream said no; the caller learns what it said, not a generic 502 — a workspace
     // service answering 403 on a terminal socket is an authorization answer, not an edge fault.
@@ -2420,6 +2457,68 @@ class EdgeRoutingTest {
     assertEquals(
         "registry-dev",
         client().get("registry.dev.acme.example.com", "/v2/", bearer(issued)).line("upstream"));
+  }
+
+  @Test
+  void theTokenEndpointHandsDockerTheJwtAStoredTokenStandsFor() throws Exception {
+    // `docker login -u token -p qits_tok_…`: the realm introspects rather than grants, and docker
+    // is handed an ordinary idp JWT that the registry vhost then validates offline.
+    Thread.sleep(tokenCacheTtlMs() + 400);
+    int grants = StubGateways.grants();
+    EdgeClient.Answer answer =
+        client()
+            .get(
+                "registry.dev.acme.example.com",
+                "/token?service=registry.dev.acme.example.com&scope=repository:qits/x:pull",
+                basic("token", StubGateways.TOKEN));
+    assertEquals(200, answer.status(), answer.body());
+    assertEquals("no-store", answer.headers().get("cache-control"));
+    JsonObject issued = new JsonObject(answer.body());
+    String jwt = issued.getString("token");
+    assertEquals(jwt, issued.getString("access_token"));
+    assertFalse(jwt.startsWith(TokenValue.PREFIX), "docker is handed the JWT, not the token");
+    SignedJwt parsed = SignedJwt.parse(jwt);
+    assertTrue(parsed.signatureMatches(TestTokens.IDP.getPublic()));
+    assertNull(parsed.problem(issuer(), List.of(StubGateways.audience("dev")), Instant.now(), 0));
+    assertEquals(StubGateways.TOKEN_SUBJECT, parsed.claims().getString("sub"));
+    long expiresIn = issued.getLong("expires_in");
+    assertTrue(
+        expiresIn > 0 && expiresIn <= StubGateways.TOKEN_JWT_SECONDS,
+        "what the JWT has left, never more than idp gave it: " + expiresIn);
+    assertNotNull(issued.getString("issued_at"));
+    assertEquals(grants, StubGateways.grants(), "a token is never spent as a client secret");
+
+    assertEquals(
+        "registry-dev",
+        client().get("registry.dev.acme.example.com", "/v2/", bearer(jwt)).line("upstream"),
+        "and the registry takes it as the Bearer it is");
+  }
+
+  @Test
+  void theTokenEndpointRefusesATokenIdpDoesNotKnow() {
+    EdgeClient.Answer answer =
+        client()
+            .get(
+                "registry.dev.acme.example.com",
+                "/token",
+                basic("token", StubGateways.UNKNOWN_TOKEN));
+    assertEquals(401, answer.status(), answer.body());
+    assertTrue(answer.body().contains("UNAUTHORIZED"), answer.body());
+  }
+
+  @Test
+  void theTokenEndpointAnswers502WhenIdpCannotBeAskedAboutAToken() throws Exception {
+    Thread.sleep(tokenCacheTtlMs() + 400);
+    StubGateways.idpDown();
+    try {
+      EdgeClient.Answer answer =
+          client()
+              .get("registry.dev.acme.example.com", "/token", basic("token", StubGateways.TOKEN));
+      assertEquals(502, answer.status(), answer.body());
+      assertTrue(answer.body().contains("UNAVAILABLE"), answer.body());
+    } finally {
+      StubGateways.idpUp();
+    }
   }
 
   // --- HTTP Basic, for the clients that cannot do docker's dance --------------------------------
