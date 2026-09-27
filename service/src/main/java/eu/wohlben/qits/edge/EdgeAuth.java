@@ -1,5 +1,6 @@
 package eu.wohlben.qits.edge;
 
+import io.quarkus.runtime.StartupEvent;
 import io.vertx.core.Future;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpMethod;
@@ -8,6 +9,7 @@ import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -83,6 +85,18 @@ import org.jboss.logging.Logger;
  * forward would be a request quietly downgraded to anonymous. Refusals are not cached — see {@link
  * #checkBasic}.
  *
+ * <h2>The third credential: an opaque token</h2>
+ *
+ * <p>A {@code qits_tok_…} value ({@link TokenValue}) is neither a JWT nor a client secret. It is a
+ * row at idp, which is the point — it can be deleted — and so this process cannot decide anything
+ * about it alone. It asks idp's {@code /api/tokens/introspect} ({@link #checkToken}), receives the
+ * ordinary JWT the token currently stands for, holds that JWT to exactly the Bearer rules above,
+ * and forwards IT: an upstream never sees a token, only a JWT its own OIDC mechanism already
+ * validates. A token is never parsed as a JWT and a JWT is never sent to introspection; the prefix
+ * tells them apart before either path begins. idp's answer is cached per token for {@link
+ * AuthConfig#tokenCacheTtlMs()} — refusals included — which is the whole of a revoked token's
+ * afterlife here.
+ *
  * <h2>The one gap in a gated vhost</h2>
  *
  * <p>A vhost is the decision, but not every METHOD on it has to be. {@link
@@ -125,6 +139,12 @@ public class EdgeAuth {
 
   @Inject IdpGrants grants;
 
+  /**
+   * The dial at idp's introspection doors, shared with {@link EdgeSessions}: the same client, the
+   * same patience and the edge's own client credential.
+   */
+  @Inject IdpIntrospection introspection;
+
   /** {@link AuthConfig#anonymousReadApps()}, normalised once — see {@link #readApps}. */
   private Set<String> anonymousReadApps;
 
@@ -142,20 +162,50 @@ public class EdgeAuth {
    */
   private Map<String, Validated> validated;
 
+  /**
+   * Token fingerprint to what idp said about it — acceptances AND refusals, see {@link
+   * #checkToken}. Bounded and least-recently-used, like {@link #validated} and for the same reason,
+   * which applies twice over here: every made-up token is an entry.
+   */
+  private Map<String, Introspected> tokens;
+
   @PostConstruct
   void open() {
     anonymousReadApps = readApps(config.anonymousReadApps().orElse(List.of()));
-    int capacity = config.basicCacheSize();
-    validated =
-        Collections.synchronizedMap(
-            // Access-ordered, so the entry evicted is the one longest unused rather than the one
-            // written longest ago — a busy client stays cached while a one-off caller ages out.
-            new LinkedHashMap<>(16, 0.75f, true) {
-              @Override
-              protected boolean removeEldestEntry(Map.Entry<String, Validated> eldest) {
-                return size() > capacity;
-              }
-            });
+    validated = lru(config.basicCacheSize());
+    tokens = lru(config.tokenCacheSize());
+  }
+
+  /**
+   * A bounded, synchronized, least-recently-used map. Access-ordered, so the entry evicted is the
+   * one longest unused rather than the one written longest ago — a busy client stays cached while a
+   * one-off caller ages out.
+   */
+  private static <V> Map<String, V> lru(int capacity) {
+    return Collections.synchronizedMap(
+        new LinkedHashMap<>(16, 0.75f, true) {
+          @Override
+          protected boolean removeEldestEntry(Map.Entry<String, V> eldest) {
+            return size() > capacity;
+          }
+        });
+  }
+
+  /**
+   * Say once, at startup, that tokens cannot open anything here. The token path asks idp with the
+   * edge's own client ({@link SessionsConfig#clientId()}), and without one there is nothing to ask
+   * with — so every token is refused, and a WARN now is worth more than a 401 per request whose
+   * reason only a debug log holds. Not a startup FAILURE, unlike the session gate's: a clone and a
+   * suite run with no such client, and every other credential here works without it.
+   */
+  void warnWhenTokensCannotBeIntrospected(@Observes StartupEvent ignored) {
+    if (!introspection.hasCredential()) {
+      LOG.warnf(
+          "the edge holds no idp client of its own (QITS_EDGE_SESSIONS_CLIENT_ID and"
+              + " QITS_EDGE_SESSIONS_CLIENT_SECRET), so every %s… token presented here is refused"
+              + " without asking %s",
+          TokenValue.PREFIX, idp.tokenIntrospectionEndpoint());
+    }
   }
 
   /**
@@ -307,6 +357,13 @@ public class EdgeAuth {
             config.platformAudience());
     if (header != null && header.toLowerCase(Locale.ROOT).startsWith(BASIC)) {
       String credential = header.substring(BASIC.length()).trim();
+      String opaque = TokenValue.fromBasic(credential);
+      if (opaque != null) {
+        // A token as the password of a Basic pair — git's `oauth2:<token>`, or any user at all.
+        // Looked for FIRST, so a token is never spent at idp as a client secret nor parsed as the
+        // JWT an `oauth2:` password otherwise is.
+        return checkToken(request, opaque, audiences);
+      }
       String workstationToken = oauth2Token(credential);
       if (workstationToken != null) {
         return checkBearer(workstationToken, audiences)
@@ -329,7 +386,11 @@ public class EdgeAuth {
     if (header == null || !header.toLowerCase(Locale.ROOT).startsWith(BEARER)) {
       return Future.succeededFuture("no bearer token");
     }
-    return checkBearer(header.substring(BEARER.length()).trim(), audiences);
+    String presented = header.substring(BEARER.length()).trim();
+    if (TokenValue.isToken(presented)) {
+      return checkToken(request, presented, audiences);
+    }
+    return checkBearer(presented, audiences);
   }
 
   /** Validate the JWT carried directly as Bearer, or as Git's {@code oauth2:<token>} Basic pair. */
@@ -455,6 +516,190 @@ public class EdgeAuth {
             });
   }
 
+  /** The reason every idp refusal of a token is given, whatever idp's own status was. */
+  static final String TOKEN_REFUSED = "the identity provider refused this token";
+
+  /** The reason every token is given while the edge holds no client to introspect with. */
+  static final String TOKEN_UNCHECKABLE = "the edge cannot introspect tokens";
+
+  /**
+   * What idp said about one opaque token: either the JWT it stands for — with that JWT's audiences
+   * and expiry — or a refusal. One record for both, because both are cached under the same key and
+   * a lookup has to answer either.
+   *
+   * <p>The JWT is held for the reason {@link Validated} holds one: it is what travels. An accepted
+   * request leaves carrying it, so a hit with only a verdict would forward nothing. In memory only,
+   * never logged, retired {@link #TOKEN_MARGIN_MS} before its own {@code exp}.
+   *
+   * @param audiences the minted JWT's {@code aud}; null on a refusal
+   * @param accessToken the minted JWT, forwarded upstream in the token's place; null on a refusal
+   * @param tokenExpiresAtMillis the minted JWT's own {@code exp} — what the docker realm reports as
+   *     the remaining {@code expires_in}; 0 on a refusal
+   * @param expiresAtMillis when this belief stops, accepted or refused — see {@link
+   *     #tokenBelieveUntil}
+   * @param refusal null when accepted, the reason otherwise
+   */
+  private record Introspected(
+      JsonArray audiences,
+      String accessToken,
+      long tokenExpiresAtMillis,
+      long expiresAtMillis,
+      String refusal) {
+
+    static Introspected refused(String reason, long untilMillis) {
+      return new Introspected(null, null, 0, untilMillis, reason);
+    }
+  }
+
+  /**
+   * idp could not be reached to introspect a token — the network, not a verdict.
+   *
+   * <p>A type of its own so {@link EdgeRouter} can answer it as what it is: a {@code 503}, a
+   * retryable "not now", rather than the {@code 401} a failed check otherwise meets. The difference
+   * matters most to git, whose credential helper ERASES a stored credential on a 401 — so an idp
+   * redeploy answered 401 would delete a person's perfectly good token from their keychain. The
+   * message names the door that did not answer, which is the one fact the operator needs.
+   */
+  static final class IdpUnreachable extends RuntimeException {
+    IdpUnreachable(String endpoint, Throwable cause) {
+      super(endpoint + " could not be reached: " + cause, cause);
+    }
+  }
+
+  /**
+   * Whether an opaque token opens this vhost: cached belief first, then idp — and, when it does,
+   * the request's {@code Authorization} header replaced by the JWT the token stands for.
+   *
+   * <p><b>The token never travels past this process.</b> An upstream could do nothing with one — it
+   * holds no keys for it and no introspection credential — and it is a durable secret besides,
+   * which is the opposite of what a hop one further in should hold. What goes on is the JWT idp
+   * minted for it, validated here exactly as a presented Bearer is, so the upstream's own OIDC
+   * mechanism validates it again and builds the roles from its claims.
+   *
+   * <p><b>A REFUSAL IS CACHED, and that is the deliberate difference from {@link #checkBasic}.</b>
+   * The Basic path declines to cache one because the case it would slow down is a rotated secret
+   * that must start working the moment it is right. A token has no such case: it is never fixed in
+   * place — a person who has the wrong one issues a new one, which is a new value and a new cache
+   * key. What the Basic reasoning would cost here instead is real: a revoked token left in a CI
+   * config, or a caller cycling through made-up values, would be one idp round trip per request, on
+   * the door that holds every token on the platform. So idp's no is believed for {@link
+   * AuthConfig#tokenCacheTtlMs()}, the same window a yes is — the door reopens, for a token idp
+   * would accept again, within that bound.
+   *
+   * <p>Only idp's own answer is cached as a refusal. A 200 whose JWT does not hold up here — no
+   * token, a wrong issuer, a signature that does not verify — is refused and NOT written down: it
+   * is a fault somewhere between the two processes rather than a verdict about the token, and a
+   * fault should be asked about again once it is fixed.
+   *
+   * <p>An idp that cannot be reached is a FAILED future carrying {@link IdpUnreachable}, never a
+   * pass and never a cached refusal: nothing was learnt about the token.
+   */
+  private Future<String> checkToken(
+      HttpServerRequest request, String token, List<String> audiences) {
+    return introspectToken(token)
+        .map(
+            known ->
+                known.refusal() != null
+                    ? known.refusal()
+                    : forward(request, known.audiences(), known.accessToken(), audiences));
+  }
+
+  /**
+   * idp's answer about one token, cached — the half of {@link #checkToken} that has nothing to do
+   * with a vhost, and so the half the docker realm shares.
+   *
+   * <p>The minted JWT is held to the rules a minted Basic token is ({@link #checkBasic}): it
+   * parses, its issuer and expiry hold, and its signature verifies against the published key.
+   * Running the one code path means a token can never buy more than the JWT it stands for. The
+   * vhost's audience is NOT decided here — one cached answer must still refuse the vhost of another
+   * tier — which is why the audiences are kept rather than a yes.
+   */
+  private Future<Introspected> introspectToken(String token) {
+    String fingerprint = fingerprint(token);
+    Introspected known = tokens.get(fingerprint);
+    if (known != null) {
+      if (known.expiresAtMillis() > System.currentTimeMillis()) {
+        return Future.succeededFuture(known);
+      }
+      tokens.remove(fingerprint, known);
+    }
+    if (!introspection.hasCredential()) {
+      // Said once at startup — see warnWhenTokensCannotBeIntrospected. Not cached: there is no
+      // answer to remember, only an absence that a restart with the credential ends.
+      return Future.succeededFuture(Introspected.refused(TOKEN_UNCHECKABLE, 0));
+    }
+    String endpoint = idp.tokenIntrospectionEndpoint();
+    return introspection
+        .introspect(endpoint, token)
+        .recover(failure -> Future.failedFuture(new IdpUnreachable(endpoint, failure)))
+        .compose(
+            answer -> {
+              if (answer.status() != 200) {
+                // idp DECIDED: unknown, deleted, or asked without our own credential. Believed for
+                // the same window an acceptance is — see checkToken for why.
+                Introspected refused =
+                    Introspected.refused(
+                        TOKEN_REFUSED, System.currentTimeMillis() + config.tokenCacheTtlMs());
+                tokens.put(fingerprint, refused);
+                return Future.succeededFuture(refused);
+              }
+              String issued;
+              long expiresIn;
+              SignedJwt minted;
+              try {
+                JsonObject body = new JsonObject(answer.body());
+                issued = body.getString("accessToken");
+                Number life = body.getNumber("expiresIn");
+                expiresIn = life == null ? 0 : life.longValue();
+                minted = SignedJwt.parse(issued);
+              } catch (RuntimeException e) {
+                return Future.succeededFuture(
+                    Introspected.refused("the identity provider issued no usable token", 0));
+              }
+              String problem =
+                  minted.problem(idp.issuer(), Instant.now(), config.clockSkewSeconds());
+              if (problem != null) {
+                return Future.succeededFuture(Introspected.refused(problem, 0));
+              }
+              return keys.find(minted.kid())
+                  .map(
+                      key -> {
+                        if (!minted.signatureMatches(key)) {
+                          return Introspected.refused(
+                              "the minted token's signature does not verify", 0);
+                        }
+                        long now = System.currentTimeMillis();
+                        Introspected fresh =
+                            new Introspected(
+                                minted.audiences(),
+                                issued,
+                                minted.expiry().toEpochMilli(),
+                                tokenBelieveUntil(
+                                    now, config.tokenCacheTtlMs(), expiresIn, TOKEN_MARGIN_MS),
+                                null);
+                        tokens.put(fingerprint, fresh);
+                        return fresh;
+                      });
+            });
+  }
+
+  /**
+   * When to stop believing idp's yes about a token: its {@code expiresIn} less the margin, capped
+   * by {@link AuthConfig#tokenCacheTtlMs()} — {@link #believeUntil}'s rule, fed from the
+   * introspection answer's own relative lifetime rather than a JWT claim, so it holds even against
+   * a clock that disagrees with idp's.
+   *
+   * <p>Never negative, for the reason {@code believeUntil} gives: a JWT already inside the margin
+   * is an entry that expired before it was written, so the token is introspected again next time
+   * rather than a dying JWT being handed on.
+   *
+   * <p>Package-private and static so the arithmetic can be asserted without booting an application.
+   */
+  static long tokenBelieveUntil(long now, long ttlMs, long expiresInSeconds, long marginMs) {
+    return believeUntil(
+        now, ttlMs, Instant.ofEpochMilli(now + Math.max(0, expiresInSeconds) * 1000), marginMs);
+  }
+
   /**
    * The verdict for this vhost, and — when it is yes — the token written onto the request in the
    * credential's place.
@@ -463,9 +708,15 @@ public class EdgeAuth {
    * credential here without replacing it, and no way to replace it without having accepted it.
    */
   private String forward(HttpServerRequest request, Validated accepted, List<String> audiences) {
-    String problem = refusalFor(accepted.audiences(), audiences);
+    return forward(request, accepted.audiences(), accepted.token(), audiences);
+  }
+
+  /** {@link #forward(HttpServerRequest, Validated, List)} for any minted JWT and its audiences. */
+  private static String forward(
+      HttpServerRequest request, JsonArray carried, String jwt, List<String> audiences) {
+    String problem = refusalFor(carried, audiences);
     if (problem == null) {
-      request.headers().set(HttpHeaders.AUTHORIZATION, "Bearer " + accepted.token());
+      request.headers().set(HttpHeaders.AUTHORIZATION, "Bearer " + jwt);
     }
     return problem;
   }
@@ -592,6 +843,25 @@ public class EdgeAuth {
     response
         .putHeader(HttpHeaders.CONTENT_TYPE, "application/json; charset=utf-8")
         .end(dockerErrors("UNAUTHORIZED", "authentication required").encode());
+  }
+
+  /**
+   * The 503 a credential gets when the identity provider that has to vouch for it cannot be reached
+   * — {@link IdpUnreachable}. Retryable and says so: a {@code Retry-After} of one second, and the
+   * Distribution spec's {@code UNAVAILABLE} envelope, the same code the realm answers an
+   * unreachable idp with.
+   *
+   * <p><b>No challenge</b>, which is the point of it not being a 401: nothing is wrong with the
+   * credential, and a client told otherwise may throw it away — git's credential helper erases a
+   * stored password on a 401.
+   */
+  public void unavailable(HttpServerRequest request) {
+    request
+        .response()
+        .setStatusCode(503)
+        .putHeader(HttpHeaders.RETRY_AFTER, "1")
+        .putHeader(HttpHeaders.CONTENT_TYPE, "application/json; charset=utf-8")
+        .end(dockerErrors("UNAVAILABLE", "the identity provider could not be reached").encode());
   }
 
   /**

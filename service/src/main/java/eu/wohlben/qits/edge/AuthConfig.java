@@ -118,6 +118,32 @@ public interface AuthConfig {
   int basicCacheSize();
 
   /**
+   * How long idp's answer about an opaque {@code qits_tok_} token is believed without asking again,
+   * in milliseconds — and therefore <b>the upper bound on a revoked token's afterlife at the
+   * edge</b>. A token deleted at idp keeps opening doors here for at most this long, and not a
+   * moment past it.
+   *
+   * <p>A ceiling like {@link #basicCacheTtlMs()}: an accepted entry also dies with the JWT idp
+   * minted for it, {@link EdgeAuth#TOKEN_MARGIN_MS} before that JWT's own expiry. Unlike it, a
+   * REFUSAL is held for this long too — see {@link EdgeAuth}'s {@code checkToken} for why a revoked
+   * or made-up token must not become a request per request at idp.
+   *
+   * <p>Fifteen seconds rather than the Basic cache's five minutes, because revocation is the reason
+   * tokens are opaque at all: a secret is rotated rarely and on purpose, whereas a token is deleted
+   * the moment it leaks, and the person deleting it expects the door to shut while they watch.
+   */
+  @WithDefault("15000")
+  long tokenCacheTtlMs();
+
+  /**
+   * The most tokens held at once, accepted and refused together. A bound rather than a tuning knob,
+   * the same reason as {@link #basicCacheSize()}: the key is a caller's — and a caller can make up
+   * as many unknown tokens as it likes, each of which is now an entry.
+   */
+  @WithDefault("1024")
+  int tokenCacheSize();
+
+  /**
    * How long the edge keeps trying to reach idp before it answers an error, in milliseconds.
    *
    * <p>idp is redeployed like any other container, and for a few seconds its name refuses, drops or

@@ -76,6 +76,15 @@ public class Idp {
     return dialBase() + "/api/sessions/introspect";
   }
 
+  /**
+   * {@code <dial>/api/tokens/introspect} — an opaque {@code qits_tok_} token in, the ordinary idp
+   * JWT it currently stands for out. The sibling of {@link #introspectionEndpoint()}: the same API,
+   * the same caller credential, the same dial address, and a different question.
+   */
+  public String tokenIntrospectionEndpoint() {
+    return dialBase() + "/api/tokens/introspect";
+  }
+
   private String trimmed(String value) {
     String url = value.trim();
     while (url.endsWith("/")) {

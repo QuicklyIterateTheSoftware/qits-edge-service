@@ -56,6 +56,11 @@ import java.util.concurrent.TimeUnit;
  * And {@link #BRIEF_ID} is the fifth shape: commissioned exactly as the first, but issued a token
  * with barely any life left — the credential whose acceptance the edge may not cache, because what
  * a cache entry holds is the token it would forward.
+ *
+ * <p><b>And one opaque token, {@link #TOKEN}</b>, which {@code /idp/api/tokens/introspect} stands
+ * for a JWT this stub mints on the spot — and which can be {@link #revokeToken revoked} mid-suite.
+ * Every other {@code qits_tok_} value is unknown. {@link #tokenIntrospections()} counts the calls,
+ * so a cached answer — a yes or a no — is provable by the call that did not happen.
  */
 public class StubGateways implements QuarkusTestResourceLifecycleManager {
 
@@ -130,6 +135,21 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
   /** The two rows the register token grants the first account, per the plan. */
   static final List<String> SESSION_ROLES = List.of("qits:admin");
 
+  /** The one opaque token the stub idp knows: the fixed prefix and 43 characters of base64url. */
+  static final String TOKEN = "qits_tok_" + "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdE";
+
+  /** The same shape, and a value the stub idp has never issued. */
+  static final String UNKNOWN_TOKEN = "qits_tok_" + "ZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZzZ";
+
+  /** The subject of the JWT {@link #TOKEN} stands for — a token's own, never a person's. */
+  static final String TOKEN_SUBJECT = "tok-ci-run-stub-x";
+
+  /** The role the token was issued with; its JWT's {@code groups} carry it. */
+  static final String TOKEN_ROLE = "qits:ci-run";
+
+  /** The life of the JWT {@link #TOKEN} is stood for, as idp's {@code expiresIn}. */
+  static final long TOKEN_JWT_SECONDS = 300;
+
   /** The running instance, so a test can take the identity provider away and give it back. */
   private static volatile StubGateways running;
 
@@ -142,6 +162,26 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
       new java.util.concurrent.atomic.AtomicInteger();
 
   private static volatile boolean revoked;
+
+  /** The same, for {@code /idp/api/tokens/introspect}. */
+  private static final java.util.concurrent.atomic.AtomicInteger TOKEN_INTROSPECTIONS =
+      new java.util.concurrent.atomic.AtomicInteger();
+
+  private static volatile boolean tokenRevoked;
+
+  static int tokenIntrospections() {
+    return TOKEN_INTROSPECTIONS.get();
+  }
+
+  /** Delete {@link #TOKEN} at idp, as far as the edge can tell. */
+  static void revokeToken() {
+    tokenRevoked = true;
+  }
+
+  /** Put it back, so one test's revocation is not every later test's. */
+  static void restoreToken() {
+    tokenRevoked = false;
+  }
 
   static int grants() {
     return GRANTS.get();
@@ -272,6 +312,9 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     // The three time bounds, shrunk to a suite's patience. Their SHIPPED values are pinned in
     // EdgeChallengeTest instead: a default is a deployment fact and must not be readable from here.
     config.put("qits.edge.auth.basic-cache-ttl-ms", "2000");
+    // A token's answer — yes or no — is believed for this long, so a revocation is observable
+    // inside a test rather than a quarter of a minute later.
+    config.put("qits.edge.auth.token-cache-ttl-ms", "1500");
     config.put("qits.edge.auth.idp-retry-window-ms", "3000");
     config.put("qits.edge.auth.idp-call-timeout-ms", "1000");
     // The session gate's own credential and time bounds. Shipped here rather than in the profile
@@ -311,6 +354,11 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
                     .response()
                     .putHeader("Content-Type", "application/json")
                     .end(TestTokens.jwks().encode());
+                return;
+              }
+              if (request.path().equals("/idp/api/tokens/introspect")) {
+                TOKEN_INTROSPECTIONS.incrementAndGet();
+                request.body().onSuccess(body -> introspectToken(request, body.toString()));
                 return;
               }
               if (request.path().equals("/idp/api/sessions/introspect")) {
@@ -358,6 +406,56 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
                 .put(
                     "expiresAt",
                     java.time.Instant.now().plus(java.time.Duration.ofHours(12)).toString())
+                .encode());
+  }
+
+  /**
+   * {@code POST /idp/api/tokens/introspect} — the contract qits-idp implements: the edge's own
+   * client in HTTP Basic, {@code {"token": …}} in, and for a live token the ordinary idp JWT it
+   * stands for, minted here by the same key {@code /idp/token} signs with. {@code aud} is the whole
+   * list this stub hands its registry clients plus the platform audience; {@code groups} is the
+   * token's role and its own {@code clients/<subject>} entry, as idp writes them.
+   *
+   * <p>An unknown or revoked token is a 404 with an OAuth error body, the shape the sessions door's
+   * refusal has.
+   */
+  private void introspectToken(HttpServerRequest request, String body) {
+    if (!basic(EDGE_ID, EDGE_SECRET).equals(request.getHeader("Authorization"))) {
+      request.response().setStatusCode(401).end();
+      return;
+    }
+    String token = new io.vertx.core.json.JsonObject(body).getString("token");
+    if (!TOKEN.equals(token) || tokenRevoked) {
+      request
+          .response()
+          .setStatusCode(404)
+          .putHeader("Content-Type", "application/json")
+          .end("{\"error\":\"invalid_token\",\"error_description\":\"unknown token\"}");
+      return;
+    }
+    String issuer = "http://127.0.0.1:" + idpPort + "/idp";
+    List<String> audiences = List.of(audience("dev"), audience("prod"), PLATFORM_AUDIENCE);
+    io.vertx.core.json.JsonObject claims =
+        TestTokens.claims(issuer, audiences, java.time.Instant.now().plusSeconds(TOKEN_JWT_SECONDS))
+            .put("sub", TOKEN_SUBJECT)
+            .put(
+                "groups",
+                new io.vertx.core.json.JsonArray().add(TOKEN_ROLE).add("clients/" + TOKEN_SUBJECT));
+    request
+        .response()
+        .putHeader("Content-Type", "application/json")
+        .end(
+            new io.vertx.core.json.JsonObject()
+                .put("tokenId", "7d1f0c2e-0000-4000-8000-00000000cafe")
+                .put("subject", TOKEN_SUBJECT)
+                .put("roles", new io.vertx.core.json.JsonArray().add(TOKEN_ROLE))
+                .put("claims", new io.vertx.core.json.JsonObject())
+                .put("gitRefs", new io.vertx.core.json.JsonArray().add("refs/heads/proof/*"))
+                .put("contextKind", "ci-run")
+                .put("contextId", "stub")
+                .put(
+                    "accessToken", TestTokens.mint(TestTokens.IDP, TestTokens.KID, "RS256", claims))
+                .put("expiresIn", TOKEN_JWT_SECONDS)
                 .encode());
   }
 
@@ -539,6 +637,7 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
   public void stop() {
     running = null;
     revoked = false;
+    tokenRevoked = false;
     if (vertx != null) {
       vertx.close();
     }

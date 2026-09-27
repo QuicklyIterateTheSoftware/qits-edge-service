@@ -48,6 +48,9 @@ class IdpTest {
     assertEquals(
         "http://dev-qits-platform-idp:8080/idp/api/sessions/introspect",
         idp.introspectionEndpoint());
+    assertEquals(
+        "http://dev-qits-platform-idp:8080/idp/api/tokens/introspect",
+        idp.tokenIntrospectionEndpoint());
   }
 
   @Test

@@ -359,6 +359,8 @@ a file.
 | `qits.edge.auth.jwks-refresh-cooldown-ms` | `QITS_EDGE_AUTH_JWKS_REFRESH_COOLDOWN_MS` | `5000` | Shortest gap between two JWKS fetches |
 | `qits.edge.auth.basic-cache-ttl-ms` | `QITS_EDGE_AUTH_BASIC_CACHE_TTL_MS` | `300000` | Ceiling on how long a validated HTTP Basic credential is believed; the minted token's own life is the other half |
 | `qits.edge.auth.basic-cache-size` | `QITS_EDGE_AUTH_BASIC_CACHE_SIZE` | `1024` | The most validated credentials held at once, least-recently-used |
+| `qits.edge.auth.token-cache-ttl-ms` | `QITS_EDGE_AUTH_TOKEN_CACHE_TTL_MS` | `15000` | Ceiling on how long idp's answer about an opaque `qits_tok_` token is believed — refusals included. **The upper bound on a revoked token's afterlife at the edge** |
+| `qits.edge.auth.token-cache-size` | `QITS_EDGE_AUTH_TOKEN_CACHE_SIZE` | `1024` | The most introspected tokens held at once, accepted and refused together, least-recently-used |
 | `qits.edge.auth.idp-retry-window-ms` | `QITS_EDGE_AUTH_IDP_RETRY_WINDOW_MS` | `45000` | How long a redeploying idp is waited out before the edge answers an error |
 | `qits.edge.auth.idp-call-timeout-ms` | `QITS_EDGE_AUTH_IDP_CALL_TIMEOUT_MS` | `5000` | How long ONE call to idp may take, connection included — **what makes an answer certain** |
 | `qits.edge.sessions.enabled` | `QITS_EDGE_SESSIONS_ENABLED` | `false` | Whether a browser needs a session on a service vhost — **the rollout flag** |
@@ -510,13 +512,56 @@ tiers. **Refusals are not cached**: a rotated secret must start working the mome
 The `401` stays the Bearer challenge whatever the credential was — docker is the client that reads
 it — and carries `error="invalid_token"` when a credential was presented and refused.
 
+### Opaque tokens, introspected per request
+
+A **token** is a value idp issues and stores hashed: `qits_tok_` followed by 43 characters of
+base64url. It is not a JWT and carries nothing the edge could check alone — what it stands for is a
+row at idp, which is exactly what makes it revocable. The prefix is the whole recogniser: a JWT
+always begins `eyJ`, so the two are told apart before anything is parsed, a token is never parsed
+as a JWT or looked up in the JWKS, and a JWT is never sent to introspection.
+
+It is accepted in three spellings, all on the same path:
+
+- `Authorization: Bearer qits_tok_…`;
+- `Authorization: Basic base64(oauth2:qits_tok_…)` — git's credential-helper convention;
+- `Authorization: Basic base64(<anything>:qits_tok_…)` — any username at all; the password is what
+  says it is a token.
+
+The edge `POST`s it to `<qits.idp.dial-url>/api/tokens/introspect` with its **own** client id and
+secret in HTTP Basic — the pair it introspects browser sessions with (`qits.edge.sessions.client-id`
+/ `-secret`), over the same dial, with the same per-attempt timeout and retry window. idp answers
+the ordinary idp JWT the token currently stands for; the edge holds that JWT to the Bearer rules —
+issuer, expiry, signature, and this vhost's audience — and **forwards the JWT in the token's place**.
+An upstream never sees a token: it sees a JWT its own OIDC mechanism already validates, with the
+token's roles in `groups`. A token can therefore never buy more than the JWT it stands for.
+
+idp's answer is cached against a **SHA-256 of the token**, in a bounded LRU
+(`token-cache-size`), for the shorter of the minted JWT's life less the minute's margin and
+`token-cache-ttl-ms`. **Refusals are cached too**, for the whole TTL — deliberately unlike the Basic
+cache. A secret is fixed in place, so caching its refusal would keep a corrected credential shut; a
+token is never fixed, it is replaced by a new value with a new cache key, while a revoked token left
+in a CI config or a caller cycling made-up values would otherwise be one idp round trip per request
+on the door that holds every token on the platform.
+
+An unknown, deleted or wrongly-asked-about token is idp's `404`/`401`, and the caller gets the
+ordinary `401` Bearer challenge. An idp that **cannot be reached** is a `503` with `Retry-After: 1`
+and one WARN naming the door — never a pass, and never a `401`, which would tell git's credential
+helper to erase a perfectly good stored token. An edge with no client of its own refuses every token
+and says so once, at startup.
+
+**Revocation lags by `token-cache-ttl-ms`** (15 seconds by default): a token deleted at idp opens
+doors here for at most that long. Stated so nobody files it as a bug.
+
+Measured on the live platform: _(numbers land with the proof task)_
+
 ### An identity provider that is not there
 
 idp is a container like any other and is redeployed like any other. For a few seconds its name
 refuses, drops, or accepts a connection and never answers, and on 2026-08-14 a deploy push died with
 "the identity provider could not be reached" for landing inside that window.
 
-Every dial at idp — the `/token` broker, the Basic validation, the JWKS fetch — is therefore
+Every dial at idp — the `/token` broker, the Basic validation, the token introspection, the JWKS
+fetch — is therefore
 
 - **bounded per attempt** by `qits.edge.auth.idp-call-timeout-ms`, connection included, and
 - **retried** on connection-classed failures with a doubling backoff until

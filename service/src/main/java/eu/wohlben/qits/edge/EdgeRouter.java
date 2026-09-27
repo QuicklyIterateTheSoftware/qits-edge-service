@@ -732,6 +732,15 @@ public class EdgeRouter {
         .onSuccess(rejection -> dispatch(request, target, rejection))
         .onFailure(
             failure -> {
+              if (failure instanceof EdgeAuth.IdpUnreachable) {
+                // An opaque token idp could not be asked about. Not a verdict, so not a 401 — a
+                // client told its credential is bad may throw it away, and git's helper does — and
+                // never a pass: a check that cannot be made does not open the door. One WARN,
+                // naming the door that did not answer.
+                LOG.warnf("%s; answered 503 on %s", failure.getMessage(), authority(request));
+                auth.unavailable(request);
+                return;
+              }
               LOG.errorf(failure, "could not check the credential on %s", authority(request));
               auth.challenge(request, "the credential could not be checked");
             });

@@ -2,13 +2,9 @@ package eu.wohlben.qits.edge;
 
 import io.quarkus.runtime.StartupEvent;
 import io.vertx.core.Future;
-import io.vertx.core.Promise;
-import io.vertx.core.Vertx;
-import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerRequest;
-import io.vertx.core.http.RequestOptions;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import jakarta.annotation.PostConstruct;
@@ -21,7 +17,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -88,8 +83,6 @@ public class EdgeSessions {
 
   @Inject SessionsConfig config;
 
-  @Inject AuthConfig authConfig;
-
   /**
    * The stated domain, and nothing more. Plain configuration, so injecting it here creates no cycle
    * — where {@code HostEnvironments} or {@code EdgeRouter} would, because those are built FROM this
@@ -109,12 +102,11 @@ public class EdgeSessions {
 
   @Inject Idp idp;
 
-  @Inject Vertx vertx;
-
-  private HttpClient client;
-
-  /** {@code Basic <id>:<secret>} for the edge's own idp client, built once. */
-  private String authorization;
+  /**
+   * The dial at idp's introspection door, and the edge's own client credential it carries — shared
+   * with {@link EdgeAuth}'s opaque-token path, which asks a sibling door the same way.
+   */
+  @Inject IdpIntrospection introspection;
 
   /** {@link SessionsConfig#anonymousPrefixes()} with blanks dropped, read once at startup. */
   private List<String> anonymousPrefixes;
@@ -146,25 +138,11 @@ public class EdgeSessions {
    */
   public record Session(String userId, String username, String roles, long expiresAtMillis) {}
 
-  /** What idp answered, whatever its status — an unreachable idp is a failed future instead. */
-  private record Answer(int status, String body) {}
-
   /** A believed session and the moment that belief needs renewing. */
   private record Cached(Session session, long freshUntilMillis) {}
 
   @PostConstruct
   void open() {
-    // Its own client, like IdpGrants': the proxy's is tuned for 64 concurrent layer pushes with no
-    // idle timeout, which is the opposite of a small JSON POST that must fail fast and be retried.
-    client = vertx.createHttpClient();
-    authorization =
-        config.clientId().isPresent() && config.clientSecret().isPresent()
-            ? "Basic "
-                + Base64.getEncoder()
-                    .encodeToString(
-                        (config.clientId().get() + ":" + config.clientSecret().get())
-                            .getBytes(StandardCharsets.UTF_8))
-            : null;
     anonymousPrefixes = prefixes(config.anonymousPrefixes());
     String domain = EdgeRouter.domain(edge.domain());
     if (domain.isEmpty()) {
@@ -207,7 +185,7 @@ public class EdgeSessions {
    * The failure would otherwise be every browser refused, with the reason only in a stack trace.
    */
   void requireItsOwnCredential(@Observes StartupEvent ignored) {
-    if (config.enabled() && authorization == null) {
+    if (config.enabled() && !introspection.hasCredential()) {
       throw new IllegalStateException(
           "qits.edge.sessions.enabled is on, but the edge has no idp client to introspect with."
               + " Set QITS_EDGE_SESSIONS_CLIENT_ID and QITS_EDGE_SESSIONS_CLIENT_SECRET (the"
@@ -328,7 +306,8 @@ public class EdgeSessions {
     if (known != null && known.freshUntilMillis() > now && live(known.session(), now)) {
       return Future.succeededFuture(known.session());
     }
-    return attempt(cookie, now + authConfig.idpRetryWindowMs(), 0)
+    return introspection
+        .introspect(idp.introspectionEndpoint(), cookie)
         .map(
             answer -> {
               if (answer.status() != 200) {
@@ -705,53 +684,5 @@ public class EdgeSessions {
       }
     }
     return true;
-  }
-
-  /**
-   * The introspection call, with {@link IdpGrants}' patience — bounded per attempt, retried while
-   * the failure is the network and the window has time left. An ANSWER is never retried: idp saying
-   * no about a session is idp deciding, and asking again would turn one refusal into a burst.
-   */
-  private Future<Answer> attempt(String cookie, long deadlineMillis, int made) {
-    return post(cookie)
-        .recover(
-            failure -> {
-              long backoff = IdpGrants.backoffMs(made);
-              if (!IdpGrants.connectionClassed(failure)
-                  || System.currentTimeMillis() + backoff >= deadlineMillis) {
-                return Future.failedFuture(failure);
-              }
-              Promise<Answer> next = Promise.promise();
-              vertx.setTimer(
-                  backoff, id -> attempt(cookie, deadlineMillis, made + 1).onComplete(next));
-              return next.future();
-            });
-  }
-
-  private Future<Answer> post(String cookie) {
-    RequestOptions options =
-        new RequestOptions()
-            .setMethod(HttpMethod.POST)
-            .setAbsoluteURI(idp.introspectionEndpoint())
-            // Both halves, the same as every other dial at idp: the connect timeout bounds a
-            // dropped
-            // SYN — a swarm VIP exists before any task behind it does — and the request timeout
-            // bounds the worse case, a connection accepted and never answered.
-            .setConnectTimeout(authConfig.idpCallTimeoutMs())
-            .setTimeout(authConfig.idpCallTimeoutMs());
-    return client
-        .request(options)
-        .compose(
-            request -> {
-              // The edge's own client id and secret, which is what makes introspection a privilege
-              // rather than an oracle anyone on the network could ask about any cookie.
-              request.putHeader(HttpHeaders.AUTHORIZATION, authorization);
-              request.putHeader(HttpHeaders.CONTENT_TYPE, "application/json");
-              request.putHeader(HttpHeaders.ACCEPT, "application/json");
-              return request.send(new JsonObject().put("token", cookie).encode());
-            })
-        .compose(
-            response ->
-                response.body().map(body -> new Answer(response.statusCode(), body.toString())));
   }
 }

@@ -2675,6 +2675,160 @@ class EdgeRoutingTest {
             .line("upstream"));
   }
 
+  // --- opaque tokens, introspected per request ---------------------------------------------------
+
+  @Test
+  void aTokenReachesTheServiceAsTheJwtItStandsFor() throws Exception {
+    // The whole contract in one request: a `qits_tok_` value is asked about at idp, and what goes
+    // upstream is the ordinary JWT idp stood it for — never the token, which no service could use.
+    Thread.sleep(tokenCacheTtlMs() + 400);
+    int before = StubGateways.tokenIntrospections();
+    EdgeClient.Answer answer =
+        client().get("registry.dev.acme.example.com", "/v2/", bearer(StubGateways.TOKEN));
+    assertEquals("registry-dev", answer.line("upstream"), answer.body());
+    assertForwardedTheTokensJwt(answer);
+    assertEquals(before + 1, StubGateways.tokenIntrospections(), "the first request asks idp");
+
+    EdgeClient.Answer again =
+        client().get("registry.prod.acme.example.com", "/v2/", bearer(StubGateways.TOKEN));
+    assertEquals("registry-prod", again.line("upstream"), again.body());
+    assertForwardedTheTokensJwt(again);
+    assertEquals(
+        before + 1,
+        StubGateways.tokenIntrospections(),
+        "a remembered answer asks nobody — and the vhost's audience is still decided per request");
+  }
+
+  @Test
+  void aTokenAsABasicPasswordOpensTheSameDoorWhateverTheUsername() throws Exception {
+    // git's credential helpers say `oauth2:<token>`, and every username-and-password client says
+    // whatever it likes. The password is what makes it a token, and none of them is ever spent at
+    // idp as a client secret.
+    Thread.sleep(tokenCacheTtlMs() + 400);
+    int grants = StubGateways.grants();
+    for (String user : List.of("oauth2", "anyuser", "token")) {
+      EdgeClient.Answer answer =
+          client().get("registry.dev.acme.example.com", "/v2/", basic(user, StubGateways.TOKEN));
+      assertEquals("registry-dev", answer.line("upstream"), user + ": " + answer.body());
+      assertForwardedTheTokensJwt(answer);
+    }
+    assertEquals(grants, StubGateways.grants(), "no token was spent as a client secret");
+  }
+
+  @Test
+  void anUnknownTokenIsRefusedAndTheRefusalIsRemembered() throws Exception {
+    // Unlike a wrong client secret, a refused token IS cached: a token is never corrected in place,
+    // and a revoked one left in a CI config must not become an idp round trip per request.
+    Thread.sleep(tokenCacheTtlMs() + 400);
+    int before = StubGateways.tokenIntrospections();
+    EdgeClient.Answer answer =
+        client().get("registry.dev.acme.example.com", "/v2/", bearer(StubGateways.UNKNOWN_TOKEN));
+    assertEquals(401, answer.status(), answer.body());
+    assertNull(answer.line("upstream"));
+    assertTrue(
+        answer.headers().get("www-authenticate").startsWith("Bearer realm="),
+        answer.headers().get("www-authenticate"));
+    assertTrue(
+        answer.headers().get("www-authenticate").contains("error=\"invalid_token\""),
+        answer.headers().get("www-authenticate"));
+    assertEquals(before + 1, StubGateways.tokenIntrospections(), "idp was asked once");
+
+    assertEquals(
+        401,
+        client()
+            .get("registry.dev.acme.example.com", "/v2/", basic("x", StubGateways.UNKNOWN_TOKEN))
+            .status());
+    assertEquals(
+        before + 1,
+        StubGateways.tokenIntrospections(),
+        "and its no is believed, whichever spelling asks again");
+  }
+
+  @Test
+  void aJwtIsNeverSentToTokenIntrospection() {
+    // The prefix tells the two apart before either path begins: a JWT is validated offline, as it
+    // always was, and idp's token door never hears of it.
+    int before = StubGateways.tokenIntrospections();
+    assertEquals(
+        "registry-dev",
+        client().get("registry.dev.acme.example.com", "/v2/", token("dev")).line("upstream"));
+    String jwt = TestTokens.valid(issuer(), List.of(StubGateways.audience("dev")));
+    assertEquals(
+        "registry-dev",
+        client()
+            .get("registry.dev.acme.example.com", "/v2/", basic("oauth2", jwt))
+            .line("upstream"));
+    assertEquals(before, StubGateways.tokenIntrospections());
+  }
+
+  @Test
+  void aRevokedTokenStopsOpeningDoorsWithinTheCacheWindow() throws Exception {
+    // The afterlife is bounded by token-cache-ttl-ms and by nothing longer: inside the window the
+    // cached yes still stands, past it idp's no is obeyed.
+    Thread.sleep(tokenCacheTtlMs() + 400);
+    assertEquals(
+        "registry-dev",
+        client()
+            .get("registry.dev.acme.example.com", "/v2/", bearer(StubGateways.TOKEN))
+            .line("upstream"));
+    StubGateways.revokeToken();
+    try {
+      assertEquals(
+          "registry-dev",
+          client()
+              .get("registry.dev.acme.example.com", "/v2/", bearer(StubGateways.TOKEN))
+              .line("upstream"),
+          "inside the window the cached answer stands — that is the stated lag");
+      Thread.sleep(tokenCacheTtlMs() + 400);
+      EdgeClient.Answer answer =
+          client().get("registry.dev.acme.example.com", "/v2/", bearer(StubGateways.TOKEN));
+      assertEquals(401, answer.status(), answer.body());
+      assertNull(answer.line("upstream"));
+    } finally {
+      StubGateways.restoreToken();
+      // The refusal is cached as well; let it run out so it is not a later test's surprise.
+      Thread.sleep(tokenCacheTtlMs() + 400);
+    }
+  }
+
+  @Test
+  void aTokenIdpCannotBeAskedAboutIsA503RatherThanAPassOrA401() throws Exception {
+    // Not a pass: a check that cannot be made opens nothing. Not a 401 either: git's credential
+    // helper erases a stored credential on one, and nothing is wrong with this token.
+    Thread.sleep(tokenCacheTtlMs() + 400);
+    StubGateways.idpDown();
+    try {
+      EdgeClient.Answer answer =
+          client().get("registry.dev.acme.example.com", "/v2/", bearer(StubGateways.TOKEN));
+      assertEquals(503, answer.status(), answer.body());
+      assertNull(answer.line("upstream"), "the request reached no service");
+      assertEquals("1", answer.headers().get("retry-after"));
+      assertNull(answer.headers().get("www-authenticate"), "no challenge: the token is not bad");
+      assertTrue(answer.body().contains("UNAVAILABLE"), answer.body());
+    } finally {
+      StubGateways.idpUp();
+    }
+  }
+
+  /**
+   * What the upstream received in the token's place: a Bearer JWT, signed by idp's key, naming the
+   * token's own subject and its role — and nowhere the token itself.
+   */
+  private static void assertForwardedTheTokensJwt(EdgeClient.Answer answer) {
+    String authorization = answer.upstreamHeader("Authorization");
+    assertNotNull(authorization, answer.body());
+    assertTrue(authorization.startsWith("Bearer "), authorization);
+    assertFalse(authorization.contains(TokenValue.PREFIX), "the token itself never travels");
+    SignedJwt forwarded = SignedJwt.parse(authorization.substring("Bearer ".length()));
+    assertEquals(StubGateways.TOKEN_SUBJECT, forwarded.claims().getString("sub"));
+    assertTrue(
+        forwarded.claims().getJsonArray("groups").contains(StubGateways.TOKEN_ROLE),
+        forwarded.claims().encode());
+    assertTrue(forwarded.signatureMatches(TestTokens.IDP.getPublic()));
+    assertNull(
+        forwarded.problem(issuer(), List.of(StubGateways.audience("dev")), Instant.now(), 0));
+  }
+
   // --- an identity provider that is not there ---------------------------------------------------
 
   @Test
@@ -2782,6 +2936,11 @@ class EdgeRoutingTest {
    */
   private static long cacheTtlMs() {
     return ConfigProvider.getConfig().getValue("qits.edge.auth.basic-cache-ttl-ms", Long.class);
+  }
+
+  /** {@code qits.edge.auth.token-cache-ttl-ms}, which StubGateways shrinks the same way. */
+  private static long tokenCacheTtlMs() {
+    return ConfigProvider.getConfig().getValue("qits.edge.auth.token-cache-ttl-ms", Long.class);
   }
 
   /** The issuer the stub idp uses, which is what {@code qits.idp.url} was set to. */

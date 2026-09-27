@@ -343,6 +343,65 @@ class EdgeChallengeTest {
   }
 
   @Test
+  void aTokenIsTheFixedPrefixAndNothingAJwtCouldEverBe() {
+    // The prefix is the whole recogniser, and it has to be: it is what keeps a token out of the JWT
+    // parser and a JWT out of idp's token door.
+    assertTrue(TokenValue.isToken("qits_tok_abc"));
+    assertFalse(TokenValue.isToken("qits_tok_"), "the prefix alone is no token");
+    assertFalse(TokenValue.isToken(null));
+    assertFalse(TokenValue.isToken("eyJhbGciOiJSUzI1NiJ9.e30.c2ln"), "a JWT always begins eyJ");
+    assertFalse(TokenValue.isToken("QITS_TOK_abc"), "and the prefix is exact");
+  }
+
+  @Test
+  void aBasicPairCarriesATokenAsItsPasswordWhateverTheUser() {
+    assertEquals("qits_tok_abc", TokenValue.fromBasic(encode("oauth2:qits_tok_abc")));
+    assertEquals("qits_tok_abc", TokenValue.fromBasic(encode("token:qits_tok_abc")));
+    assertEquals("qits_tok_abc", TokenValue.fromBasic(encode(":qits_tok_abc")));
+    assertEquals(
+        "qits_tok_a:b", TokenValue.fromBasic(encode("u:qits_tok_a:b")), "split at the FIRST colon");
+    assertNull(TokenValue.fromBasic(encode("a-client:a-secret")), "a client secret is not one");
+    assertNull(TokenValue.fromBasic(encode("oauth2:header.payload.signature")), "nor a JWT");
+    assertNull(TokenValue.fromBasic(encode("qits_tok_abc")), "no colon, no password");
+    assertNull(TokenValue.fromBasic(encode("qits_tok_abc:secret")), "the USER is not looked at");
+    assertNull(TokenValue.fromBasic("!!not-base64"));
+    assertNull(TokenValue.fromBasic(""));
+    assertNull(TokenValue.fromBasic(null));
+  }
+
+  @Test
+  void aTokensAnswerOutlivesNeitherTheCeilingNorTheJwtItHolds() {
+    // The same rule as a Basic credential's, fed from introspection's relative expiresIn.
+    long now = 1_000_000L;
+    assertEquals(
+        now + 15_000,
+        EdgeAuth.tokenBelieveUntil(now, 15_000, 300, 60_000),
+        "the ceiling binds while the JWT has life to spare — the revocation bound");
+    assertEquals(
+        now + 40_000,
+        EdgeAuth.tokenBelieveUntil(now, 300_000, 100, 60_000),
+        "and the JWT's own life, less the margin, otherwise");
+    assertEquals(
+        now,
+        EdgeAuth.tokenBelieveUntil(now, 15_000, 30, 60_000),
+        "a JWT already inside the margin is introspected again rather than handed on dying");
+    assertEquals(
+        now,
+        EdgeAuth.tokenBelieveUntil(now, 15_000, -5, 60_000),
+        "and never a time in the past, which a hit would read as live");
+  }
+
+  @Test
+  void theIntrospectionCredentialIsBothHalvesOrNone() {
+    assertEquals(
+        "Basic " + encode("an-edge:an-edge-secret"),
+        IdpIntrospection.basicAuthorization("an-edge", "an-edge-secret"));
+    assertNull(IdpIntrospection.basicAuthorization("an-edge", null));
+    assertNull(IdpIntrospection.basicAuthorization(null, "an-edge-secret"));
+    assertNull(IdpIntrospection.basicAuthorization("an-edge", " "));
+  }
+
+  @Test
   void theRemintMarginIsTheEstatesOwn() {
     // The same sixty seconds AgentCredential treats a token as spent at, elsewhere on the estate.
     assertEquals(60_000, EdgeAuth.TOKEN_MARGIN_MS);
@@ -383,6 +442,9 @@ class EdgeChallengeTest {
     assertEquals("45000", shippedDefault("idpRetryWindowMs"));
     assertEquals("300000", shippedDefault("basicCacheTtlMs"));
     assertEquals("1024", shippedDefault("basicCacheSize"));
+    // A revoked token's afterlife at the edge, and the bound on how many are held.
+    assertEquals("15000", shippedDefault("tokenCacheTtlMs"));
+    assertEquals("1024", shippedDefault("tokenCacheSize"));
   }
 
   // --- the browser gate's own decisions ----------------------------------------------------------
