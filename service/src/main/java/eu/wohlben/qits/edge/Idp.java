@@ -1,57 +1,63 @@
 package eu.wohlben.qits.edge;
 
 import jakarta.enterprise.context.ApplicationScoped;
-import java.util.Optional;
+import jakarta.inject.Inject;
+import java.util.List;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * Where qits-platform-idp is, and what it calls itself — TWO keys, because they are two facts.
+ * Where the idp is, and what it calls itself — two facts, and only one of them is configured.
  *
- * <p>{@code qits.idp.url} is the {@code iss} every accepted token must carry, exactly: a consumer
+ * <p>{@link #issuers()} are the {@code iss} values an accepted token may carry, exactly: a consumer
  * that validated a token whose issuer differed by one character would be validating somebody
- * else's. It is a string that is COMPARED, and it does not have to resolve.
+ * else's. An issuer is a string that is COMPARED, and it does not have to resolve. It is DERIVED
+ * here from the platform's one stated domain ({@link EdgeConfig#domain()}, {@code QITS_DOMAIN}) —
+ * {@code https://idp.qits.<domain>}, no path, no trailing slash — and it is NEVER a configuration
+ * key or a properties default (qits-730): idp derives the same string from the same domain, so the
+ * two cannot be configured apart.
  *
  * <p>{@code qits.idp.dial-url} is the address this process actually connects to for keys, tokens
- * and introspection. It defaults to the issuer, which is what it was until the platform plane was
- * deleted — one key naming the receiver, every path under it derived here rather than configured,
- * because the paths belong to idp rather than to a deployment. The paths are still derived; what
- * moved is which of the two strings they hang off.
+ * and introspection; every path under it is derived here rather than configured, because the paths
+ * belong to idp rather than to a deployment.
  *
- * <p><b>WHY THEY HAD TO COME APART, and it is not tidiness.</b> Deleting the plane moves every
- * platform service from a bare alias to {@code <env>-<application>}, and the old bare-named swarm
- * services are removed once nothing dials them. Dialling is what this class does three times. The
- * issuer is the one thing that CANNOT move with them: it is stamped into every token in flight and
- * compared for equality by every consumer, so changing it rejects every outstanding token at once,
- * estate-wide. Dual DNS buys a string comparison nothing — so the address moves and the claim
- * stays, which is only expressible once the two stop sharing a key.
- *
- * <p>qits-bootstrap-cli made the same split on its side first, {@code ${IDP}} against {@code
- * ${IDP_DIAL}}, and its AGENTS.md records the rule this class now also holds: DO NOT RE-MERGE THEM.
- * They read identically on a platform that has not cut over, which is exactly how they would get
- * collapsed back into one by somebody tidying up.
+ * <p><b>WHY THEY ARE TWO, and it is not tidiness.</b> The issuer is stamped into every token in
+ * flight and compared for equality by every consumer, so it cannot move with a deployment; the
+ * address must. Reading an address as the issuer is exactly what refused every machine token on the
+ * estate on 2026-10-02 (qits-162). DO NOT RE-MERGE THEM — and never let the dial address fall back
+ * to an issuer, or an issuer be read from configuration.
  */
 @ApplicationScoped
 public class Idp {
 
-  @ConfigProperty(name = "qits.idp.url")
-  String configured;
+  /**
+   * The issuer idp stamps today. It goes once idp stamps the derived issuer (qits-730 wave 3);
+   * until then refusing it would refuse every token in flight.
+   */
+  static final String LEGACY_ISSUER = "http://qits-platform-idp:8080/idp";
+
+  @Inject EdgeConfig edge;
 
   @ConfigProperty(name = "qits.idp.dial-url")
-  Optional<String> configuredDial;
+  String configuredDial;
 
-  /** The issuer string: {@code qits.idp.url} trimmed, with any trailing slash removed. */
-  public String issuer() {
-    return trimmed(configured);
+  /** Every {@code iss} an accepted token may carry: the derived one first, then the legacy one. */
+  public List<String> issuers() {
+    return issuers(edge.domain());
   }
 
-  /**
-   * The base this process CONNECTS to: {@code qits.idp.dial-url} when set, the issuer otherwise.
-   *
-   * <p>Falling back to the issuer is what makes the split additive — an estate that has not stated
-   * a dial address behaves exactly as it did before there were two keys.
-   */
+  /** The accepted issuers for a stated domain. */
+  static List<String> issuers(String domain) {
+    return List.of(issuer(domain), LEGACY_ISSUER);
+  }
+
+  /** {@code https://idp.qits.<domain>}, the domain normalised the way every other name here is. */
+  static String issuer(String domain) {
+    return "https://idp.qits." + EdgeRouter.domain(domain);
+  }
+
+  /** The base this process CONNECTS to: {@code qits.idp.dial-url}, trimmed of trailing slashes. */
   public String dialBase() {
-    return configuredDial.map(this::trimmed).filter(url -> !url.isEmpty()).orElseGet(this::issuer);
+    return trimmed(configuredDial);
   }
 
   /** {@code <dial>/jwks} — the published signing keys. */

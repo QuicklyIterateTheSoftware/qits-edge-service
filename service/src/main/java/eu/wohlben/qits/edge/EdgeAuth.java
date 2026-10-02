@@ -405,7 +405,8 @@ public class EdgeAuth {
     } catch (IllegalArgumentException e) {
       return Future.succeededFuture(e.getMessage());
     }
-    String problem = jwt.problem(idp.issuer(), audiences, Instant.now(), config.clockSkewSeconds());
+    String problem =
+        jwt.problem(idp.issuers(), audiences, Instant.now(), config.clockSkewSeconds());
     if (problem != null) {
       // Claims before signature: a claim check needs no key, so an expired or misaddressed token is
       // refused without a JWKS lookup — and a made-up kid cannot use one to force a fetch.
@@ -500,7 +501,7 @@ public class EdgeAuth {
                 return Future.succeededFuture("the identity provider issued no usable token");
               }
               String problem =
-                  minted.problem(idp.issuer(), Instant.now(), config.clockSkewSeconds());
+                  minted.problem(idp.issuers(), Instant.now(), config.clockSkewSeconds());
               if (problem != null) {
                 return Future.succeededFuture(problem);
               }
@@ -661,7 +662,7 @@ public class EdgeAuth {
                     Introspected.refused("the identity provider issued no usable token", 0));
               }
               String problem =
-                  minted.problem(idp.issuer(), Instant.now(), config.clockSkewSeconds());
+                  minted.problem(idp.issuers(), Instant.now(), config.clockSkewSeconds());
               if (problem != null) {
                 return Future.succeededFuture(Introspected.refused(problem, 0));
               }

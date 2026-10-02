@@ -2097,6 +2097,32 @@ class EdgeRoutingTest {
   }
 
   @Test
+  void theDerivedIssuerAndTheLegacyOneOpenTheVhostAndAnyOtherIsRefused() {
+    // qits-730 wave 1: idp still stamps the legacy issuer, so the edge accepts both until it
+    // switches. The third is the qits-162 shape — the dial address read as the claim.
+    Map<String, String> derived =
+        bearer(
+            TestTokens.valid(
+                "https://idp.qits.example.com", List.of(StubGateways.audience("dev"))));
+    Map<String, String> legacy =
+        bearer(
+            TestTokens.valid(
+                "http://qits-platform-idp:8080/idp", List.of(StubGateways.audience("dev"))));
+    Map<String, String> address =
+        bearer(
+            TestTokens.valid(
+                "http://dev-qits-idp:8080/idp", List.of(StubGateways.audience("dev"))));
+
+    assertEquals(
+        "registry-dev",
+        client().get("registry.dev.acme.example.com", "/v2/", derived).line("upstream"));
+    assertEquals(
+        "registry-dev",
+        client().get("registry.dev.acme.example.com", "/v2/", legacy).line("upstream"));
+    assertEquals(401, client().get("registry.dev.acme.example.com", "/v2/", address).status());
+  }
+
+  @Test
   void aTokenNamingEveryEnvironmentsAudienceOpensEachOfThem() {
     // What idp actually mints when the grant asks for no audience: the client's whole allowed list.
     Map<String, String> whole =
@@ -2479,7 +2505,8 @@ class EdgeRoutingTest {
     assertFalse(jwt.startsWith(TokenValue.PREFIX), "docker is handed the JWT, not the token");
     SignedJwt parsed = SignedJwt.parse(jwt);
     assertTrue(parsed.signatureMatches(TestTokens.IDP.getPublic()));
-    assertNull(parsed.problem(issuer(), List.of(StubGateways.audience("dev")), Instant.now(), 0));
+    assertNull(
+        parsed.problem(List.of(issuer()), List.of(StubGateways.audience("dev")), Instant.now(), 0));
     assertEquals(StubGateways.TOKEN_SUBJECT, parsed.claims().getString("sub"));
     long expiresIn = issued.getLong("expires_in");
     assertTrue(
@@ -2925,7 +2952,8 @@ class EdgeRoutingTest {
         forwarded.claims().encode());
     assertTrue(forwarded.signatureMatches(TestTokens.IDP.getPublic()));
     assertNull(
-        forwarded.problem(issuer(), List.of(StubGateways.audience("dev")), Instant.now(), 0));
+        forwarded.problem(
+            List.of(issuer()), List.of(StubGateways.audience("dev")), Instant.now(), 0));
   }
 
   // --- an identity provider that is not there ---------------------------------------------------
@@ -3042,9 +3070,9 @@ class EdgeRoutingTest {
     return ConfigProvider.getConfig().getValue("qits.edge.auth.token-cache-ttl-ms", Long.class);
   }
 
-  /** The issuer the stub idp uses, which is what {@code qits.idp.url} was set to. */
+  /** The issuer the stub idp stamps: the one the edge derives from the suite's domain. */
   private static String issuer() {
-    return ConfigProvider.getConfig().getValue("qits.idp.url", String.class);
+    return StubGateways.ISSUER;
   }
 
   /** A token idp would mint for one environment's registry, and that environment's only. */

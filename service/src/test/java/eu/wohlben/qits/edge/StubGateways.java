@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit;
  * edge must pass through unchanged: an ordinary request with a body, a chunked response written
  * over time, and a WebSocket upgrade. A JDK {@code HttpServer} cannot do the third at all.
  *
- * <p>The stub idp answers the three paths the edge derives from {@code qits.idp.url}: {@code
+ * <p>The stub idp answers the three paths the edge derives from {@code qits.idp.dial-url}: {@code
  * /idp/jwks} publishes {@link TestTokens}' key, {@code /idp/token} issues one for the clients
  * below, and {@code /idp/api/sessions/introspect} answers for the browser sessions. It exists so
  * the auth gate is exercised end to end — a real RS256 signature, a real key fetch, a real broker
@@ -113,6 +113,13 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
    * configured.
    */
   static final String DOMAIN = "example.com";
+
+  /**
+   * The {@code iss} the stub idp stamps: the issuer the edge derives from {@link #DOMAIN}, spelled
+   * out rather than computed so a change to the derivation fails here instead of agreeing with
+   * itself.
+   */
+  static final String ISSUER = "https://idp.qits." + DOMAIN;
 
   /** The edge's OWN idp client, the one it introspects browser sessions with. */
   static final String EDGE_ID = "an-edge";
@@ -307,10 +314,8 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     // reading rather than the projected one. See HostEnvironments.LANDING.
     config.put("qits.edge.auth.anonymous-read-apps", "mirror,brochure");
     idpPort = bind("idp", idpServer(), 0);
-    // Both keys, to the same stub: the issuer is what tokens are compared against and the dial-url
-    // is what the edge connects to. A stub idp issues at the address it answers on, so they agree
-    // here; on the platform the issuer stays bare while the address carries the tier.
-    config.put("qits.idp.url", "http://127.0.0.1:" + idpPort + "/idp");
+    // Only the ADDRESS is configured: the issuer is derived from qits.edge.domain, never a key, so
+    // the stub stamps ISSUER while the edge dials 127.0.0.1 — the two differ here as on the estate.
     config.put("qits.idp.dial-url", "http://127.0.0.1:" + idpPort + "/idp");
     // The three time bounds, shrunk to a suite's patience. Their SHIPPED values are pinned in
     // EdgeChallengeTest instead: a default is a deployment fact and must not be readable from here.
@@ -436,7 +441,7 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
           .end("{\"error\":\"invalid_token\",\"error_description\":\"unknown token\"}");
       return;
     }
-    String issuer = "http://127.0.0.1:" + idpPort + "/idp";
+    String issuer = ISSUER;
     List<String> audiences = List.of(audience("dev"), audience("prod"), PLATFORM_AUDIENCE);
     io.vertx.core.json.JsonObject claims =
         TestTokens.claims(issuer, audiences, java.time.Instant.now().plusSeconds(TOKEN_JWT_SECONDS))
@@ -486,9 +491,7 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
         .putHeader("Content-Type", "application/json")
         .end(
             new io.vertx.core.json.JsonObject()
-                .put(
-                    "access_token",
-                    TestTokens.validFor("http://127.0.0.1:" + idpPort + "/idp", audiences, life))
+                .put("access_token", TestTokens.validFor(ISSUER, audiences, life))
                 .put("token_type", "Bearer")
                 .put("expires_in", life)
                 .encode());

@@ -19,7 +19,8 @@ import org.junit.jupiter.api.Test;
  */
 class SignedJwtTest {
 
-  private static final String ISSUER = "http://qits-platform-idp:8080/idp";
+  private static final String ISSUER = "https://idp.qits.wohlben.eu";
+  private static final List<String> ACCEPTED = Idp.issuers("wohlben.eu");
   private static final String AUDIENCE = "qits-platform-artifacts";
 
   @Test
@@ -27,7 +28,7 @@ class SignedJwtTest {
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of(AUDIENCE)));
     assertEquals(TestTokens.KID, jwt.kid());
     assertEquals("RS256", jwt.algorithm());
-    assertNull(jwt.problem(ISSUER, AUDIENCE, Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
     assertTrue(jwt.signatureMatches(TestTokens.IDP.getPublic()));
   }
 
@@ -42,7 +43,7 @@ class SignedJwtTest {
                 TestTokens.claims(ISSUER, List.of(AUDIENCE), Instant.now().plusSeconds(300))));
     // The claims are perfect — this is exactly the token a validator that only reads claims
     // accepts.
-    assertNull(jwt.problem(ISSUER, AUDIENCE, Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
     assertFalse(jwt.signatureMatches(TestTokens.IDP.getPublic()));
   }
 
@@ -57,20 +58,49 @@ class SignedJwtTest {
                 TestTokens.KID,
                 "none",
                 TestTokens.claims(ISSUER, List.of(AUDIENCE), Instant.now().plusSeconds(300))));
-    assertEquals("the token is not RS256", jwt.problem(ISSUER, AUDIENCE, Instant.now(), 30));
+    assertEquals("the token is not RS256", jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
+  }
+
+  @Test
+  void aTokenCarryingTheLegacyIssuerStillPasses() {
+    // qits-730 wave 1: idp stamps this until it switches, so refusing it refuses every token.
+    SignedJwt jwt =
+        SignedJwt.parse(TestTokens.valid("http://qits-platform-idp:8080/idp", List.of(AUDIENCE)));
+    assertNull(jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
+  }
+
+  @Test
+  void theDialAddressAsAnIssuerIsRefusedAndTheRefusalNamesWhatWasExpected() {
+    // The qits-162 shape: an address read as the claim. Nothing the idp stamps looks like this.
+    SignedJwt jwt =
+        SignedJwt.parse(TestTokens.valid("http://dev-qits-idp:8080/idp", List.of(AUDIENCE)));
+    assertEquals(
+        "the token was not issued by https://idp.qits.wohlben.eu or"
+            + " http://qits-platform-idp:8080/idp",
+        jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
+  }
+
+  @Test
+  void aTokenWithNoIssuerIsRefusedRatherThanThrowing() {
+    JsonObject claims =
+        TestTokens.claims(ISSUER, List.of(AUDIENCE), Instant.now().plusSeconds(300));
+    claims.remove("iss");
+    SignedJwt jwt =
+        SignedJwt.parse(TestTokens.mint(TestTokens.IDP, TestTokens.KID, "RS256", claims));
+    assertNotNull(jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
   }
 
   @Test
   void anotherIssuersTokenIsRefused() {
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid("http://elsewhere/idp", List.of(AUDIENCE)));
-    assertNotNull(jwt.problem(ISSUER, AUDIENCE, Instant.now(), 30));
+    assertNotNull(jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
   }
 
   @Test
   void anotherAudiencesTokenIsRefused() {
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of("prod-qits-ci")));
     assertEquals(
-        "the token is not for " + AUDIENCE, jwt.problem(ISSUER, AUDIENCE, Instant.now(), 30));
+        "the token is not for " + AUDIENCE, jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
   }
 
   @Test
@@ -80,7 +110,7 @@ class SignedJwtTest {
     SignedJwt jwt =
         SignedJwt.parse(
             TestTokens.valid(ISSUER, List.of("prod-qits-ci", AUDIENCE, "prod-qits-deployments")));
-    assertNull(jwt.problem(ISSUER, AUDIENCE, Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
   }
 
   // --- the platform audience ---------------------------------------------------------------------
@@ -97,14 +127,14 @@ class SignedJwtTest {
   void aPlatformTokenPassesOnEveryVhost() {
     // A person's command-line token names only the platform audience. It must open every service.
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of(PLATFORM)));
-    assertNull(jwt.problem(ISSUER, accepted("{env}-qits-artifacts"), Instant.now(), 30));
-    assertNull(jwt.problem(ISSUER, accepted("{env}-qits-workspaces"), Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, accepted("{env}-qits-artifacts"), Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, accepted("{env}-qits-workspaces"), Instant.now(), 30));
   }
 
   @Test
   void aTokenForTheVhostsOwnAudienceStillPasses() {
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of("dev-qits-artifacts")));
-    assertNull(jwt.problem(ISSUER, accepted("{env}-qits-artifacts"), Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, accepted("{env}-qits-artifacts"), Instant.now(), 30));
   }
 
   @Test
@@ -112,7 +142,7 @@ class SignedJwtTest {
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of("prod-qits-artifacts")));
     assertEquals(
         "the token is not for dev-qits-artifacts or qits-platform",
-        jwt.problem(ISSUER, accepted("{env}-qits-artifacts"), Instant.now(), 30));
+        jwt.problem(ACCEPTED, accepted("{env}-qits-artifacts"), Instant.now(), 30));
   }
 
   @Test
@@ -121,7 +151,7 @@ class SignedJwtTest {
     assertEquals(
         "the token is not for dev-qits-artifacts",
         jwt.problem(
-            ISSUER,
+            ACCEPTED,
             EdgeAuth.acceptedAudiences("dev-qits-artifacts", java.util.Optional.empty()),
             Instant.now(),
             30));
@@ -139,10 +169,10 @@ class SignedJwtTest {
                 TestTokens.claims(ISSUER, List.of(PLATFORM), Instant.now().minusSeconds(3600))));
     assertEquals(
         "the token expired",
-        expired.problem(ISSUER, accepted("{env}-qits-artifacts"), Instant.now(), 30));
+        expired.problem(ACCEPTED, accepted("{env}-qits-artifacts"), Instant.now(), 30));
     SignedJwt foreign =
         SignedJwt.parse(TestTokens.valid("http://elsewhere/idp", List.of(PLATFORM)));
-    assertNotNull(foreign.problem(ISSUER, accepted("{env}-qits-artifacts"), Instant.now(), 30));
+    assertNotNull(foreign.problem(ACCEPTED, accepted("{env}-qits-artifacts"), Instant.now(), 30));
   }
 
   @Test
@@ -159,7 +189,7 @@ class SignedJwtTest {
                     .put("iss", ISSUER)
                     .put("aud", AUDIENCE)
                     .put("exp", Instant.now().plusSeconds(300).getEpochSecond())));
-    assertNull(jwt.problem(ISSUER, AUDIENCE, Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
   }
 
   @Test
@@ -172,8 +202,8 @@ class SignedJwtTest {
                 TestTokens.KID,
                 "RS256",
                 TestTokens.claims(ISSUER, List.of(AUDIENCE), expiry)));
-    assertEquals("the token expired", jwt.problem(ISSUER, AUDIENCE, Instant.now(), 0));
-    assertNull(jwt.problem(ISSUER, AUDIENCE, Instant.now(), 60));
+    assertEquals("the token expired", jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 0));
+    assertNull(jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 60));
   }
 
   @Test
@@ -185,7 +215,7 @@ class SignedJwtTest {
                 TestTokens.KID,
                 "RS256",
                 new JsonObject().put("iss", ISSUER).put("aud", AUDIENCE)));
-    assertEquals("the token does not expire", jwt.problem(ISSUER, AUDIENCE, Instant.now(), 30));
+    assertEquals("the token does not expire", jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
   }
 
   @Test

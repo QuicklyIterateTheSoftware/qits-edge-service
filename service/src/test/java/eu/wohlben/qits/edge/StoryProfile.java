@@ -145,12 +145,9 @@ public class StoryProfile implements QuarkusTestProfile {
     config.put("qits.edge.sessions.client-id", StoryTarget.EDGE_CLIENT_ID);
     config.put("qits.edge.sessions.client-secret", StoryTarget.EDGE_CLIENT_SECRET);
 
-    // TWO keys, and both are set to the stub: the issuer is the string tokens are compared against,
-    // the dial-url is what the edge connects to. /jwks, /token and /api/sessions/introspect are
-    // derived from the dial-url in Idp.java, so a rename on either side fails here rather than in
-    // production. They hold the same value HERE because a stub idp really does issue at the address
-    // it answers on — on the platform they differ, which is the whole point of the split.
-    config.put("qits.idp.url", idp.baseUrl() + "/idp");
+    // The dial address only: /jwks, /token and /api/sessions/introspect are derived from it in
+    // Idp.java, so a rename on either side fails here rather than in production. The issuer is not
+    // a key at all — it is derived from qits.edge.domain.
     config.put("qits.idp.dial-url", idp.baseUrl() + "/idp");
 
     config.put("qits.eventstream.enabled", "false");

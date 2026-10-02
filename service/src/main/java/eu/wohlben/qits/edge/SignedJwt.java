@@ -8,6 +8,7 @@ import java.security.PublicKey;
 import java.security.Signature;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -15,8 +16,8 @@ import java.util.List;
  * on purpose: this is the second piece of edge behaviour worth pinning without booting an
  * application, and {@code SignedJwtTest} is where the malformed shapes live.
  *
- * <p><b>Why this rather than an extension.</b> The edge validates ONE issuer's RS256 tokens against
- * a JWKS it fetches itself, and that is a hundred lines of JDK crypto. {@code quarkus-smallrye-jwt}
+ * <p><b>Why this rather than an extension.</b> The edge validates ONE idp's RS256 tokens against a
+ * JWKS it fetches itself, and that is a hundred lines of JDK crypto. {@code quarkus-smallrye-jwt}
  * would do it too, at the cost of a sixth extension on a process whose whole design point is that
  * it has five — every one of them native-image size, build time and reflection surface on the one
  * component that must be up before anything on the platform is reachable.
@@ -78,14 +79,15 @@ public record SignedJwt(
    * What is wrong with the claims, or null when nothing is. Signature is NOT checked here — that
    * needs a key, and the key is chosen by {@link #kid()}.
    *
-   * @param issuer the {@code iss} every accepted token must carry, exactly
+   * @param issuers the {@code iss} values an accepted token may carry, each compared exactly
    * @param audience the audience the token must name; the registry permission, per the campaign's
    *     P-idp-3 — edge gates on the audience and shapes docker's own {@code scope} away
    * @param now the moment to judge {@code exp} against
    * @param clockSkewSeconds how far the two clocks may disagree
    */
-  public String problem(String issuer, String audience, Instant now, long clockSkewSeconds) {
-    return problem(issuer, List.of(audience), now, clockSkewSeconds);
+  public String problem(
+      Collection<String> issuers, String audience, Instant now, long clockSkewSeconds) {
+    return problem(issuers, List.of(audience), now, clockSkewSeconds);
   }
 
   /**
@@ -94,8 +96,9 @@ public record SignedJwt(
    *
    * @param accepted the audiences that open this vhost; the token must name at least one
    */
-  public String problem(String issuer, List<String> accepted, Instant now, long clockSkewSeconds) {
-    String problem = problem(issuer, now, clockSkewSeconds);
+  public String problem(
+      Collection<String> issuers, List<String> accepted, Instant now, long clockSkewSeconds) {
+    String problem = problem(issuers, now, clockSkewSeconds);
     if (problem != null) {
       return problem;
     }
@@ -126,11 +129,11 @@ public record SignedJwt(
    * question, resolved from the vhost, and answering it from the cached list is what keeps one
    * cached validation from crossing tiers.
    *
-   * @param issuer the {@code iss} every accepted token must carry, exactly
+   * @param issuers the {@code iss} values an accepted token may carry, each compared exactly
    * @param now the moment to judge {@code exp} against
    * @param clockSkewSeconds how far the two clocks may disagree
    */
-  public String problem(String issuer, Instant now, long clockSkewSeconds) {
+  public String problem(Collection<String> issuers, Instant now, long clockSkewSeconds) {
     if (!RS256.equals(algorithm)) {
       // Refusing `none` is the point, and refusing every other alg with it is the cheap way to do
       // it: an accepted algorithm the idp never signs with is an accepted algorithm we do not
@@ -140,8 +143,10 @@ public record SignedJwt(
     if (kid == null || kid.isBlank()) {
       return "the token names no signing key";
     }
-    if (!issuer.equals(claims.getString("iss"))) {
-      return "the token was not issued by " + issuer;
+    // Null-checked first: an immutable collection's contains(null) throws rather than answering.
+    String iss = claims.getString("iss");
+    if (iss == null || !issuers.contains(iss)) {
+      return "the token was not issued by " + String.join(" or ", issuers);
     }
     Long expiry = number(claims.getValue("exp"));
     if (expiry == null) {

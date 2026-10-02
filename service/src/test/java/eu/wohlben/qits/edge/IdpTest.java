@@ -1,47 +1,58 @@
 package eu.wohlben.qits.edge;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
-import java.util.Optional;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
  * THE ISSUER AND THE ADDRESS ARE TWO FACTS, and these are the assertions that keep them apart.
  *
- * <p>Deleting the platform plane moved the idp from its bare alias to {@code <env>-<application>}.
- * The edge had one key for both jobs, so moving the address would have moved the {@code iss} claim
- * with it — and that claim is compared for equality by every consumer on the estate, so changing it
- * rejects every token in flight at once. The split is what lets the dial address follow the
- * deployment while the claim stays exactly where it is.
- *
- * <p>These tests are written to FAIL if anybody re-merges the two keys: every one of them sets the
- * two to different hosts and asserts which of them each answer is built from. On a platform that
- * has not cut over the two hold the same string, so a collapsed implementation would pass every
- * integration suite in this repository and be discovered on the estate.
+ * <p>The issuer is DERIVED from the stated domain and never configured (qits-730); the address is
+ * {@code qits.idp.dial-url} and nothing else. Every test here holds the two on different hosts and
+ * asserts which of them each answer is built from, so a change that re-merged them — an issuer read
+ * from configuration, or a dial address falling back to an issuer — fails here rather than on the
+ * estate, where every machine token would be refused at once (qits-162).
  */
 class IdpTest {
 
-  private static Idp idp(String issuer, String dial) {
+  private static Idp idp(String dial) {
     Idp idp = new Idp();
-    idp.configured = issuer;
-    idp.configuredDial = Optional.ofNullable(dial);
+    idp.configuredDial = dial;
     return idp;
   }
 
   @Test
-  void theIssuerIsTheCLAIMAndNeverFollowsTheDialAddress() {
-    Idp idp = idp("http://qits-platform-idp:8080/idp", "http://dev-qits-platform-idp:8080/idp");
-
+  void theIssuerIsDerivedFromTheDomainWithNoPathAndNoTrailingSlash() {
+    assertEquals("https://idp.qits.wohlben.eu", Idp.issuer("wohlben.eu"));
+    assertEquals("https://idp.qits.localhost", Idp.issuer("localhost"));
     assertEquals(
-        "http://qits-platform-idp:8080/idp",
-        idp.issuer(),
-        "the iss claim is a string that is compared, not a host that is dialled — it does not move"
-            + " because the deployment did");
+        "https://idp.qits.wohlben.eu",
+        Idp.issuer(" Wohlben.EU. "),
+        "the domain is normalised the way every other name composed from it is");
+  }
+
+  @Test
+  void theDerivedIssuerComesFirstAndTheLegacyOneIsStillAccepted() {
+    assertEquals(
+        List.of("https://idp.qits.wohlben.eu", "http://qits-platform-idp:8080/idp"),
+        Idp.issuers("wohlben.eu"),
+        "wave 1 of qits-730: idp still stamps the legacy issuer, so refusing it refuses every token"
+            + " in flight");
+  }
+
+  @Test
+  void theDialAddressIsNeverAnIssuer() {
+    List<String> issuers = Idp.issuers("wohlben.eu");
+
+    assertFalse(issuers.contains("http://dev-qits-idp:8080/idp"));
+    assertFalse(issuers.contains("http://dev-qits-platform-idp:8080/idp"));
   }
 
   @Test
   void everyEndpointIsBuiltFromTheDialAddress() {
-    Idp idp = idp("http://qits-platform-idp:8080/idp", "http://dev-qits-platform-idp:8080/idp");
+    Idp idp = idp("http://dev-qits-platform-idp:8080/idp");
 
     assertEquals("http://dev-qits-platform-idp:8080/idp/jwks", idp.jwksUri());
     assertEquals("http://dev-qits-platform-idp:8080/idp/token", idp.tokenEndpoint());
@@ -54,34 +65,10 @@ class IdpTest {
   }
 
   @Test
-  void anUnsetDialAddressFallsBackToTheIssuerSoTheSplitIsAdditive() {
-    Idp idp = idp("http://qits-platform-idp:8080/idp", null);
-
-    assertEquals("http://qits-platform-idp:8080/idp/jwks", idp.jwksUri());
-    assertEquals(
-        "http://qits-platform-idp:8080/idp/token",
-        idp.tokenEndpoint(),
-        "an estate that has stated no dial address behaves exactly as it did before there were two"
-            + " keys");
-  }
-
-  @Test
-  void anEmptyDialAddressIsTreatedAsUnsetRatherThanAsAHostCalledNothing() {
-    assertEquals(
-        "http://qits-platform-idp:8080/idp/jwks",
-        idp("http://qits-platform-idp:8080/idp", "   ").jwksUri(),
-        "a blanked-out deployment value must not compose `/jwks` onto the empty string");
-  }
-
-  @Test
-  void bothSidesAreTrimmedOfTrailingSlashesBeforeAnythingIsComposedOnto() {
-    Idp idp = idp("http://qits-platform-idp:8080/idp//", "http://dev-qits-platform-idp:8080/idp/");
-
-    assertEquals("http://qits-platform-idp:8080/idp", idp.issuer());
+  void theDialAddressIsTrimmedOfTrailingSlashesBeforeAnythingIsComposedOntoIt() {
     assertEquals(
         "http://dev-qits-platform-idp:8080/idp/jwks",
-        idp.jwksUri(),
-        "a configured trailing slash is exactly the one character an issuer comparison fails on,"
-            + " and a doubled one is exactly the 404 a key fetch fails on");
+        idp(" http://dev-qits-platform-idp:8080/idp// ").jwksUri(),
+        "a doubled slash is exactly the 404 a key fetch fails on");
   }
 }

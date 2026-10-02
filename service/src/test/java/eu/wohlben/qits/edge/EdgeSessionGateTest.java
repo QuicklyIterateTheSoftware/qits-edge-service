@@ -785,7 +785,7 @@ class EdgeSessionGateTest {
   }
 
   private static String issuer() {
-    return ConfigProvider.getConfig().getValue("qits.idp.url", String.class);
+    return StubGateways.ISSUER;
   }
 
   private static String cookie(String value) {

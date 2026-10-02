@@ -350,7 +350,7 @@ a file.
 | `qits.edge.apps.<app>.audience-pattern` | `QITS_EDGE_APPS_<APP>_AUDIENCE_PATTERN` | `qits-platform` | The audience this app's own vhost accepts, next to the platform audience. An app such as githost or the editor names its own resource pattern (`{env}-qits-githost`); an app with none opens with roles alone |
 | `qits.edge.projection.catchup.required` | `QITS_EDGE_PROJECTION_CATCHUP_REQUIRED` | `true` | Requires a complete deployment-history rebuild before the edge is ready; turn off only in an intentionally offline test/dev setup |
 | `qits.edge.projection.catchup.retry` | `QITS_EDGE_PROJECTION_CATCHUP_RETRY` | `PT1S` | Delay before retrying an incomplete, failed, or unavailable deployment-history read |
-| `qits.idp.url` | `QITS_RESOURCE_IDP_URL`, then `QITS_IDP_URL` | `http://qits-platform-idp:8080/idp` | The issuer. `/jwks` and `/token` are derived from it, never configured. `QITS_RESOURCE_IDP_URL` is the `idp:client` resource a deployment may declare (service-client-identity-plan.md, C4/D6/D7); the older name keeps working unchanged until it is declared |
+| `qits.idp.dial-url` | `QITS_RESOURCE_IDP_URL`, then `QITS_IDP_DIAL_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-platform-idp:8080/idp` | The address the edge dials. `/jwks`, `/token` and the two introspection paths are derived from it, never configured. It is never the issuer: the accepted `iss` is `https://idp.qits.<qits.edge.domain>`, derived in code and not configurable, plus the legacy `http://qits-platform-idp:8080/idp` until idp stamps the derived one (qits-730) |
 | `qits.edge.auth.enforce-on-apps` | `QITS_EDGE_AUTH_ENFORCE_ON_APPS` | `true` | Service vhosts require a valid idp token |
 | `qits.edge.auth.anonymous-read-apps` | `QITS_EDGE_AUTH_ANONYMOUS_READ_APPS` | — | App labels whose `GET` and `HEAD` are open; every other method on them still needs a token |
 | `qits.edge.auth.audience-pattern` | `QITS_EDGE_AUTH_AUDIENCE_PATTERN` | `qits-platform` | The audience a token must name; `{env}` is resolved per request, a value without it is a literal. The shipped default is the same literal as the platform audience below, so a freshly configured vhost opens with roles alone; an explicitly configured pattern (today's `{env}-qits-artifacts`, or an app's own) keeps working unchanged |
@@ -429,10 +429,10 @@ vhost fronts a service with no external auth of its own.
 
 A request to an application vhost must carry an idp credential: an access token, or the client id
 and secret it is minted from (see *HTTP Basic* below). A token is validated **offline**
-against the keys fetched from `qits.idp.url/jwks` and cached — idp is overlay-only, so a host client
+against the keys fetched from `qits.idp.dial-url/jwks` and cached — idp is overlay-only, so a host client
 cannot reach it, and keeping it off the per-pull path is worth more than the freshness a call-out
 would buy. An unknown `kid` buys **one** refresh, behind a cooldown, so a made-up kid cannot turn
-into a request per request at the identity provider. The checks are RS256 only, exact `iss`, live
+into a request per request at the identity provider. The checks are RS256 only, an exact accepted `iss`, live
 `exp` within the skew, and the demanded audience or the platform audience in `aud`.
 
 **The audience is derived per request**, from `qits.edge.auth.audience-pattern` — or an app's own
@@ -676,7 +676,7 @@ request is not using it.
 ### Introspection, and the cache in front of it
 
 The cookie is **opaque** — 256 random bits, stored hashed at idp — so this process cannot decide
-anything about it alone: it `POST`s `<qits.idp.url>/api/sessions/introspect` with its own client id
+anything about it alone: it `POST`s `<qits.idp.dial-url>/api/sessions/introspect` with its own client id
 and secret in HTTP Basic and reads `{userId, username, roles, expiresAt}`. A non-200 is a refusal.
 The alternative, a signed cookie verified offline against the JWKS already held here, would cost
 revocation — a logout would be a row idp changed and nobody read.

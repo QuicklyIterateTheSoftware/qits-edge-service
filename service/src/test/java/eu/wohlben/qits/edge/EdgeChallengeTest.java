@@ -528,47 +528,45 @@ class EdgeChallengeTest {
                 "QITS_EDGE_SESSIONS_CLIENT_SECRET", "old-secret")));
   }
 
+  /**
+   * THE ISSUER IS NEVER A CONFIGURATION KEY OR A PROPERTIES DEFAULT (qits-730). It is derived in
+   * {@link Idp} from the domain; a shipped value spelling either accepted issuer would be the
+   * second place it is stated, and the first step back to reading it from configuration.
+   */
   @Test
-  void theIssuerReadsTheOlderNameOrTheShippedClaimAndNeverTheResourceAddress() throws Exception {
-    assertEquals("http://qits-platform-idp:8080/idp", idpUrl(Map.of()));
-    assertEquals(
-        "http://old-idp:8080/idp", idpUrl(Map.of("QITS_IDP_URL", "http://old-idp:8080/idp")));
-    assertEquals(
-        "http://old-idp:8080/idp",
-        idpUrl(
-            Map.of(
-                "QITS_RESOURCE_IDP_URL", "http://new-idp:8080/idp",
-                "QITS_IDP_URL", "http://old-idp:8080/idp")),
-        "QITS_RESOURCE_IDP_URL is an address; it never outranks the claim");
+  void theShippedFileStatesNoIssuer() throws Exception {
+    PropertiesConfigSource shipped = new PropertiesConfigSource(shippedUrl(), 250);
+    for (String name : shipped.getPropertyNames()) {
+      String value = shipped.getValue(name);
+      assertFalse(
+          value.contains(Idp.LEGACY_ISSUER) || value.contains("idp.qits."),
+          name + " states an issuer; it is derived from the domain, never configured: " + value);
+    }
   }
 
   /**
    * THE idp:client ADDRESS IS DIALLED, NEVER DEMANDED AS {@code iss} — the qits-162 regression.
    *
    * <p>The deployer injects {@code QITS_RESOURCE_IDP_URL=http://dev-qits-idp:8080/idp} once a
-   * deployment declares {@code idp:client}. Reading it into {@code qits.idp.url} made the edge
-   * demand that string as the issuer while idp still stamps {@code
-   * http://qits-platform-idp:8080/idp}, and every machine JWT on the estate was refused. This
-   * resolves the shipped file under exactly that environment and feeds the result to a real {@link
-   * Idp}.
+   * deployment declares {@code idp:client}. Reading it as the issuer made the edge demand that
+   * string while idp stamps another, and every machine JWT on the estate was refused. This resolves
+   * the shipped file under exactly that environment and feeds the result to a real {@link Idp}.
    */
   @Test
-  void theResourceIdpAddressMovesTheDialBaseAndLeavesTheIssuerAlone() throws Exception {
+  void theResourceIdpAddressMovesTheDialBaseAndNeverBecomesAnIssuer() throws Exception {
     Map<String, String> env = Map.of("QITS_RESOURCE_IDP_URL", "http://dev-qits-idp:8080/idp");
     Idp idp = new Idp();
-    idp.configured = idpUrl(env);
-    idp.configuredDial = Optional.of(dialUrl(env));
+    idp.configuredDial = dialUrl(env);
 
-    assertEquals(
-        "http://qits-platform-idp:8080/idp",
-        idp.issuer(),
-        "the iss claim idp stamps does not move because the deployer injected an address");
     assertEquals("http://dev-qits-idp:8080/idp", idp.dialBase());
     assertEquals("http://dev-qits-idp:8080/idp/jwks", idp.jwksUri());
+    assertFalse(
+        Idp.issuers("localhost").contains(idp.dialBase()),
+        "the iss claim idp stamps does not move because the deployer injected an address");
   }
 
   /**
-   * THE SHIPPED DIAL ADDRESS RESOLVES, AND IT IS NOT THE ISSUER.
+   * THE SHIPPED DIAL ADDRESS RESOLVES, AND IT IS NOT AN ISSUER.
    *
    * <p>{@code qits.idp.dial-url}'s default is a nested expression — an env name whose fallback is
    * itself an expression — so a malformed one would not be a wrong value but a config expansion
@@ -576,19 +574,14 @@ class EdgeChallengeTest {
    * to boot and the deploy rolling back. {@code IdpTest} cannot catch that: it constructs {@link
    * Idp} with values it supplies. This reads the shipped file with expansion on, which is the only
    * place the default's own text is exercised.
-   *
-   * <p>The second assertion is the point of the split. Under the same empty environment the issuer
-   * stays bare and the dial address carries the tier, so a change that collapsed the two keys back
-   * into one would fail here as well as in {@code IdpTest}.
    */
   @Test
-  void theShippedDialAddressDerivesTheTierAndDiffersFromTheIssuer() throws Exception {
+  void theShippedDialAddressDerivesTheTierAndIsNotAnIssuer() throws Exception {
     assertEquals("http://dev-qits-platform-idp:8080/idp", dialUrl(Map.of()));
-    assertNotEquals(
-        idpUrl(Map.of()),
-        dialUrl(Map.of()),
+    assertFalse(
+        Idp.issuers("localhost").contains(dialUrl(Map.of())),
         "the issuer is the iss claim and the dial-url is an address; shipping them equal is the"
-            + " re-merge this split exists to prevent");
+            + " re-merge the split exists to prevent");
 
     assertEquals(
         "http://prod-qits-platform-idp:8080/idp",
@@ -623,13 +616,6 @@ class EdgeChallengeTest {
         .clientSecret();
   }
 
-  private static String idpUrl(Map<String, String> env) throws Exception {
-    return applicationProperties(env)
-        .build()
-        .getOptionalValue("qits.idp.url", String.class)
-        .orElseThrow();
-  }
-
   /**
    * The shipped {@code application.properties}, with expression expansion on (off by default on a
    * bare builder) and one synthetic, higher-ordinal source standing in for the environment
@@ -638,27 +624,31 @@ class EdgeChallengeTest {
    * <p>The test JVM's classpath carries a SECOND {@code application.properties} — this repository's
    * own, under {@code src/test/resources} — so {@code getResource} alone cannot be trusted to pick
    * the shipped one: the two shadow each other in classpath order rather than merging. This picks
-   * the copy that actually defines {@code qits.idp.url}, which only the shipped one does.
+   * the copy that actually defines {@code qits.idp.dial-url}, which only the shipped one does.
    */
   private static SmallRyeConfigBuilder applicationProperties(Map<String, String> env)
       throws Exception {
+    return new SmallRyeConfigBuilder()
+        .addDefaultInterceptors()
+        .withSources(new PropertiesConfigSource(shippedUrl(), 250))
+        .withSources(new PropertiesConfigSource(env, "env", 300));
+  }
+
+  private static java.net.URL shippedUrl() throws Exception {
     var urls = EdgeChallengeTest.class.getClassLoader().getResources("application.properties");
     java.net.URL shipped = null;
     while (urls.hasMoreElements()) {
       java.net.URL candidate = urls.nextElement();
-      if (new PropertiesConfigSource(candidate, 250).getValue("qits.idp.url") != null) {
+      if (new PropertiesConfigSource(candidate, 250).getValue("qits.idp.dial-url") != null) {
         shipped = candidate;
         break;
       }
     }
     if (shipped == null) {
       throw new IllegalStateException(
-          "no application.properties on the test classpath defines qits.idp.url");
+          "no application.properties on the test classpath defines qits.idp.dial-url");
     }
-    return new SmallRyeConfigBuilder()
-        .addDefaultInterceptors()
-        .withSources(new PropertiesConfigSource(shipped, 250))
-        .withSources(new PropertiesConfigSource(env, "env", 300));
+    return shipped;
   }
 
   @Test
