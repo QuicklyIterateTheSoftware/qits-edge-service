@@ -529,16 +529,42 @@ class EdgeChallengeTest {
   }
 
   @Test
-  void theIdpUrlReadsTheResourceVarFirstThenTheOlderNameThenTheShippedAddress() throws Exception {
+  void theIssuerReadsTheOlderNameOrTheShippedClaimAndNeverTheResourceAddress() throws Exception {
     assertEquals("http://qits-platform-idp:8080/idp", idpUrl(Map.of()));
     assertEquals(
         "http://old-idp:8080/idp", idpUrl(Map.of("QITS_IDP_URL", "http://old-idp:8080/idp")));
     assertEquals(
-        "http://new-idp:8080/idp",
+        "http://old-idp:8080/idp",
         idpUrl(
             Map.of(
                 "QITS_RESOURCE_IDP_URL", "http://new-idp:8080/idp",
-                "QITS_IDP_URL", "http://old-idp:8080/idp")));
+                "QITS_IDP_URL", "http://old-idp:8080/idp")),
+        "QITS_RESOURCE_IDP_URL is an address; it never outranks the claim");
+  }
+
+  /**
+   * THE idp:client ADDRESS IS DIALLED, NEVER DEMANDED AS {@code iss} — the qits-162 regression.
+   *
+   * <p>The deployer injects {@code QITS_RESOURCE_IDP_URL=http://dev-qits-idp:8080/idp} once a
+   * deployment declares {@code idp:client}. Reading it into {@code qits.idp.url} made the edge
+   * demand that string as the issuer while idp still stamps {@code
+   * http://qits-platform-idp:8080/idp}, and every machine JWT on the estate was refused. This
+   * resolves the shipped file under exactly that environment and feeds the result to a real {@link
+   * Idp}.
+   */
+  @Test
+  void theResourceIdpAddressMovesTheDialBaseAndLeavesTheIssuerAlone() throws Exception {
+    Map<String, String> env = Map.of("QITS_RESOURCE_IDP_URL", "http://dev-qits-idp:8080/idp");
+    Idp idp = new Idp();
+    idp.configured = idpUrl(env);
+    idp.configuredDial = Optional.of(dialUrl(env));
+
+    assertEquals(
+        "http://qits-platform-idp:8080/idp",
+        idp.issuer(),
+        "the iss claim idp stamps does not move because the deployer injected an address");
+    assertEquals("http://dev-qits-idp:8080/idp", idp.dialBase());
+    assertEquals("http://dev-qits-idp:8080/idp/jwks", idp.jwksUri());
   }
 
   /**
