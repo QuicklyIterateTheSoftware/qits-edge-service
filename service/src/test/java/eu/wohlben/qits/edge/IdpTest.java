@@ -34,12 +34,11 @@ class IdpTest {
   }
 
   @Test
-  void theDerivedIssuerComesFirstAndTheLegacyOneIsStillAccepted() {
+  void onlyTheDerivedIssuerIsAccepted() {
     assertEquals(
-        List.of("https://idp.qits.wohlben.eu", "http://qits-platform-idp:8080/idp"),
+        List.of("https://idp.qits.wohlben.eu"),
         Idp.issuers("wohlben.eu"),
-        "wave 1 of qits-730: idp still stamps the legacy issuer, so refusing it refuses every token"
-            + " in flight");
+        "qits-730 wave 3: the legacy issuer is no longer accepted");
   }
 
   @Test
@@ -48,6 +47,7 @@ class IdpTest {
 
     assertFalse(issuers.contains("http://dev-qits-idp:8080/idp"));
     assertFalse(issuers.contains("http://dev-qits-platform-idp:8080/idp"));
+    assertFalse(issuers.contains("http://qits-platform-idp:8080/idp"));
   }
 
   @Test

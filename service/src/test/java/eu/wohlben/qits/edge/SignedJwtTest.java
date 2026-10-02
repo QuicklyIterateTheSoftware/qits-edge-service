@@ -62,11 +62,11 @@ class SignedJwtTest {
   }
 
   @Test
-  void aTokenCarryingTheLegacyIssuerStillPasses() {
-    // qits-730 wave 1: idp stamps this until it switches, so refusing it refuses every token.
+  void aTokenCarryingTheLegacyIssuerIsNowRefused() {
+    // qits-730 wave 3: the legacy issuer is gone, so a token carrying it is a foreign token.
     SignedJwt jwt =
         SignedJwt.parse(TestTokens.valid("http://qits-platform-idp:8080/idp", List.of(AUDIENCE)));
-    assertNull(jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
+    assertNotNull(jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
   }
 
   @Test
@@ -75,8 +75,7 @@ class SignedJwtTest {
     SignedJwt jwt =
         SignedJwt.parse(TestTokens.valid("http://dev-qits-idp:8080/idp", List.of(AUDIENCE)));
     assertEquals(
-        "the token was not issued by https://idp.qits.wohlben.eu or"
-            + " http://qits-platform-idp:8080/idp",
+        "the token was not issued by https://idp.qits.wohlben.eu",
         jwt.problem(ACCEPTED, AUDIENCE, Instant.now(), 30));
   }
 

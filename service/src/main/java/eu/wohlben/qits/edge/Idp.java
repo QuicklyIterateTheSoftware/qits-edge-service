@@ -29,25 +29,19 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 @ApplicationScoped
 public class Idp {
 
-  /**
-   * The issuer idp stamps today. It goes once idp stamps the derived issuer (qits-730 wave 3);
-   * until then refusing it would refuse every token in flight.
-   */
-  static final String LEGACY_ISSUER = "http://qits-platform-idp:8080/idp";
-
   @Inject EdgeConfig edge;
 
   @ConfigProperty(name = "qits.idp.dial-url")
   String configuredDial;
 
-  /** Every {@code iss} an accepted token may carry: the derived one first, then the legacy one. */
+  /** Every {@code iss} an accepted token may carry: the one derived issuer. */
   public List<String> issuers() {
     return issuers(edge.domain());
   }
 
   /** The accepted issuers for a stated domain. */
   static List<String> issuers(String domain) {
-    return List.of(issuer(domain), LEGACY_ISSUER);
+    return List.of(issuer(domain));
   }
 
   /** {@code https://idp.qits.<domain>}, the domain normalised the way every other name here is. */

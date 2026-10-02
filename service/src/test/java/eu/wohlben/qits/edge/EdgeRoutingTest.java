@@ -2097,9 +2097,9 @@ class EdgeRoutingTest {
   }
 
   @Test
-  void theDerivedIssuerAndTheLegacyOneOpenTheVhostAndAnyOtherIsRefused() {
-    // qits-730 wave 1: idp still stamps the legacy issuer, so the edge accepts both until it
-    // switches. The third is the qits-162 shape — the dial address read as the claim.
+  void onlyTheDerivedIssuerOpensTheVhostAndAnyOtherIsRefused() {
+    // qits-730 wave 3: the legacy issuer is no longer accepted. The third is the qits-162 shape —
+    // the dial address read as the claim.
     Map<String, String> derived =
         bearer(
             TestTokens.valid(
@@ -2116,9 +2116,7 @@ class EdgeRoutingTest {
     assertEquals(
         "registry-dev",
         client().get("registry.dev.acme.example.com", "/v2/", derived).line("upstream"));
-    assertEquals(
-        "registry-dev",
-        client().get("registry.dev.acme.example.com", "/v2/", legacy).line("upstream"));
+    assertEquals(401, client().get("registry.dev.acme.example.com", "/v2/", legacy).status());
     assertEquals(401, client().get("registry.dev.acme.example.com", "/v2/", address).status());
   }
 

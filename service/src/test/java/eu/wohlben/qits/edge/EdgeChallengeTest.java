@@ -530,8 +530,8 @@ class EdgeChallengeTest {
 
   /**
    * THE ISSUER IS NEVER A CONFIGURATION KEY OR A PROPERTIES DEFAULT (qits-730). It is derived in
-   * {@link Idp} from the domain; a shipped value spelling either accepted issuer would be the
-   * second place it is stated, and the first step back to reading it from configuration.
+   * {@link Idp} from the domain; a shipped value spelling the accepted issuer would be the second
+   * place it is stated, and the first step back to reading it from configuration.
    */
   @Test
   void theShippedFileStatesNoIssuer() throws Exception {
@@ -539,7 +539,7 @@ class EdgeChallengeTest {
     for (String name : shipped.getPropertyNames()) {
       String value = shipped.getValue(name);
       assertFalse(
-          value.contains(Idp.LEGACY_ISSUER) || value.contains("idp.qits."),
+          value.contains("idp.qits."),
           name + " states an issuer; it is derived from the domain, never configured: " + value);
     }
   }
