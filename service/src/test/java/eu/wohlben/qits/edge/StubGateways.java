@@ -588,6 +588,19 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
           .end("upstream=" + environment + "\n");
       return;
     }
+    if (request.path().endsWith("/cors-upstream")) {
+      // An upstream that speaks CORS for itself — wildcard origin, a method list, a long max-age —
+      // which the edge owns now and must replace rather than pass through.
+      request
+          .response()
+          .putHeader("Content-Type", "text/plain; charset=utf-8")
+          .putHeader("Access-Control-Allow-Origin", "*")
+          .putHeader("Access-Control-Allow-Methods", "TRACE")
+          .putHeader("Access-Control-Max-Age", "86400")
+          .putHeader("Vary", "Accept-Encoding")
+          .end("upstream=" + environment + "\n");
+      return;
+    }
     if (request.path().equals("/stream")) {
       // Two chunks with a measurable gap. A proxy that buffered the response would deliver both at
       // once, and the client's timing is what catches that — a body assertion alone would not.

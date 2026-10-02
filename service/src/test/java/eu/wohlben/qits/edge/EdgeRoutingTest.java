@@ -48,6 +48,9 @@ class EdgeRoutingTest {
 
   @Inject EdgeRoutes routes;
 
+  /** For the temporary cross-host switch, which this suite flips to prove both of its values. */
+  @Inject EdgeRouter router;
+
   @Inject EdgeProjects projects;
 
   /**
@@ -451,7 +454,9 @@ class EdgeRoutingTest {
         new JsonObject(client().get("dev.acme.example.com", "/main-navigation").body());
     JsonObject applications = document.getJsonObject("applications");
     assertEquals("/ci/q/swagger-ui", applications.getJsonObject("qits-ci").getString("apiDocs"));
-    assertNull(applications.getJsonObject("qits-projects"), "no api-docs, no entry");
+    assertNull(
+        applications.getJsonObject("qits-projects").getString("apiDocs"),
+        "no api-docs, no apiDocs — the entry is there for its origin alone");
 
     JsonObject services =
         document.getJsonObject("slots").getJsonArray("services.details").stream()
@@ -631,6 +636,28 @@ class EdgeRoutingTest {
   }
 
   @Test
+  void everyApplicationWithAPublishedHostHasItsOriginInTheNavigation() {
+    // Additive: the origin an SPA reads another application's API on once a hostname alone picks
+    // the application. brochure places no navigation entry at all and still gets one; ci keeps its
+    // apiDocs beside it.
+    activateCi();
+    activateBrochure();
+    JsonObject applications =
+        new JsonObject(client().get("dev.acme.example.com", "/main-navigation").body())
+            .getJsonObject("applications");
+    assertEquals(
+        "http://brochure.dev.acme.example.com",
+        applications.getJsonObject("qits-brochure").getString("origin"));
+    assertNull(applications.getJsonObject("qits-brochure").getString("apiDocs"));
+    assertEquals(
+        "http://ci.dev.acme.example.com",
+        applications.getJsonObject("qits-ci").getString("origin"));
+    assertEquals("/ci/q/swagger-ui", applications.getJsonObject("qits-ci").getString("apiDocs"));
+    // Only applications that publish a host: the environment's own catch-all publishes none.
+    assertNull(applications.getJsonObject("test-environment"));
+  }
+
+  @Test
   void navigationIsServedOnAServiceHostToo() {
     // Every shell renders the same tree, so the document is on every vhost — and it names the
     // environment's origins even when the request itself carried an application's name.
@@ -678,6 +705,260 @@ class EdgeRoutingTest {
     assertEquals(
         "/artifacts/api/files",
         client().get("ci.dev.acme.example.com", "/artifacts/api/files", token("dev")).line("uri"));
+  }
+
+  @Test
+  void aCrossHostRouteIsLoggedInLogModeAndStillTravels() {
+    // log, the shipped default of the TEMPORARY switch: the travel answers as it did, and the one
+    // greppable line names who is still relying on it. The host's own route stays silent.
+    activateCi();
+    activateArtifacts();
+    List<String> lines = captureRouterLog();
+    try {
+      EdgeClient.Answer answer =
+          client()
+              .get(
+                  "ci.dev.acme.example.com",
+                  "/artifacts/api/files",
+                  withToken(
+                      Map.of(
+                          "Origin", "https://ci.dev.acme.example.com",
+                          "Referer", "https://ci.dev.acme.example.com/runs")));
+      assertEquals("registry-dev", answer.line("upstream"));
+      assertEquals(
+          List.of(
+              "cross-host route: host=ci.dev.acme.example.com method=GET"
+                  + " path=/artifacts/api/files application=qits-artifacts"
+                  + " origin=https://ci.dev.acme.example.com"
+                  + " referer=https://ci.dev.acme.example.com/runs"),
+          crossHostLines(lines));
+
+      lines.clear();
+      assertEquals(
+          "mirror-dev",
+          client().get("ci.dev.acme.example.com", "/ci/api/runs", token("dev")).line("upstream"));
+      assertEquals(
+          "mirror-dev",
+          client().get("ci.dev.acme.example.com", "/undeclared", token("dev")).line("upstream"));
+      assertEquals(List.of(), crossHostLines(lines), "the host's own paths are never logged");
+
+      // Absent headers are spelled `-`, so the line keeps one shape.
+      client().get("ci.dev.acme.example.com", "/artifacts/api/files", token("dev"));
+      assertEquals(
+          List.of(
+              "cross-host route: host=ci.dev.acme.example.com method=GET"
+                  + " path=/artifacts/api/files application=qits-artifacts origin=- referer=-"),
+          crossHostLines(lines));
+    } finally {
+      releaseRouterLog();
+    }
+  }
+
+  @Test
+  void aCrossHostRouteIsAnsweredByTheHostsOwnServiceInDenyMode() {
+    // deny: the primary route stops travelling, and the host's own service answers exactly as for
+    // a path nobody declared. Nothing is logged — nothing travelled.
+    activateCi();
+    activateArtifacts();
+    List<String> lines = captureRouterLog();
+    router.crossHostRoutes(EdgeConfig.CrossHostRoutes.DENY);
+    try {
+      EdgeClient.Answer answer =
+          client().get("ci.dev.acme.example.com", "/artifacts/api/files", token("dev"));
+      assertEquals("mirror-dev", answer.line("upstream"));
+      assertEquals("/artifacts/api/files", answer.line("uri"));
+      // On its owner's own name it is still the owner's.
+      assertEquals(
+          "registry-dev",
+          client()
+              .get("registry.dev.acme.example.com", "/artifacts/api/files", token("dev"))
+              .line("upstream"));
+      assertEquals(List.of(), crossHostLines(lines));
+    } finally {
+      router.crossHostRoutes(EdgeConfig.CrossHostRoutes.LOG);
+      releaseRouterLog();
+    }
+  }
+
+  // --- CORS, which the edge owns on every service host ------------------------------------------
+
+  @Test
+  void anOriginUnderTheDomainIsEchoedWithCredentials() {
+    activateCi();
+    for (String origin :
+        List.of(
+            "https://projects.dev.acme.example.com",
+            "https://example.com",
+            "https://acme.example.com",
+            "https://a.b.c.d.e.example.com")) {
+      EdgeClient.Answer answer =
+          client()
+              .get("ci.dev.acme.example.com", "/ci/api/runs", withToken(Map.of("Origin", origin)));
+      assertEquals(200, answer.status(), origin);
+      assertEquals(List.of(origin), answer.headerValues("Access-Control-Allow-Origin"), origin);
+      assertEquals(List.of("true"), answer.headerValues("Access-Control-Allow-Credentials"));
+      assertEquals(List.of(EdgeCors.EXPOSED), answer.headerValues("Access-Control-Expose-Headers"));
+      assertTrue(answer.headerValues("Vary").contains("Origin"), answer.raw().toString());
+    }
+    // A streamed answer — the shape an SSE channel has — carries it on its head like any other.
+    EdgeClient.Answer streamed =
+        client()
+            .get(
+                "ci.dev.acme.example.com",
+                "/stream",
+                withToken(Map.of("Origin", "https://projects.dev.acme.example.com")));
+    assertTrue(streamed.body().contains("chunk-2"), streamed.body());
+    assertEquals(
+        List.of("https://projects.dev.acme.example.com"),
+        streamed.headerValues("Access-Control-Allow-Origin"));
+  }
+
+  @Test
+  void aForeignOriginGetsNoAllowOrigin() {
+    activateCi();
+    for (String origin :
+        List.of(
+            "https://evil.example",
+            "https://example.com.evil.example",
+            "https://evilexample.com",
+            // The scheme is the one the canonical origin was derived with: https under a real
+            // domain.
+            "http://projects.dev.acme.example.com",
+            "https://projects.dev.acme.example.com:8443",
+            "null")) {
+      EdgeClient.Answer answer =
+          client()
+              .get("ci.dev.acme.example.com", "/ci/api/runs", withToken(Map.of("Origin", origin)));
+      assertEquals(200, answer.status(), origin);
+      assertEquals(List.of(), answer.headerValues("Access-Control-Allow-Origin"), origin);
+      assertEquals(List.of(), answer.headerValues("Access-Control-Allow-Credentials"), origin);
+      assertTrue(answer.headerValues("Vary").contains("Origin"), origin);
+    }
+  }
+
+  @Test
+  void anAdmittedPreflightIsAnsweredBeforeTheGate() {
+    // No credential at all — a browser sends none on a preflight — on a host that refuses every
+    // uncredentialed request. The edge answers it, and nothing reaches the upstream.
+    activateCi();
+    EdgeClient.Answer preflight =
+        client()
+            .send(
+                HttpMethod.OPTIONS,
+                "ci.dev.acme.example.com",
+                "/ci/api/runs",
+                null,
+                Map.of(
+                    "Origin", "https://projects.dev.acme.example.com",
+                    "Access-Control-Request-Method", "PUT",
+                    "Access-Control-Request-Headers", "content-type,x-requested-with"));
+    assertEquals(204, preflight.status(), preflight.body());
+    assertNull(preflight.line("upstream"));
+    assertEquals(
+        List.of("https://projects.dev.acme.example.com"),
+        preflight.headerValues("Access-Control-Allow-Origin"));
+    assertEquals(List.of("true"), preflight.headerValues("Access-Control-Allow-Credentials"));
+    assertEquals(List.of("PUT"), preflight.headerValues("Access-Control-Allow-Methods"));
+    assertEquals(
+        List.of("content-type,x-requested-with"),
+        preflight.headerValues("Access-Control-Allow-Headers"));
+    assertEquals(
+        List.of(EdgeCors.PREFLIGHT_MAX_AGE), preflight.headerValues("Access-Control-Max-Age"));
+    assertEquals(List.of(), preflight.headerValues("Set-Cookie"));
+
+    // A foreign origin's preflight is not the edge's to answer: it meets the gate as it did.
+    EdgeClient.Answer foreign =
+        client()
+            .send(
+                HttpMethod.OPTIONS,
+                "ci.dev.acme.example.com",
+                "/ci/api/runs",
+                null,
+                Map.of("Origin", "https://evil.example", "Access-Control-Request-Method", "PUT"));
+    assertEquals(401, foreign.status());
+    assertEquals(List.of(), foreign.headerValues("Access-Control-Allow-Origin"));
+
+    // The real request after it is still gated: the preflight opened nothing.
+    assertEquals(
+        401,
+        client()
+            .get(
+                "ci.dev.acme.example.com",
+                "/ci/api/runs",
+                Map.of("Origin", "https://projects.dev.acme.example.com"))
+            .status());
+  }
+
+  @Test
+  void anUpstreamsOwnCorsHeadersAreReplaced() {
+    activateCi();
+    EdgeClient.Answer admitted =
+        client()
+            .get(
+                "ci.dev.acme.example.com",
+                "/ci/cors-upstream",
+                withToken(Map.of("Origin", "https://projects.dev.acme.example.com")));
+    assertEquals("mirror-dev", admitted.line("upstream"));
+    assertEquals(
+        List.of("https://projects.dev.acme.example.com"),
+        admitted.headerValues("Access-Control-Allow-Origin"));
+    assertEquals(List.of(), admitted.headerValues("Access-Control-Allow-Methods"));
+    assertEquals(List.of(), admitted.headerValues("Access-Control-Max-Age"));
+    assertTrue(admitted.headerValues("Vary").contains("Accept-Encoding"));
+    assertTrue(admitted.headerValues("Vary").contains("Origin"));
+
+    // A foreign origin does not inherit the upstream's wildcard either.
+    EdgeClient.Answer foreign =
+        client()
+            .get(
+                "ci.dev.acme.example.com",
+                "/ci/cors-upstream",
+                withToken(Map.of("Origin", "https://evil.example")));
+    assertEquals("mirror-dev", foreign.line("upstream"));
+    assertEquals(List.of(), foreign.headerValues("Access-Control-Allow-Origin"));
+    assertEquals(List.of(), foreign.headerValues("Access-Control-Allow-Methods"));
+  }
+
+  /** The dev token plus some headers of the test's own. */
+  private static Map<String, String> withToken(Map<String, String> headers) {
+    Map<String, String> merged = new java.util.HashMap<>(token("dev"));
+    merged.putAll(headers);
+    return merged;
+  }
+
+  private java.util.logging.Handler routerLog;
+
+  /** Every message EdgeRouter logs from here until {@link #releaseRouterLog}, formatted. */
+  private List<String> captureRouterLog() {
+    List<String> lines = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+    routerLog =
+        new java.util.logging.Handler() {
+          @Override
+          public void publish(java.util.logging.LogRecord record) {
+            lines.add(
+                record instanceof org.jboss.logmanager.ExtLogRecord ext
+                    ? ext.getFormattedMessage()
+                    : record.getMessage());
+          }
+
+          @Override
+          public void flush() {}
+
+          @Override
+          public void close() {}
+        };
+    java.util.logging.Logger.getLogger(EdgeRouter.class.getName()).addHandler(routerLog);
+    return lines;
+  }
+
+  private void releaseRouterLog() {
+    java.util.logging.Logger.getLogger(EdgeRouter.class.getName()).removeHandler(routerLog);
+  }
+
+  private static List<String> crossHostLines(List<String> lines) {
+    synchronized (lines) {
+      return lines.stream().filter(line -> line.startsWith("cross-host route:")).toList();
+    }
   }
 
   @Test

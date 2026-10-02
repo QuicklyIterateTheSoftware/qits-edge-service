@@ -49,9 +49,12 @@ import java.util.List;
  * shell reads the document there: every one of those names is a door, and a door serves no SPA.
  *
  * <p>{@code applications} is per-application metadata rather than a placement: one object per
- * application that published an api-docs path, keyed by application name. The path is served on the
- * application's OWN host, so a shell page that knows which repository it shows composes it against
- * that entry's origin rather than against the door.
+ * application that published a host or an api-docs path, keyed by application name. {@code origin}
+ * is the application's own name as an origin — null on a name inside no project, like an entry's —
+ * for every application with a published host, navigation entries or not: it is where a shell reads
+ * that application's API now that a hostname alone picks the application. {@code apiDocs} is served
+ * on that same host, so a shell page composes it against {@code origin} rather than against the
+ * door.
  */
 @ApplicationScoped
 public class NavigationRoute {
@@ -113,11 +116,26 @@ public class NavigationRoute {
     }
 
     JsonObject applications = new JsonObject();
+    // Every application with a published host, whether or not it fills a slot: qits-stt places no
+    // entry and a shell that calls it still needs its origin. Additive — apiDocs merges in below.
+    routes
+        .applicationHosts(environment)
+        .forEach(
+            (application, host) ->
+                applications.put(
+                    application,
+                    new JsonObject().put("origin", authority.hostOrigin(host.host()))));
     routes
         .apiDocs(environment)
         .forEach(
-            (application, apiDocsPath) ->
-                applications.put(application, new JsonObject().put("apiDocs", apiDocsPath)));
+            (application, apiDocsPath) -> {
+              JsonObject entry = applications.getJsonObject(application);
+              if (entry == null) {
+                entry = new JsonObject();
+                applications.put(application, entry);
+              }
+              entry.put("apiDocs", apiDocsPath);
+            });
 
     context
         .response()

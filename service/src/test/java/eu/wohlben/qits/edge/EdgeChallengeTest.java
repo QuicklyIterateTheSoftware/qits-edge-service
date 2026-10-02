@@ -725,6 +725,23 @@ class EdgeChallengeTest {
   }
 
   @Test
+  void corsSharesTheAnchorAtAnyDepth() {
+    // The same matcher behind EdgeCors, unbounded: the owner's ruling admits every origin under
+    // the domain, not only the grammar's names. The anchor is unchanged, so a foreign site is
+    // refused exactly as a foreign login return is.
+    String apex = EdgeRouter.domain("wohlben.eu");
+    Set<String> exact = Set.of(apex);
+    List<String> wildcards = List.of(apex);
+    int any = Integer.MAX_VALUE;
+    assertTrue(EdgeSessions.underDomain("a.b.c.d.wohlben.eu", exact, wildcards, any));
+    assertTrue(EdgeSessions.underDomain("wohlben.eu", exact, wildcards, any));
+    assertFalse(EdgeSessions.underDomain("wohlben.eu.evil.example", exact, wildcards, any));
+    assertFalse(EdgeSessions.underDomain("evilwohlben.eu", exact, wildcards, any));
+    assertFalse(EdgeSessions.underDomain(".wohlben.eu", exact, wildcards, any));
+    assertFalse(EdgeSessions.underDomain("qits.wohlben.eu:8443", exact, wildcards, any));
+  }
+
+  @Test
   void theCanonicalOriginIsThePlatformProjectsDoorAndNotTheApex() {
     // The whole of the derivation, and the bug it fixes. The apex composes no application name —
     // every address carries a project label and the apex carries none — so a refused login used to

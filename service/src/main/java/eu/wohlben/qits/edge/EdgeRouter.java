@@ -29,7 +29,8 @@ import org.jboss.logging.Logger;
  *
  * <p><b>What this does not do</b> is still most of what makes it worth having. It holds no route
  * table beyond the deployment projection and application list, rewrites no path, reads no body, and
- * serves nothing of its own but {@code /q} and {@code /main-navigation}.
+ * serves nothing of its own but {@code /q}, {@code /main-navigation} and an admitted origin's CORS
+ * preflight — see {@link EdgeCors}, which owns CORS on every service host.
  *
  * <p><b>A name reaches a service two ways now.</b> {@code qits.edge.apps} is the configured one and
  * is a deployment fact — the machine vhosts, and the auth attributes that go with them. The
@@ -90,6 +91,16 @@ public class EdgeRouter {
   @Inject EdgeSessions sessions;
 
   @Inject EdgeRoutes routes;
+
+  /** CORS on every service host, installed before the gate so a preflight never meets it. */
+  @Inject EdgeCors cors;
+
+  /**
+   * TEMPORARY — {@link EdgeConfig#crossHostRoutes()}, read once at boot. Deleted together with
+   * {@link #travels} when the cross-host travel goes. Mutable only so one boot of {@code
+   * EdgeRoutingTest} can prove both values.
+   */
+  private volatile EdgeConfig.CrossHostRoutes crossHostRoutes;
 
   /**
    * The live project projection, which is a routing input as well as a certificate one: every
@@ -202,6 +213,7 @@ public class EdgeRouter {
             config.defaultEnvironment(),
             config.apps().keySet(),
             domain(config.domain()));
+    crossHostRoutes = config.crossHostRoutes();
     client = vertx.createHttpClient(proxyClientOptions(5_000));
     webSocketUpgrade = new EdgeWebSocketUpgrade(client);
 
@@ -239,6 +251,11 @@ public class EdgeRouter {
         client
             .request(originRequestOptions(upstream))
             .onFailure(failure -> LOG.warnf("no upstream connection to %s: %s", upstream, failure));
+  }
+
+  /** Test seam for the temporary switch; see {@link #crossHostRoutes}. */
+  void crossHostRoutes(EdgeConfig.CrossHostRoutes mode) {
+    crossHostRoutes = mode;
   }
 
   /** Where an unmatched Host name goes. */
@@ -324,6 +341,12 @@ public class EdgeRouter {
       // and no configuration and no deployment claims it. Answering here is the whole point: a
       // mistyped registry vhost must fail, not quietly reach an unauthenticated route.
       unknownApp(request, named);
+      return;
+    }
+
+    if (target.service() && cors.handle(rc)) {
+      // An admitted origin's preflight, answered 204 before every gate below: a browser sends no
+      // credential on one, so a gated host would refuse it and the real request would never come.
       return;
     }
 
@@ -865,12 +888,32 @@ public class EdgeRouter {
    * The upstream this request is for, one answer for both transports: the owning endpoint's when a
    * route travels here, the published host's otherwise, and the configured app grid's for a vhost
    * the projection has not claimed.
+   *
+   * <p><b>The travel to ANOTHER application is going away</b> (epic qits-528), and {@link
+   * EdgeConfig#crossHostRoutes()} is the temporary switch in front of it: {@code log} travels as
+   * before and names every such request in one INFO line, {@code cross-host route: ...}, so the
+   * callers still relying on it can be found; {@code deny} answers from the host's own service, as
+   * for a path nobody declared. A path the host's own application answers is never logged.
    */
   private Upstream upstreamOf(HttpServerRequest request, Target target) {
     EdgeRoutes.ServiceHost host = target.host();
     if (host != null) {
       EdgeEndpoint endpoint = routes.resolve(target.environment(), request.path());
       if (endpoint != null && travels(target, endpoint, host)) {
+        if (endpoint.application().equals(host.application())) {
+          return endpoint.upstream();
+        }
+        if (crossHostRoutes == EdgeConfig.CrossHostRoutes.DENY) {
+          return host.upstream();
+        }
+        LOG.infof(
+            "cross-host route: host=%s method=%s path=%s application=%s origin=%s referer=%s",
+            authority(request),
+            request.method(),
+            request.path(),
+            endpoint.application(),
+            orDash(request.getHeader(HttpHeaders.ORIGIN)),
+            orDash(request.getHeader(HttpHeaders.REFERER)));
         return endpoint.upstream();
       }
       return host.upstream();
@@ -878,12 +921,19 @@ public class EdgeRouter {
     return appUpstream(config.apps().get(target.route().app()), target.environment());
   }
 
+  private static String orDash(String value) {
+    return value == null ? "-" : value;
+  }
+
   /**
-   * Whether another application's route means the same thing on this name.
+   * Whether another application's route means the same thing on this name. <b>Going away</b>: a
+   * hostname alone will pick the application (epic qits-528), and this is deleted together with
+   * {@link EdgeConfig#crossHostRoutes()}; an SPA reads another application on that application's
+   * own name, cross-origin, which {@link EdgeCors} admits.
    *
    * <p><b>Its PRIMARY route does</b> — {@code /projects}, {@code /workspaces}, {@code /ci} are what
-   * each of those applications is known by, so an SPA on any host reads {@code /projects/api}
-   * same-origin and no page needs CORS.
+   * each of those applications is known by, so an SPA on any host could read {@code /projects/api}
+   * same-origin; that is what the travel was for, and why CORS was never needed until it goes.
    *
    * <p><b>Its other routes do not.</b> {@code /v2}, {@code /git}, {@code /bootstrap-git} are wire
    * protocols whose names several services legitimately answer: qits-artifacts and the pull-through

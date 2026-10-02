@@ -520,6 +520,18 @@ public class EdgeSessions {
    * <p>Package-private and static so the matrix can be asserted without booting anything.
    */
   static boolean browserHost(String host, Set<String> exact, List<String> wildcards) {
+    return underDomain(host, exact, wildcards, WILDCARD_LABELS);
+  }
+
+  /**
+   * The domain anchor itself, shared by the login return ({@link #browserHost}, bounded at the
+   * grammar's depth) and by CORS ({@link #admitsOrigin}, unbounded): an exact entry, or a wildcard
+   * entry's authority with between one and {@code maxLabels} labels in front of it. The anchor is a
+   * whole-label suffix, so {@code wohlben.eu.evil.example} and {@code evilwohlben.eu} match nothing
+   * whatever the bound.
+   */
+  static boolean underDomain(
+      String host, Set<String> exact, List<String> wildcards, int maxLabels) {
     if (host == null) {
       return false;
     }
@@ -540,11 +552,34 @@ public class EdgeSessions {
           labels++;
         }
       }
-      if (labels <= WILDCARD_LABELS) {
+      if (labels <= maxLabels) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Whether a browser {@code Origin} is this platform's own, for {@link EdgeCors}: the scheme the
+   * canonical origin was derived with — {@code https} under a real domain, {@code http} under
+   * {@code localhost} — and an authority under the stated domain, on the same port the canonical
+   * origin carries (none under a real domain, the edge's own listener locally).
+   *
+   * <p><b>Any depth</b>, where {@link #browserHost} stops at three labels: the owner's ruling is
+   * that every origin under the domain is admitted, not only the names the grammar or the
+   * projection produce. The anchor is the same one, so a foreign site is refused exactly as a
+   * foreign login return is.
+   */
+  boolean admitsOrigin(String origin) {
+    if (origin == null) {
+      return false;
+    }
+    String scheme = canonicalOrigin.getScheme() + "://";
+    if (!origin.regionMatches(true, 0, scheme, 0, scheme.length())) {
+      return false;
+    }
+    String host = authority(origin.substring(scheme.length()));
+    return host != null && underDomain(host, browserHosts, wildcardBrowserHosts, Integer.MAX_VALUE);
   }
 
   /** A lower-case host plus optional port, never a URL, path, user-info, or wildcard. */

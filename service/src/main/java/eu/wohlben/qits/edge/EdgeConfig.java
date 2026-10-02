@@ -77,7 +77,7 @@ public interface EdgeConfig {
    * $app} label. A label with no entry is refused.
    *
    * <p>One entry ships in {@code application.properties}: {@code mirror}, whose host pattern is
-   * {@code {env}-qits-platform-mirror}. A map entry cannot be unset by a later config source, only
+   * {@code {env}-qits-mirror}. A map entry cannot be unset by a later config source, only
    * overridden, so shipping one costs the ability to revoke it — which is free here and nowhere
    * else, because the pull-through cache is the platform's own and its address was never a decision
    * a deployment made. It carries the {@code {env}} placeholder like every other entry: the mirror
@@ -94,6 +94,26 @@ public interface EdgeConfig {
    * </pre>
    */
   Map<String, App> apps();
+
+  /**
+   * <b>TEMPORARY</b>: what a service host does with another application's primary route — the
+   * cross-host path routing in {@code EdgeRouter.travels}, which is going away (epic qits-528: a
+   * hostname alone picks the application). This switch is the observe step before that deletion,
+   * not a lasting knob, and it is deleted together with the travel.
+   *
+   * <p>{@code log}, the default, routes exactly as before and writes one INFO line beginning {@code
+   * cross-host route:} for every request that travels to another application, so the remaining
+   * callers can be found in the telemetry logs. {@code deny} stops the travel: the host's own
+   * service answers, exactly as for a path nobody declared.
+   */
+  @WithDefault("log")
+  CrossHostRoutes crossHostRoutes();
+
+  /** The two values of {@link #crossHostRoutes()}. Temporary with it. */
+  enum CrossHostRoutes {
+    LOG,
+    DENY
+  }
 
   /** The startup proof that turns a persisted deployment snapshot into an authoritative one. */
   Projection projection();

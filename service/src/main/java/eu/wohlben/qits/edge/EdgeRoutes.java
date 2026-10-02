@@ -251,6 +251,14 @@ public class EdgeRoutes {
   }
 
   /**
+   * Every application that publishes a public name in this environment, by application name — the
+   * {@code origin} {@code /main-navigation} states for each, navigation entries or not.
+   */
+  public Map<String, ServiceHost> applicationHosts(String environment) {
+    return view.hostsByApplication().getOrDefault(environment, Map.of());
+  }
+
+  /**
    * This application's first-declared route in this environment, or null when it publishes none.
    *
    * <p>The primary route is the one an application is KNOWN by: the segment its SPA is served

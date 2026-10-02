@@ -194,6 +194,47 @@ class EdgeSessionGateTest {
   }
 
   @Test
+  void anAdmittedPreflightNeitherNeedsNorTouchesASession() {
+    // A browser sends no cookie on a preflight, so with the gate on it would be refused like any
+    // uncredentialed request and the real one never made. It is the edge's to answer, before the
+    // gate: 204, no idp call, no cookie, no redirect to the login page.
+    int before = StubGateways.introspections();
+    EdgeClient.Answer answer =
+        client()
+            .send(
+                HttpMethod.OPTIONS,
+                "ci.dev.acme.example.com",
+                "/ci/api/runs",
+                null,
+                Map.of(
+                    "Origin", "https://projects.dev.acme.example.com",
+                    "Access-Control-Request-Method", "POST",
+                    "Sec-Fetch-Mode", "cors"));
+    assertEquals(204, answer.status(), answer.body());
+    assertNull(answer.line("upstream"));
+    assertEquals(
+        List.of("https://projects.dev.acme.example.com"),
+        answer.headerValues("Access-Control-Allow-Origin"));
+    assertEquals(List.of("POST"), answer.headerValues("Access-Control-Allow-Methods"));
+    assertEquals(List.of(), answer.headerValues("Set-Cookie"));
+    assertNull(answer.headers().get("location"));
+    assertEquals(before, StubGateways.introspections(), "a preflight asks idp nothing");
+
+    // The real request it clears is still the gate's: a 401 a cross-origin script can read.
+    EdgeClient.Answer refused =
+        client()
+            .get(
+                "ci.dev.acme.example.com",
+                "/ci/api/runs",
+                Map.of(
+                    "Origin", "https://projects.dev.acme.example.com", "Sec-Fetch-Mode", "cors"));
+    assertEquals(401, refused.status());
+    assertEquals(
+        List.of("https://projects.dev.acme.example.com"),
+        refused.headerValues("Access-Control-Allow-Origin"));
+  }
+
+  @Test
   void theDoorGatesNothingBecauseItServesNothing() {
     // Not even the login page: the door has no path to refuse, so it 404s instead of redirecting —
     // with a session, with a machine token, and with neither.

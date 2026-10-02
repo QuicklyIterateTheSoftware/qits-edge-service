@@ -197,10 +197,30 @@ and the auth attributes that go with them. The deployment projection is the othe
 publishes the name it answers to, and that name then serves its SPA at `/` and every wire route it
 owns. The two are the same kind of vhost, so everything below treats them alike.
 
-On such a name, **another application's PRIMARY route is still routed to that application**:
-`/projects/api`, `/workspaces/container`, `/ci/api` work from every host, which is what keeps a
-platform of a dozen SPAs same-origin with no CORS anywhere. The primary route is the segment an
+On such a name, **another application's PRIMARY route is still routed to that application — for
+now**: `/projects/api`, `/workspaces/container`, `/ci/api` work from every host, which is what kept
+a platform of a dozen SPAs same-origin with no CORS anywhere. The primary route is the segment an
 application is *known* by, so it means the same thing on everybody's name.
+
+**That travel is going away** (epic qits-528): a hostname alone will pick the application. The
+first step only observes, behind a TEMPORARY switch that is deleted together with the travel:
+
+| `qits.edge.cross-host-routes` (`QITS_EDGE_CROSS_HOST_ROUTES`) | Behaviour |
+|---|---|
+| `log` (default) | Routes exactly as before, and writes one INFO line per request that travels to another application: `cross-host route: host=<host> method=<method> path=<path> application=<chosen app> origin=<Origin or -> referer=<Referer or ->`. Grep the telemetry logs for `cross-host route:` to find the callers still relying on it. A path the host's own application answers is never logged. |
+| `deny` | The host's own service answers, exactly as for a path nobody declared. |
+
+**CORS replaces it, and the edge owns CORS** on every service host (`EdgeCors`). A request whose
+`Origin` is under the stated domain — `https://<anything, any depth>.<QITS_DOMAIN>` or the apex
+`https://<QITS_DOMAIN>`, and locally `http://<…>.localhost:<edge port>` — gets that origin echoed in
+`Access-Control-Allow-Origin` with `Access-Control-Allow-Credentials: true` and a short
+`Access-Control-Expose-Headers` list. The rule is the same domain anchor the login return is checked
+against, and deliberately not narrowed to the hosts the projection publishes. A foreign origin gets
+no `Access-Control-Allow-Origin`. A preflight (`OPTIONS` with `Origin` and
+`Access-Control-Request-Method`) from an admitted origin is answered `204` by the edge itself,
+before the gate and without touching any session, echoing the requested method and headers with
+`Access-Control-Max-Age: 600`. Every `Access-Control-*` header an upstream sends is removed, and
+every service-host response carries `Vary: Origin`.
 
 **Its other routes do not travel.** `/v2`, `/git`, `/bootstrap-git` are wire protocols that several
 services legitimately answer — qits-artifacts and the pull-through mirror both speak `/v2` — and
@@ -344,7 +364,7 @@ a file.
 | `qits.edge.domain` | `QITS_DOMAIN` | `localhost` | **The one domain this platform states about itself**, and the primitive every composed name is built from: the grammar every Host is read against, the certificate's SANs, the browser return authorities, and the canonical origin. It is the estate's fact rather than this service's, so it is read under the platform's own spelling — qits-deployments writes `QITS_DOMAIN` into every container beside `QITS_ENVIRONMENT`. `QITS_EDGE_ACME_DOMAIN` and `QITS_EDGE_SESSIONS_CANONICAL_ORIGIN` were the same fact under two more names and are **retired** |
 | `qits.edge.environments` | `QITS_EDGE_ENVIRONMENTS` | `prod` | The routable environment names, comma separated |
 | `qits.edge.default-environment` | `QITS_EDGE_DEFAULT_ENVIRONMENT` | `prod` | Where the apex and every unmatched host go. **Must be in the list** |
-| `qits.edge.apps.<app>.host-pattern` | `QITS_EDGE_APPS_<APP>_HOST_PATTERN` | — (`mirror`: `{env}-qits-platform-mirror`) | **Required per app.** `{env}` is the only placeholder, and every application names it. The one shipped entry is `mirror`, whose value is the platform's own pull-through cache rather than a decision |
+| `qits.edge.apps.<app>.host-pattern` | `QITS_EDGE_APPS_<APP>_HOST_PATTERN` | — (`mirror`: `{env}-qits-mirror`) | **Required per app.** `{env}` is the only placeholder, and every application names it. The one shipped entry is `mirror`, whose value is the platform's own pull-through cache rather than a decision |
 | `qits.edge.apps.<app>.port` | `QITS_EDGE_APPS_<APP>_PORT` | `8080` | The port that application listens on |
 | `qits.edge.apps.<app>.hosts.<env>` | `QITS_EDGE_APPS_<APP>_HOSTS_<ENV>` | — | Per-environment override, `host` or `host:port` |
 | `qits.edge.apps.<app>.audience-pattern` | `QITS_EDGE_APPS_<APP>_AUDIENCE_PATTERN` | `qits-platform` | The audience this app's own vhost accepts, next to the platform audience. An app such as githost or the editor names its own resource pattern (`{env}-qits-githost`); an app with none opens with roles alone |
