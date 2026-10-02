@@ -57,7 +57,15 @@ renamed_from: qits-platform-edge
 # become QITS_RESOURCE_EDGE_* and QITS_RESOURCE_EVENTSTREAM_* respectively, which the two shipped
 # datasource blocks read. Explicit database names keep this platform-wide process from colliding
 # with the per-environment edge test/projection stores or a future edge variant.
-resources: postgresql:edge:qits_platform_edge, postgresql:eventstream:qits_platform_edge_eventstream
+#
+# idp:client ASKS QITS-DEPLOYMENTS TO PROVISION THIS APPLICATION'S OWN QITS-IDP SERVICE CLIENT — id
+# `dev-qits-edge` (derived from env + application), roles `qits:system`, fixed in qits-idp code. The
+# deployer stores the secret the way it stores a database password, and injects
+# QITS_RESOURCE_IDP_URL, QITS_RESOURCE_IDP_CLIENT_ID and QITS_RESOURCE_IDP_CLIENT_SECRET, which the
+# `qits` oidc client reads before its old fallback keys.
+#
+# Ticket qits-162, epic qits-540 contract C3.
+resources: postgresql:edge:qits_platform_edge, postgresql:eventstream:qits_platform_edge_eventstream, idp:client
 
 # The default would be /platform-edge/q/health/ready, derived from the name with the qits- prefix
 # dropped. The edge owns the root path space and has no segment, so that path would be proxied to an
