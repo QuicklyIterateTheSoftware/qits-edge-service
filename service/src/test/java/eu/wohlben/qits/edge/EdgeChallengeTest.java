@@ -742,6 +742,35 @@ class EdgeChallengeTest {
   }
 
   @Test
+  void aLoopbackOriginIsExactlyLocalhostOrTheLoopbackAddressOverHttp() {
+    for (String admitted :
+        List.of(
+            "http://localhost:4200",
+            "http://localhost",
+            "http://127.0.0.1:4200",
+            "http://localhost:65535")) {
+      assertTrue(EdgeCors.isLoopback(admitted), admitted);
+    }
+    for (String refused :
+        List.of(
+            "https://localhost:4200",
+            "http://localhost.evil.example",
+            "http://localhost:4200.evil.example",
+            "http://localhost:4200/",
+            "http://localhost:",
+            "http://localhost:65536",
+            "http://localhost:0x10",
+            "http://127.0.0.1.evil.example",
+            "http://127.0.0.10:4200",
+            "http://evil.localhost:4200",
+            "http://user@localhost:4200",
+            "null")) {
+      assertFalse(EdgeCors.isLoopback(refused), refused);
+    }
+    assertFalse(EdgeCors.isLoopback(null));
+  }
+
+  @Test
   void theCanonicalOriginIsThePlatformProjectsDoorAndNotTheApex() {
     // The whole of the derivation, and the bug it fixes. The apex composes no application name —
     // every address carries a project label and the apex carries none — so a refused login used to

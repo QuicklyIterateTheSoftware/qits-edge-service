@@ -234,6 +234,128 @@ class EdgeSessionGateTest {
         refused.headerValues("Access-Control-Allow-Origin"));
   }
 
+  // --- an SPA under `ng serve`, calling with a bearer --------------------------------------------
+
+  /** Where `ng serve` puts the landing SPA. */
+  private static final String DEV_SERVER = "http://localhost:4200";
+
+  @Test
+  void aLoopbackPreflightIsAnsweredWithoutCredentialsAndAllowsTheBearer() {
+    // The owner's ruling (qits-112): the SPA on the developer's own machine calls the services
+    // directly with a bearer from idp. Its preflight asks for the authorization header.
+    int before = StubGateways.introspections();
+    EdgeClient.Answer answer =
+        client()
+            .send(
+                HttpMethod.OPTIONS,
+                "ci.dev.acme.example.com",
+                "/ci/api/runs",
+                null,
+                Map.of(
+                    "Origin", DEV_SERVER,
+                    "Access-Control-Request-Method", "GET",
+                    "Access-Control-Request-Headers", "authorization,traceparent",
+                    "Sec-Fetch-Mode", "cors"));
+    assertEquals(204, answer.status(), answer.body());
+    assertNull(answer.line("upstream"));
+    assertEquals(List.of(DEV_SERVER), answer.headerValues("Access-Control-Allow-Origin"));
+    assertEquals(List.of("GET"), answer.headerValues("Access-Control-Allow-Methods"));
+    assertEquals(
+        List.of("authorization,traceparent"), answer.headerValues("Access-Control-Allow-Headers"));
+    assertEquals(
+        List.of(),
+        answer.headerValues("Access-Control-Allow-Credentials"),
+        "a loopback page never reads an answer the session cookie bought");
+    assertEquals(before, StubGateways.introspections());
+  }
+
+  @Test
+  void aPersonsBearerFromALoopbackPageIsAdmittedLikeACliCall() {
+    // The same token `qits login` holds — the platform audience — sent by a browser: an Origin and
+    // the Sec-Fetch-* headers change nothing about the gate. The machine path admits it.
+    Map<String, String> headers = new java.util.HashMap<>(fromDevServer());
+    headers.put(
+        "Authorization",
+        "Bearer " + TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE)));
+    EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", "/ci/api/runs", headers);
+    assertEquals(200, answer.status(), answer.body());
+    assertEquals("mirror-dev", answer.line("upstream"));
+    assertEquals(List.of(DEV_SERVER), answer.headerValues("Access-Control-Allow-Origin"));
+    assertEquals(List.of(), answer.headerValues("Access-Control-Allow-Credentials"));
+    assertEquals(List.of(EdgeCors.EXPOSED), answer.headerValues("Access-Control-Expose-Headers"));
+  }
+
+  @Test
+  void aLoopbackFetchWithNoBearerIsA401TheScriptCanReadNotALoginRedirect() {
+    EdgeClient.Answer answer =
+        client().get("ci.dev.acme.example.com", "/ci/api/runs", fromDevServer());
+    assertEquals(401, answer.status());
+    assertNull(answer.headers().get("location"));
+    assertNull(answer.line("upstream"));
+    assertEquals(List.of(DEV_SERVER), answer.headerValues("Access-Control-Allow-Origin"));
+  }
+
+  @Test
+  void theTokenEndpointOnIdpsHostAdmitsTheLoopbackPage() {
+    // The PKCE code exchange is a cross-origin form POST to idp's own host. Its preflight is the
+    // edge's like any other host's, and the POST itself is anonymous there.
+    publishIdpHost();
+    EdgeClient.Answer preflight =
+        client()
+            .send(
+                HttpMethod.OPTIONS,
+                "idp.dev.acme.example.com",
+                "/idp/token",
+                null,
+                Map.of(
+                    "Origin", DEV_SERVER,
+                    "Access-Control-Request-Method", "POST",
+                    "Access-Control-Request-Headers", "content-type",
+                    "Sec-Fetch-Mode", "cors"));
+    assertEquals(204, preflight.status(), preflight.body());
+    assertEquals(List.of(DEV_SERVER), preflight.headerValues("Access-Control-Allow-Origin"));
+    assertEquals(List.of("content-type"), preflight.headerValues("Access-Control-Allow-Headers"));
+
+    Map<String, String> headers = new java.util.HashMap<>(fromDevServer());
+    headers.put("Content-Type", "application/x-www-form-urlencoded");
+    EdgeClient.Answer exchange =
+        client()
+            .send(
+                HttpMethod.POST,
+                "idp.dev.acme.example.com",
+                "/idp/token",
+                "grant_type=authorization_code",
+                headers);
+    assertEquals(IDP_UPSTREAM, exchange.line("upstream"));
+    assertEquals(List.of(DEV_SERVER), exchange.headerValues("Access-Control-Allow-Origin"));
+  }
+
+  @Test
+  void aForeignOriginIsStillRefusedTheBearerCall() {
+    Map<String, String> headers = new java.util.HashMap<>(token("dev"));
+    headers.put("Origin", "http://evil.example:4200");
+    headers.put("Sec-Fetch-Mode", "cors");
+    EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", "/ci/api/runs", headers);
+    assertEquals(List.of(), answer.headerValues("Access-Control-Allow-Origin"));
+    EdgeClient.Answer preflight =
+        client()
+            .send(
+                HttpMethod.OPTIONS,
+                "ci.dev.acme.example.com",
+                "/ci/api/runs",
+                null,
+                Map.of(
+                    "Origin", "http://evil.example:4200",
+                    "Access-Control-Request-Method", "GET",
+                    "Access-Control-Request-Headers", "authorization"));
+    assertEquals(List.of(), preflight.headerValues("Access-Control-Allow-Origin"));
+    assertEquals(401, preflight.status(), "a foreign preflight meets the gate");
+  }
+
+  private static Map<String, String> fromDevServer() {
+    return Map.of("Origin", DEV_SERVER, "Sec-Fetch-Mode", "cors", "Sec-Fetch-Site", "cross-site");
+  }
+
   @Test
   void theDoorGatesNothingBecauseItServesNothing() {
     // Not even the login page: the door has no path to refuse, so it 404s instead of redirecting —

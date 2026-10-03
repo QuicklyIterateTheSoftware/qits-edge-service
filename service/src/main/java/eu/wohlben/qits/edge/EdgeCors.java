@@ -26,6 +26,18 @@ import java.util.List;
  * foreign origin gets no {@code Access-Control-Allow-Origin} at all, so the browser refuses it as
  * it would with no edge in front.
  *
+ * <p><b>A loopback page is admitted too, without credentials.</b> The owner's ruling (epic
+ * qits-112): an SPA under {@code ng serve} on {@code http://localhost:<port>} or {@code
+ * http://127.0.0.1:<port>} calls the platform's services directly with {@code Authorization: Bearer
+ * <token>}, the token got from idp itself — so the idp host admits it like every other. The owner
+ * accepts the risk: anything on the loopback can drive the browser anyway. Such an origin is echoed
+ * WITHOUT {@code Access-Control-Allow-Credentials}, so the browser never lets a loopback page read
+ * an answer its request carried the session cookie on. A bearer call needs no credentials mode, and
+ * the cookie is the person's whole session on every name under the domain: handing it to any
+ * process that can open a port on the developer's machine would turn "the page drives the browser"
+ * into "every page on any local port acts as the person, without ever asking idp". The token keeps
+ * that step explicit.
+ *
  * <p><b>The edge owns every {@code Access-Control-*} header</b>, so whatever an upstream sends
  * under that prefix is removed before the answer leaves, on every response — proxied, the edge's
  * own 401s and challenges, an SSE stream (a plain proxied GET whose head is written before its
@@ -80,15 +92,17 @@ public class EdgeCors {
   boolean handle(RoutingContext rc) {
     HttpServerRequest request = rc.request();
     String origin = request.getHeader(HttpHeaders.ORIGIN);
-    if (!sessions.admitsOrigin(origin)) {
-      rc.addHeadersEndHandler(ignored -> apply(rc.response().headers(), null, null));
+    boolean credentials = sessions.admitsOrigin(origin);
+    if (!credentials && !isLoopback(origin)) {
+      rc.addHeadersEndHandler(ignored -> apply(rc.response().headers(), null, false, null));
       return false;
     }
     Preflight preflight =
         isPreflight(request)
             ? new Preflight(request.getHeader(REQUEST_METHOD), request.getHeader(REQUEST_HEADERS))
             : null;
-    rc.addHeadersEndHandler(ignored -> apply(rc.response().headers(), origin, preflight));
+    rc.addHeadersEndHandler(
+        ignored -> apply(rc.response().headers(), origin, credentials, preflight));
     if (preflight == null) {
       return false;
     }
@@ -96,6 +110,38 @@ public class EdgeCors {
     // every other answer — so a preflight and the real request it clears cannot disagree.
     rc.response().setStatusCode(204).end();
     return true;
+  }
+
+  /**
+   * Whether an {@code Origin} is a page served from this machine's loopback: exactly {@code
+   * http://localhost} or {@code http://127.0.0.1}, with or without a port, and nothing else — no
+   * {@code https}, no name under {@code localhost}, no path. Static so it can be asserted without a
+   * socket.
+   */
+  static boolean isLoopback(String origin) {
+    if (origin == null) {
+      return false;
+    }
+    String rest;
+    if (origin.startsWith("http://localhost")) {
+      rest = origin.substring("http://localhost".length());
+    } else if (origin.startsWith("http://127.0.0.1")) {
+      rest = origin.substring("http://127.0.0.1".length());
+    } else {
+      return false;
+    }
+    if (rest.isEmpty()) {
+      return true;
+    }
+    if (rest.charAt(0) != ':' || rest.length() < 2 || rest.length() > 6) {
+      return false;
+    }
+    for (int i = 1; i < rest.length(); i++) {
+      if (rest.charAt(i) < '0' || rest.charAt(i) > '9') {
+        return false;
+      }
+    }
+    return Integer.parseInt(rest.substring(1)) <= 65535;
   }
 
   /** What a preflight asked for, which its answer echoes. */
@@ -114,9 +160,11 @@ public class EdgeCors {
    * without a socket.
    *
    * @param origin the admitted origin to echo, or null for a foreign or absent one
+   * @param credentials whether the origin may read an answer to a request that carried the cookie:
+   *     true under the domain, false for a loopback page
    * @param preflight the preflight this process is answering, or null for every other response
    */
-  static void apply(MultiMap headers, String origin, Preflight preflight) {
+  static void apply(MultiMap headers, String origin, boolean credentials, Preflight preflight) {
     for (String name : List.copyOf(headers.names())) {
       if (name.regionMatches(true, 0, PREFIX, 0, PREFIX.length())) {
         headers.remove(name);
@@ -127,7 +175,9 @@ public class EdgeCors {
       return;
     }
     headers.set(ALLOW_ORIGIN, origin);
-    headers.set(ALLOW_CREDENTIALS, "true");
+    if (credentials) {
+      headers.set(ALLOW_CREDENTIALS, "true");
+    }
     if (preflight == null) {
       headers.set(EXPOSE_HEADERS, EXPOSED);
       return;
