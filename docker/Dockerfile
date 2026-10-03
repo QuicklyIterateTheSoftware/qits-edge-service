@@ -38,19 +38,17 @@ RUN ./mvnw --version
 # The whole tree, not a file list — see .dockerignore for why that is affordable.
 COPY . .
 
-# The edge now consumes qits-eventstream from the platform Maven repository. Mirror only that
-# repository id so Maven permits the deployment-local HTTP endpoint without weakening its global
-# external-HTTP blocker.
-ARG QITS_MAVEN_REPOSITORY_URL=http://registry.dev.localhost:8080/artifacts/maven/maven
-ENV QITS_MAVEN_REPOSITORY_URL=$QITS_MAVEN_REPOSITORY_URL
-
-# --- and where Maven Central is mirrored, when it is ----------------------------------------------
-# The pipeline passes the platform's pull-through (qits-platform-mirror's central proxy, the same
-# authority the FROM lines above pull through); EMPTY — the default — means direct Maven Central.
-# `.qits-maven-settings.xml` activates its central-proxy profile only on a non-empty value, so a
-# bootstrap or hand build that passes nothing resolves exactly as it always did.
-ARG QITS_MAVEN_CENTRAL_URL=
-ENV QITS_MAVEN_CENTRAL_URL=$QITS_MAVEN_CENTRAL_URL
+# The edge now consumes qits-eventstream from the platform Maven repository. Both platform hosts are
+# code plus one input, the public domain:
+#
+#   https://registry.qits.$QITS_DOMAIN/artifacts/maven/maven   hosted Maven (qits-artifacts)
+#   https://mirror.qits.$QITS_DOMAIN/mirror/maven/central      Maven Central cache (qits-mirror)
+#
+# The RUN below derives both and exports them for that RUN alone; `.qits-maven-settings.xml` reads
+# them as ${env.…}, mirroring the `qits-maven` repository id onto the first and Central onto the
+# second — an exact id match, which is what gets past Maven's external:http:* blocker without
+# weakening it. The CI recipe passes QITS_DOMAIN; the default is the live platform's.
+ARG QITS_DOMAIN=wohlben.eu
 
 # -Dnative flips quarkus.native.enabled (this project carries its own `native` profile). Cap
 # native-image RAM so the build is deterministic on small machines.
@@ -62,12 +60,14 @@ ENV QITS_MAVEN_CENTRAL_URL=$QITS_MAVEN_CENTRAL_URL
 # The two secrets are mounted in FILE form (`/run/secrets/<id>`, read into this command's own
 # environment) and never the `env=` mount form these lines used to carry: `env=` needs a dockerfile
 # frontend the BUILDER chooses, and since the builds moved to the platform's buildkitd the frontend
-# is the builder's to pick rather than this file's. Absent secrets leave both variables empty, which
-# `.qits-maven-settings.xml` reads exactly as it reads unset — every hand build's state.
+# is the builder's to pick rather than this file's. Absent secrets leave both variables empty, so a
+# hand build without them still starts and fails at the first 401 with Maven naming the host.
 RUN --mount=type=secret,id=qits-client-id \
     --mount=type=secret,id=qits-client-secret \
     QITS_MAVEN_AUTH_USR="$(cat /run/secrets/qits-client-id 2>/dev/null || true)" \
     QITS_MAVEN_AUTH_PSW="$(cat /run/secrets/qits-client-secret 2>/dev/null || true)" \
+    QITS_MAVEN_REPOSITORY_URL="https://registry.qits.$QITS_DOMAIN/artifacts/maven/maven" \
+    QITS_MAVEN_CENTRAL_URL="https://mirror.qits.$QITS_DOMAIN/mirror/maven/central" \
     ./mvnw -B -ntp -s .qits-maven-settings.xml package -pl service -am -Dnative -DskipTests \
       -Dqits.maven.repository.url="$QITS_MAVEN_REPOSITORY_URL" \
       -Dquarkus.native.native-image-xmx=4g \

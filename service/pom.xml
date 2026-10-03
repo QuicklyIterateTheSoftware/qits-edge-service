@@ -80,7 +80,7 @@
              GraalVM image is exactly where a lost reflection registration or a client built in a
              class initialiser hides. -->
         <skipITs>true</skipITs>
-        <qits.maven.repository.url>http://registry.dev.localhost:8080/artifacts/maven/maven</qits.maven.repository.url>
+        <qits.maven.repository.url>https://registry.qits.wohlben.eu/artifacts/maven/maven</qits.maven.repository.url>
         <zonky.embedded-postgres.version>2.2.2</zonky.embedded-postgres.version>
         <zonky.postgres-binaries.version>18.4.0</zonky.postgres-binaries.version>
     </properties>
