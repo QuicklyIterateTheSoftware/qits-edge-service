@@ -37,10 +37,10 @@
 # application.properties). They stay declared while that fallback exists.
 #
 # DELIBERATELY NOT HERE (these show as orphaned):
-#   * QITS_EDGE_ACME_DOMAIN — retired; the certificate is ordered for QITS_DOMAIN.
-#   * QITS_EDGE_SESSIONS_CANONICAL_ORIGIN — retired; the canonical origin is derived from QITS_DOMAIN.
-#   * QITS_EDGE_SESSIONS_BROWSER_HOSTS — nothing in the edge binds it; the browser authorities are
-#     composed from QITS_DOMAIN.
+#   * (for one release only, at the end of this file) QITS_EDGE_ACME_DOMAIN,
+#     QITS_EDGE_SESSIONS_CANONICAL_ORIGIN and QITS_EDGE_SESSIONS_BROWSER_HOSTS are DECLARED although
+#     nothing reads them, so the next release can retire them and the GC collects their entries. A
+#     key that was never declared is never collected.
 #   * QITS_EDGE_APPS_{REGISTRY,MIRROR,GITHOST,EDITOR}_HOST_PATTERN and
 #     QITS_EDGE_APPS_{GITHOST,EDITOR}_AUDIENCE_PATTERN — retired; see above. Code, not configuration.
 #   * QITS_RESOURCE_* — injected by the deployer from its resource registry; never entries.
@@ -130,3 +130,16 @@ keys:
   env.QITS_OBSERVABILITY_URL:
     type: string
     description: "Where this service's OTLP telemetry goes. Scheme, host and port only."
+
+  # RETIRED. Declared for one release only so the next one can drop them (see the header).
+  env.QITS_EDGE_ACME_DOMAIN:
+    type: string
+    description: "RETIRED, nothing reads it: the certificate is ordered for QITS_DOMAIN. Declared only so the next release retires it."
+
+  env.QITS_EDGE_SESSIONS_CANONICAL_ORIGIN:
+    type: string
+    description: "RETIRED, nothing reads it: the canonical origin is derived from QITS_DOMAIN. Declared only so the next release retires it."
+
+  env.QITS_EDGE_SESSIONS_BROWSER_HOSTS:
+    type: string
+    description: "RETIRED, nothing binds it: the browser authorities are composed from QITS_DOMAIN. Declared only so the next release retires it."
