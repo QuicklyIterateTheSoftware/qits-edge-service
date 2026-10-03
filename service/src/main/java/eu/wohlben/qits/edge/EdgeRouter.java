@@ -233,7 +233,8 @@ public class EdgeRouter {
     return HttpProxy.reverseProxy(client)
         .origin(origin(upstream))
         .addInterceptor(new EdgeHeaders())
-        .addInterceptor(new EdgeCacheControl());
+        .addInterceptor(new EdgeCacheControl())
+        .addInterceptor(new EdgeHopByHop());
   }
 
   /**

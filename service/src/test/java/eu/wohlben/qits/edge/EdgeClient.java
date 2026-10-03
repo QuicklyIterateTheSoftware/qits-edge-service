@@ -6,7 +6,9 @@ import io.vertx.core.Context;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpClient;
+import io.vertx.core.http.HttpClientOptions;
 import io.vertx.core.http.HttpMethod;
+import io.vertx.core.http.HttpVersion;
 import io.vertx.core.http.RequestOptions;
 import io.vertx.core.net.SocketAddress;
 import java.util.ArrayList;
@@ -84,7 +86,11 @@ final class EdgeClient implements AutoCloseable {
    *     name and its order — see {@link #headerValues}.
    */
   record Answer(
-      int status, Map<String, String> headers, List<Map.Entry<String, String>> raw, String body) {
+      int status,
+      Map<String, String> headers,
+      List<Map.Entry<String, String>> raw,
+      String body,
+      HttpVersion version) {
 
     /** Every value sent under this name, in wire order. */
     List<String> headerValues(String name) {
@@ -111,7 +117,7 @@ final class EdgeClient implements AutoCloseable {
   private static final String SERVICE = "qits-platform-edge";
 
   private final Vertx vertx = Vertx.vertx();
-  private final HttpClient client = vertx.createHttpClient();
+  private final HttpClient client;
 
   /**
    * ONE context, captured here and used for every request this client makes — see {@link
@@ -123,8 +129,20 @@ final class EdgeClient implements AutoCloseable {
   private final int port;
 
   EdgeClient(int port) {
+    this(port, HttpVersion.HTTP_1_1);
+  }
+
+  /**
+   * A client speaking {@code version}. {@link HttpVersion#HTTP_2} is cleartext with prior knowledge
+   * — no {@code Upgrade} dance — which is what the edge's h2 streams look like once TLS is off: the
+   * same frames and the same header rules (RFC 9113 §8.2.2) a browser's h2 is held to.
+   */
+  EdgeClient(int port, HttpVersion version) {
     this.port = port;
     this.edge = SocketAddress.inetSocketAddress(port, "127.0.0.1");
+    this.client =
+        vertx.createHttpClient(
+            new HttpClientOptions().setProtocolVersion(version).setHttp2ClearTextUpgrade(false));
   }
 
   Answer get(String host, String uri) {
@@ -185,7 +203,8 @@ final class EdgeClient implements AutoCloseable {
                                       response.statusCode(),
                                       seen,
                                       List.copyOf(raw),
-                                      received.toString());
+                                      received.toString(),
+                                      response.version());
                                 }))
                 .onSuccess(answer::complete)
                 .onFailure(answer::completeExceptionally));

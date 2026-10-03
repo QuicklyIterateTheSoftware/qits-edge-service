@@ -14,6 +14,7 @@ import io.quarkus.test.common.WithTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.RestAssured;
 import io.vertx.core.http.HttpMethod;
+import io.vertx.core.http.HttpVersion;
 import io.vertx.core.json.JsonObject;
 import jakarta.inject.Inject;
 import java.nio.charset.StandardCharsets;
@@ -83,11 +84,25 @@ class EdgeRoutingTest {
     return client;
   }
 
+  private static EdgeClient http2;
+
+  /** The same, speaking cleartext HTTP/2 with prior knowledge — see {@link EdgeClient}. */
+  private static EdgeClient http2() {
+    if (http2 == null) {
+      http2 = new EdgeClient(RestAssured.port, HttpVersion.HTTP_2);
+    }
+    return http2;
+  }
+
   @AfterAll
   static void close() {
     if (client != null) {
       client.close();
       client = null;
+    }
+    if (http2 != null) {
+      http2.close();
+      http2 = null;
     }
   }
 
@@ -1986,6 +2001,58 @@ class EdgeRoutingTest {
             + "ms, which is not before the upstream sent the second at "
             + StubGateways.STREAM_GAP_MILLIS
             + "ms — the response was buffered");
+  }
+
+  // --- hop-by-hop headers ------------------------------------------------------------------
+
+  @Test
+  void anUpstreamsHopByHopHeadersNeverReachTheClient() {
+    // The apex's Express upstream answered with Connection and Keep-Alive, which the edge copied
+    // through; on HTTP/1.1 that is merely wrong, and the ordinary headers must still arrive.
+    activateCi();
+    EdgeClient.Answer answer =
+        client().get("ci.dev.acme.example.com", "/ci/hop-by-hop", token("dev"));
+    assertEquals(302, answer.status(), answer.raw().toString());
+    assertEquals(List.of("/projects"), answer.headerValues("Location"));
+    assertEquals(List.of("Express"), answer.headerValues("X-Powered-By"));
+    assertEquals(List.of(), answer.headerValues("Keep-Alive"), answer.raw().toString());
+    assertEquals(List.of(), answer.headerValues("Proxy-Connection"), answer.raw().toString());
+    assertEquals(List.of(), answer.headerValues("X-Custom-Hop"), answer.raw().toString());
+    // Vert.x may frame its own answer with a Connection header of its own; what it must not say is
+    // anything the upstream said about ITS connection.
+    for (String connection : answer.headerValues("Connection")) {
+      assertFalse(
+          connection.toLowerCase(java.util.Locale.ROOT).contains("x-custom-hop"),
+          answer.raw().toString());
+    }
+  }
+
+  @Test
+  void anHttp2ClientGetsTheAnswerAnUpstreamWithHopByHopHeadersGave() {
+    // The defect itself: a connection-specific header on an h2 stream is malformed (RFC 9113
+    // §8.2.2) and Netty resets the stream, so the request never completed at all.
+    activateCi();
+    EdgeClient.Answer answer =
+        http2().get("ci.dev.acme.example.com", "/ci/hop-by-hop", token("dev"));
+    assertEquals(HttpVersion.HTTP_2, answer.version());
+    assertEquals(302, answer.status(), answer.raw().toString());
+    assertEquals(List.of("/projects"), answer.headerValues("Location"));
+    assertEquals(List.of("Express"), answer.headerValues("X-Powered-By"));
+    assertEquals(List.of(), answer.headerValues("Connection"), answer.raw().toString());
+    assertEquals(List.of(), answer.headerValues("Keep-Alive"), answer.raw().toString());
+    assertEquals(List.of(), answer.headerValues("X-Custom-Hop"), answer.raw().toString());
+  }
+
+  @Test
+  void aStreamedAnswerStillCompletesOverHttp2() {
+    // The chunked stub's Transfer-Encoding is dropped like every hop-by-hop header; h2 frames the
+    // body itself, so the whole of it must still arrive.
+    activateCi();
+    EdgeClient.Answer answer = http2().get("ci.dev.acme.example.com", "/stream", token("dev"));
+    assertEquals(HttpVersion.HTTP_2, answer.version());
+    assertEquals(200, answer.status());
+    assertEquals("chunk-1\nchunk-2\n", answer.body());
+    assertEquals(List.of(), answer.headerValues("Transfer-Encoding"));
   }
 
   // --- websockets ----------------------------------------------------------------------------
