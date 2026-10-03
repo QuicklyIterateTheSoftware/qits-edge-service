@@ -1,0 +1,154 @@
+# What qits-edge declares about its own configuration.
+#
+# The deployer reads this file from the git host at the RELEASED TAG, beside
+# `.config/qits/deployments.yml`, and POSTs it to qits-configuration before it schedules the
+# deployment. qits-configuration parses it with its own `DeclarationParser`; nothing in qits-edge
+# reads it.
+#
+# WHY IT EXISTS. qits-configuration flags a stored entry `orphaned` only when the application has a
+# declaration that does not list the key, and its GC (`RetiredEntryCollector`) removes an entry only
+# once some declaration STATED the key and no pinned version states it any more. With no file, none
+# of qits-edge's entries could ever be flagged or collected. With it, every stored qits-edge entry
+# not listed below shows as orphaned — and those are exactly the keys nothing reads any more.
+#
+# SO THE LIST MUST BE COMPLETE. Every key below is read by qits-edge today, checked against the code
+# and application.properties on 2026-10-03. A key left out would show as orphaned and invite a person
+# to delete a value the service needs.
+#
+# NO DEFAULTS, ON PURPOSE. A declared default sits UNDER the stored entries, and a key declared with
+# no default adds nothing to the resolved read. So this file changes nothing a container receives:
+# it is step one of the two-step rule (docs guide §7.5), and provably inert.
+#
+# NO serviceAddress. The URLs are `string` here. A serviceAddress is rendered by the platform and
+# ignores a stored value, so declaring one would replace a hand-set address in the same step.
+#
+# THE SIX `QITS_EDGE_APPS_*_PATTERN` KEYS ARE DECLARED ONLY SO THE NEXT RELEASE CAN RETIRE THEM.
+# They spell the upstream alias (and, for githost and the editor, the audience) of the configured
+# app vhosts — registry, mirror, githost, editor. That is not an installation fact: every service on
+# this platform is `<env>-qits-<application>` on qits-net, so the alias is the PLATFORM's, and the
+# owner's ruling (2026-10-03, qits-528) is that it is code. Today's code still reads them, so they
+# are declared here; the release after this one derives them in code and drops them from this file.
+# Two deploys later no pinned version states them, and the GC collects the entries. Declaring them
+# now is what makes them collectable at all: a key no declaration ever stated is `neverDeclared`,
+# which the GC leaves for a person on purpose.
+#
+# THE SESSIONS CLIENT FALLBACK. QITS_EDGE_SESSIONS_CLIENT_ID / _SECRET are read only when the
+# deployer's QITS_RESOURCE_IDP_CLIENT_ID / _SECRET are absent (`${QITS_RESOURCE_IDP_*:${...}}` in
+# application.properties). They stay declared while that fallback exists.
+#
+# DELIBERATELY NOT HERE (these show as orphaned):
+#   * QITS_EDGE_ACME_DOMAIN — retired; the certificate is ordered for QITS_DOMAIN.
+#   * QITS_EDGE_SESSIONS_CANONICAL_ORIGIN — retired; the canonical origin is derived from QITS_DOMAIN.
+#   * QITS_EDGE_SESSIONS_BROWSER_HOSTS — nothing in the edge binds it; the browser authorities are
+#     composed from QITS_DOMAIN.
+#   * QITS_RESOURCE_* — injected by the deployer from its resource registry; never entries.
+#   * aliases[n], mounts[n], publishes[n] — compose topology, not environment. The grammar here
+#     declares `env.` keys only (docs guide §2, §7.4); those entries stay the bootstrap's.
+#
+# SECRETS are declared by name only. Their values live in qits-configuration and never here.
+#
+# `OwnDeclarationTest` (service module) checks what a hand edit can break: the file is here, the
+# top level is `keys:` alone, and no key is declared twice. It is not a parser; the store is.
+
+keys:
+  # --- what this installation is ------------------------------------------------------------------
+
+  env.QITS_DOMAIN:
+    type: string
+    description: "The one domain this platform states about itself; every served name, the certificate and the browser return authorities are composed from it. The deployer also writes it into every container."
+
+  env.QITS_EDGE_ENVIRONMENTS:
+    type: string
+    description: "The environments this edge can reach, comma-separated. A Host name resolves to one of them or to the default; nothing else is routable."
+
+  env.QITS_EDGE_DEFAULT_ENVIRONMENT:
+    type: string
+    description: "Where the apex and every unmatched Host name go. Must be one of QITS_EDGE_ENVIRONMENTS."
+
+  # --- the configured app vhosts: declared only to be retired (see the header) ---------------------
+
+  env.QITS_EDGE_APPS_REGISTRY_HOST_PATTERN:
+    type: string
+    description: "TO BE RETIRED: the registry vhost's upstream alias, {env} standing for the environment. A platform constant; the next release derives it in code."
+
+  env.QITS_EDGE_APPS_MIRROR_HOST_PATTERN:
+    type: string
+    description: "TO BE RETIRED: the mirror vhost's upstream alias, {env} standing for the environment. A platform constant; the next release derives it in code."
+
+  env.QITS_EDGE_APPS_GITHOST_HOST_PATTERN:
+    type: string
+    description: "TO BE RETIRED: the githost vhost's upstream alias, {env} standing for the environment. A platform constant; the next release derives it in code."
+
+  env.QITS_EDGE_APPS_GITHOST_AUDIENCE_PATTERN:
+    type: string
+    description: "TO BE RETIRED: the audience the githost vhost accepts, {env} standing for the environment. A platform constant; the next release derives it in code."
+
+  env.QITS_EDGE_APPS_EDITOR_HOST_PATTERN:
+    type: string
+    description: "TO BE RETIRED: the editor vhost's upstream alias, {env} standing for the environment. A platform constant; the next release derives it in code."
+
+  env.QITS_EDGE_APPS_EDITOR_AUDIENCE_PATTERN:
+    type: string
+    description: "TO BE RETIRED: the audience the editor vhost accepts, {env} standing for the environment. A platform constant; the next release derives it in code."
+
+  env.QITS_EDGE_AUTH_ANONYMOUS_READ_APPS:
+    type: string
+    description: "App labels whose GET and HEAD are open to anyone, comma-separated. Every other method on them still needs a token. Unset opens nothing."
+
+  # --- the browser gate --------------------------------------------------------------------------
+
+  env.QITS_EDGE_SESSIONS_ENABLED:
+    type: boolean
+    description: "Whether a service vhost demands a qits-session from a browser. On needs the client id and secret below (or the deployer's idp:client)."
+
+  env.QITS_EDGE_SESSIONS_CLIENT_ID:
+    type: string
+    description: "The edge's idp client id for session introspection. Read only when QITS_RESOURCE_IDP_CLIENT_ID is unset."
+
+  env.QITS_EDGE_SESSIONS_CLIENT_SECRET:
+    type: string
+    description: "A secret: the edge's idp client secret. Read only when QITS_RESOURCE_IDP_CLIENT_SECRET is unset."
+
+  # --- the public certificate --------------------------------------------------------------------
+
+  env.QITS_EDGE_ACME_ENABLED:
+    type: boolean
+    description: "Whether the edge orders and renews its own certificate over DNS-01."
+
+  env.QITS_EDGE_ACME_MODE:
+    type: string
+    description: "off, staging or production: which Let's Encrypt directory is ordered against."
+
+  env.QITS_EDGE_ACME_EMAIL:
+    type: string
+    description: "The ACME account contact."
+
+  env.QITS_EDGE_ACME_HETZNER_TOKEN:
+    type: string
+    description: "A secret: the Hetzner DNS token the DNS-01 challenge is answered with."
+
+  env.QITS_EDGE_ACME_ADDITIONAL_NAMES:
+    type: string
+    description: "Names the certificate must carry beyond the derived wildcard tiers, comma-separated, whole or relative to the domain. Unset orders exactly the derived set."
+
+  env.QUARKUS_TLS_KEY_STORE_PEM_ACME_CERT:
+    type: string
+    description: "The certificate PEM Quarkus serves 8443 with: the one the edge's ACME manager writes."
+
+  env.QUARKUS_TLS_KEY_STORE_PEM_ACME_KEY:
+    type: string
+    description: "The private key PEM beside the certificate."
+
+  env.QUARKUS_TLS_RELOAD_PERIOD:
+    type: string
+    description: "How often Quarkus re-reads the PEMs, with its unit (for example 1m), so a renewal is served without a restart."
+
+  # --- where this service's peers answer ---------------------------------------------------------
+
+  env.QITS_EVENTS_URL:
+    type: string
+    description: "The event bus the deployment and project projections are read from. Scheme, host and port only."
+
+  env.QITS_OBSERVABILITY_URL:
+    type: string
+    description: "Where this service's OTLP telemetry goes. Scheme, host and port only."
