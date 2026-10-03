@@ -36,7 +36,7 @@ public interface SessionsConfig {
   /**
    * The path that serves login, and the one whose owner decides where the page is: it lives on the
    * host of whichever deployment owns this route — {@code https://idp.wohlben.eu/idp/login} once
-   * qits-platform-idp publishes {@code idp}.
+   * qits-idp publishes {@code idp}.
    *
    * <p>The origin is still never inferred from a request Host: a passkey is bound to one WebAuthn
    * origin, and a host header is caller input. It comes from the deployment projection or from the

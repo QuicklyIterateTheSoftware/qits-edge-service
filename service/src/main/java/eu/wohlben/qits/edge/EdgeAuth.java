@@ -201,9 +201,8 @@ public class EdgeAuth {
   void warnWhenTokensCannotBeIntrospected(@Observes StartupEvent ignored) {
     if (!introspection.hasCredential()) {
       LOG.warnf(
-          "the edge holds no idp client of its own (QITS_RESOURCE_IDP_CLIENT_ID and _SECRET, or"
-              + " QITS_EDGE_SESSIONS_CLIENT_ID and _SECRET), so every %s… token presented here is refused"
-              + " without asking %s",
+          "the edge holds no idp client of its own (QITS_RESOURCE_IDP_CLIENT_ID and _SECRET), so"
+              + " every %s… token presented here is refused without asking %s",
           TokenValue.PREFIX, idp.tokenIntrospectionEndpoint());
     }
   }

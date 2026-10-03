@@ -491,75 +491,86 @@ class EdgeChallengeTest {
 
   @Test
   void theEdgesOwnIdpCredentialHasNoDefault() throws Exception {
-    // A credential is a deployment fact. The deployer injects QITS_RESOURCE_IDP_CLIENT_ID/_SECRET
-    // (the bootstrap, QITS_EDGE_SESSIONS_CLIENT_ID/_SECRET), and a value here would be a client id
-    // every installation shared.
+    // A credential is a deployment fact. The deployer injects QITS_RESOURCE_IDP_CLIENT_ID/_SECRET,
+    // and a value here would be a client id every installation shared.
     assertNull(IdpConfig.class.getMethod("clientId").getAnnotation(WithDefault.class));
     assertNull(IdpConfig.class.getMethod("clientSecret").getAnnotation(WithDefault.class));
   }
 
-  // --- the session client's resource-var fallback (service-client-identity-plan.md C4/D6/D7) -----
+  // --- the session client is the idp:client resource alone (epic qits-540 dossier, 'Plan (as of
+  // 2026-09-13)', C4/D6/D7) ----------------------------------------------------------------------
 
   @Test
-  void theSessionClientReadsTheResourceVarsFirstThenTheOlderNames() throws Exception {
+  void theSessionClientReadsOnlyTheResourceVars() throws Exception {
     // Read off the SHIPPED application.properties expression, not a copy of it, so a rewritten
     // expression fails this test rather than only production.
-    assertEquals(Optional.empty(), sessionClientId(Map.of()), "neither set is still absent");
+    assertEquals(Optional.empty(), sessionClientId(Map.of()), "unset is absent");
     assertEquals(
         Optional.of("dev-qits-edge"),
-        sessionClientId(Map.of("QITS_EDGE_SESSIONS_CLIENT_ID", "dev-qits-edge")),
-        "the older name still works, unchanged, until a resource is declared");
+        sessionClientId(Map.of("QITS_RESOURCE_IDP_CLIENT_ID", "dev-qits-edge")));
     assertEquals(
-        Optional.of("qits-platform-edge"),
-        sessionClientId(
-            Map.of(
-                "QITS_RESOURCE_IDP_CLIENT_ID", "qits-platform-edge",
-                "QITS_EDGE_SESSIONS_CLIENT_ID", "dev-qits-edge")),
-        "the resource var wins, so a cutover reads it without deleting the extras entry first");
+        Optional.empty(),
+        sessionClientId(Map.of("QITS_EDGE_SESSIONS_CLIENT_ID", "dev-qits-edge")),
+        "the bootstrap-era name is no fallback any more (qits-540)");
   }
 
   @Test
-  void theSessionSecretFollowsTheSameFallback() throws Exception {
+  void theSessionSecretReadsOnlyTheResourceVar() throws Exception {
     assertEquals(Optional.empty(), sessionClientSecret(Map.of()));
     assertEquals(
-        Optional.of("old-secret"),
-        sessionClientSecret(Map.of("QITS_EDGE_SESSIONS_CLIENT_SECRET", "old-secret")));
-    assertEquals(
         Optional.of("new-secret"),
-        sessionClientSecret(
-            Map.of(
-                "QITS_RESOURCE_IDP_CLIENT_SECRET", "new-secret",
-                "QITS_EDGE_SESSIONS_CLIENT_SECRET", "old-secret")));
+        sessionClientSecret(Map.of("QITS_RESOURCE_IDP_CLIENT_SECRET", "new-secret")));
+    assertEquals(
+        Optional.empty(),
+        sessionClientSecret(Map.of("QITS_EDGE_SESSIONS_CLIENT_SECRET", "old-secret")),
+        "the bootstrap-era name is no fallback any more (qits-540)");
   }
 
   /**
-   * THE DEPLOYER'S idp CLIENT WINS FOR REAL, with both pairs injected — the live state of
-   * 2026-10-03 (qits-163). The older names were once the environment spelling of the keys the
-   * expression defined, so the environment source answered those keys with the OLD secret before
-   * the expression was ever read; idp then refused it and the edge's introspection broke. Resolved
-   * through a real environment source, the way a container resolves it.
+   * THE DEPLOYER'S idp CLIENT WINS FOR REAL, with every variable dev-qits-edge carried on
+   * 2026-10-03 injected (qits-163, qits-540). The older names are the environment spelling of
+   * {@code qits.edge.sessions.client-*}, which is why the client is not keyed there: the
+   * environment source would answer those keys with the OLD secret before any expression was read,
+   * idp would refuse it, and the edge's introspection would break. Resolved through a real
+   * environment source, the way a container resolves it — and the gate's own variable, {@code
+   * QITS_EDGE_SESSIONS_ENABLED}, still binds through that same source.
    */
   @Test
-  void anOldEnvironmentPairNeverShadowsTheDeployersIdpClient() throws Exception {
+  void theLiveEnvironmentResolvesTheDeployersIdpClientAndKeepsTheGate() throws Exception {
     Map<String, String> live =
         Map.of(
-            "QITS_RESOURCE_IDP_CLIENT_ID", "qits-platform-edge",
+            "QITS_RESOURCE_IDP_CLIENT_ID", "dev-qits-edge",
             "QITS_RESOURCE_IDP_CLIENT_SECRET", "database-secret",
-            "QITS_EDGE_SESSIONS_CLIENT_ID", "dev-qits-edge",
-            "QITS_EDGE_SESSIONS_CLIENT_SECRET", "environment-secret");
+            "QITS_RESOURCE_IDP_URL", "http://dev-qits-idp:8080/idp",
+            "QITS_EDGE_SESSIONS_CLIENT_ID", "stale-edge",
+            "QITS_EDGE_SESSIONS_CLIENT_SECRET", "environment-secret",
+            "QITS_EDGE_SESSIONS_ENABLED", "true");
     assertEquals(Optional.of("database-secret"), sessionClientSecret(live));
-    assertEquals(Optional.of("qits-platform-edge"), sessionClientId(live));
+    assertEquals(Optional.of("dev-qits-edge"), sessionClientId(live));
+    assertEquals("http://dev-qits-idp:8080/idp", dialUrl(live));
+    assertTrue(
+        applicationProperties(live)
+            .withMapping(SessionsConfig.class)
+            .build()
+            .getConfigMapping(SessionsConfig.class)
+            .enabled(),
+        "QITS_EDGE_SESSIONS_ENABLED is the env spelling of qits.edge.sessions.enabled and still"
+            + " turns the gate on");
   }
 
-  /** The same shadowing, on the address: a stated QITS_IDP_DIAL_URL never outranks the resource. */
+  /** The address reads only the resource: a stated QITS_IDP_DIAL_URL moves nothing (qits-540). */
   @Test
-  void anOldEnvironmentDialUrlNeverShadowsTheDeployersIdpAddress() throws Exception {
+  void anOldEnvironmentDialUrlIsNotRead() throws Exception {
     assertEquals(
         "http://dev-qits-idp:8080/idp",
         dialUrl(
             Map.of(
                 "QITS_RESOURCE_IDP_URL", "http://dev-qits-idp:8080/idp",
                 "QITS_IDP_DIAL_URL", "http://stated:8080/idp")));
+    assertEquals(
+        "http://dev-qits-idp:8080/idp",
+        dialUrl(Map.of("QITS_IDP_DIAL_URL", "http://stated:8080/idp")),
+        "alone it is not a fallback either");
   }
 
   /**
@@ -610,21 +621,21 @@ class EdgeChallengeTest {
    * place the default's own text is exercised.
    */
   @Test
-  void theShippedDialAddressDerivesTheTierAndIsNotAnIssuer() throws Exception {
-    assertEquals("http://dev-qits-platform-idp:8080/idp", dialUrl(Map.of()));
+  void theShippedDialAddressDerivesTheEnvironmentAndIsNotAnIssuer() throws Exception {
+    assertEquals("http://dev-qits-idp:8080/idp", dialUrl(Map.of()));
     assertFalse(
         Idp.issuers("localhost").contains(dialUrl(Map.of())),
         "the issuer is the iss claim and the dial-url is an address; shipping them equal is the"
             + " re-merge the split exists to prevent");
 
     assertEquals(
-        "http://prod-qits-platform-idp:8080/idp",
+        "http://prod-qits-idp:8080/idp",
         dialUrl(Map.of("QITS_ENVIRONMENT", "prod")),
-        "the tier is derived from what qits-deployments injects, not written down");
+        "the environment is derived from what qits-deployments injects, not written down");
     assertEquals(
         "http://stated:8080/idp",
-        dialUrl(Map.of("QITS_IDP_DIAL_URL", "http://stated:8080/idp")),
-        "and a deployment can still state it outright");
+        dialUrl(Map.of("QITS_RESOURCE_IDP_URL", "http://stated:8080/idp")),
+        "and the deployer's idp:client resource states it outright");
   }
 
   private static String dialUrl(Map<String, String> env) throws Exception {

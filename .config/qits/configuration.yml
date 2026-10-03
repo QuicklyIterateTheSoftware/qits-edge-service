@@ -32,12 +32,13 @@
 # them, qits-configuration's GC (`RetiredEntryCollector`) collects the entries. Until then they sit
 # inert in the container's environment — `EdgeChallengeTest` pins that they bind nothing.
 #
-# THE SESSIONS CLIENT FALLBACK. QITS_EDGE_SESSIONS_CLIENT_ID / _SECRET are read only when the
-# deployer's QITS_RESOURCE_IDP_CLIENT_ID / _SECRET are absent (`${QITS_RESOURCE_IDP_*:${...}}` in
-# application.properties). They stay declared while that fallback exists. That "only when" holds
-# since qits-163: the keys they fall back into are qits.edge.idp.client-*, whose environment
-# spelling nothing injects. Before, the keys were qits.edge.sessions.client-*, these very names
-# outranked the expression, and the old secret won over the deployer's.
+# THE SESSIONS CLIENT FALLBACK IS GONE (qits-540). QITS_EDGE_SESSIONS_CLIENT_ID / _SECRET were read
+# only when the deployer's QITS_RESOURCE_IDP_CLIENT_ID / _SECRET were absent; nothing reads them
+# now, so they are no longer declared here, which is what lets them show as orphaned and lets the GC
+# collect them once no pinned version declares them. Until then they sit inert in the container:
+# the keys the client binds to are qits.edge.idp.client-*, whose environment spelling nothing
+# injects, so the stale pair cannot shadow the deployer's (qits-163; `EdgeChallengeTest` resolves
+# the live environment through a real env source to pin it).
 #
 # DELIBERATELY NOT HERE (these show as orphaned):
 #   * QITS_EDGE_ACME_DOMAIN, QITS_EDGE_SESSIONS_CANONICAL_ORIGIN, QITS_EDGE_SESSIONS_BROWSER_HOSTS —
@@ -45,6 +46,7 @@
 #     one release so their absence here retires them and the GC collects the entries.
 #   * QITS_EDGE_APPS_{REGISTRY,MIRROR,GITHOST,EDITOR}_HOST_PATTERN and
 #     QITS_EDGE_APPS_{GITHOST,EDITOR}_AUDIENCE_PATTERN — retired; see above. Code, not configuration.
+#   * QITS_EDGE_SESSIONS_CLIENT_ID / _SECRET — retired (qits-540); see above.
 #   * QITS_RESOURCE_* — injected by the deployer from its resource registry; never entries.
 #   * aliases[n], mounts[n], publishes[n] — compose topology, not environment. The grammar here
 #     declares `env.` keys only (docs guide §2, §7.4); those entries stay the bootstrap's.
@@ -79,15 +81,7 @@ keys:
 
   env.QITS_EDGE_SESSIONS_ENABLED:
     type: boolean
-    description: "Whether a service vhost demands a qits-session from a browser. On needs the client id and secret below (or the deployer's idp:client)."
-
-  env.QITS_EDGE_SESSIONS_CLIENT_ID:
-    type: string
-    description: "The edge's idp client id for session introspection. Read only when QITS_RESOURCE_IDP_CLIENT_ID is unset."
-
-  env.QITS_EDGE_SESSIONS_CLIENT_SECRET:
-    type: string
-    description: "A secret: the edge's idp client secret. Read only when QITS_RESOURCE_IDP_CLIENT_SECRET is unset."
+    description: "Whether a service vhost demands a qits-session from a browser. On needs the deployer's idp:client (QITS_RESOURCE_IDP_CLIENT_ID and _SECRET)."
 
   # --- the public certificate --------------------------------------------------------------------
 

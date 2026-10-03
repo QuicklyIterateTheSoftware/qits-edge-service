@@ -250,7 +250,7 @@ machine token are both answered `404` like any other request.
 - **No login page and no session of its own.** The edge *reads* a session — it introspects the
   `qits-session` cookie at idp and turns it into identity headers (see *Browser sessions* below) —
   but it issues none, stores none, and serves no page. Registration, login and logout are
-  qits-platform-idp's, reached through the anonymous `/idp/` prefix on idp's own host.
+  qits-idp's, reached through the anonymous `/idp/` prefix on idp's own host.
 - **No header stripping or injection beyond `X-Forwarded-*` and `X-Qits-*`.** The reserved prefix is
   stripped, and the three identity headers are asserted, only while the session gate is on and only
   where a session was actually used: a service vhost a browser reached with its cookie. A service
@@ -352,7 +352,7 @@ a file.
 | `qits.edge.apps.<app>.hosts.<env>` | `QITS_EDGE_APPS_<APP>_HOSTS_<ENV>` | — | A local process's or a suite's override of one **platform** label in one environment, `host` or `host:port`. It cannot add a label; a live deployment sets none |
 | `qits.edge.projection.catchup.required` | `QITS_EDGE_PROJECTION_CATCHUP_REQUIRED` | `true` | Requires a complete deployment-history rebuild before the edge is ready; turn off only in an intentionally offline test/dev setup |
 | `qits.edge.projection.catchup.retry` | `QITS_EDGE_PROJECTION_CATCHUP_RETRY` | `PT1S` | Delay before retrying an incomplete, failed, or unavailable deployment-history read |
-| `qits.edge.idp.dial-url` | `QITS_RESOURCE_IDP_URL`, then `QITS_IDP_DIAL_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-platform-idp:8080/idp` | The address the edge dials. `/jwks`, `/token` and the two introspection paths are derived from it, never configured. It is never the issuer: the accepted `iss` is `https://idp.qits.<qits.edge.domain>`, derived in code and not configurable, plus the legacy `http://qits-platform-idp:8080/idp` until idp stamps the derived one (qits-730) |
+| `qits.edge.idp.dial-url` | `QITS_RESOURCE_IDP_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-idp:8080/idp` | The address the edge dials. `/jwks`, `/token` and the two introspection paths are derived from it, never configured. It is never the issuer: the accepted `iss` is `https://idp.qits.<qits.edge.domain>` alone, derived in code and not configurable (qits-730). `QITS_IDP_DIAL_URL` is not read any more (qits-540) |
 | `qits.edge.auth.enforce-on-apps` | `QITS_EDGE_AUTH_ENFORCE_ON_APPS` | `true` | Service vhosts require a valid idp token |
 | `qits.edge.auth.anonymous-read-apps` | `QITS_EDGE_AUTH_ANONYMOUS_READ_APPS` | — | App labels whose `GET` and `HEAD` are open; every other method on them still needs a token |
 | `qits.edge.auth.clock-skew-seconds` | `QITS_EDGE_AUTH_CLOCK_SKEW_SECONDS` | `30` | How far this clock and idp's may disagree about `exp` |
@@ -370,8 +370,8 @@ a file.
 | `qits.edge.sessions.cache-ttl-ms` | `QITS_EDGE_SESSIONS_CACHE_TTL_MS` | `30000` | How long an introspected session is believed — and how long a logout lingers |
 | `qits.edge.sessions.cache-size` | `QITS_EDGE_SESSIONS_CACHE_SIZE` | `1024` | The most sessions held at once, least-recently-used |
 | `qits.edge.sessions.stale-grace-ms` | `QITS_EDGE_SESSIONS_STALE_GRACE_MS` | `60000` | How long a cached session outlives an **unreachable** idp |
-| `qits.edge.idp.client-id` | `QITS_RESOURCE_IDP_CLIENT_ID`, then `QITS_EDGE_SESSIONS_CLIENT_ID` | — | The edge's own idp client, for introspection. Today the bootstrap seeds `{env}-qits-edge` under the older name; `QITS_RESOURCE_IDP_CLIENT_ID` is the `idp:client` resource a deployment may declare instead (service-client-identity-plan.md, C4/D6/D7), and it becomes `qits-platform-edge` at the edge's own cutover (D2) |
-| `qits.edge.idp.client-secret` | `QITS_RESOURCE_IDP_CLIENT_SECRET`, then `QITS_EDGE_SESSIONS_CLIENT_SECRET` | — | Its secret, same fallback. Neither pair set is still "no credential", which fails startup exactly as before if the gate is on. These three keys were `qits.idp.dial-url` and `qits.edge.sessions.client-*`, whose environment spellings ARE the older variable names — and an environment variable outranks `application.properties`, so with both injected the old one won and the fallback order was fiction (qits-163). Nothing injects `QITS_EDGE_IDP_*` |
+| `qits.edge.idp.client-id` | `QITS_RESOURCE_IDP_CLIENT_ID` | — | The edge's own idp client, for introspection: the `idp:client` resource the deployer injects (epic qits-540 dossier, 'Plan (as of 2026-09-13)', C4/D6/D7). Its id is `{env}-qits-edge` and stays so — the plan's D2 cutover to `qits-platform-edge` is obsolete with the platform tier gone. `QITS_EDGE_SESSIONS_CLIENT_ID` is not read any more (qits-540) |
+| `qits.edge.idp.client-secret` | `QITS_RESOURCE_IDP_CLIENT_SECRET` | — | Its secret; `QITS_EDGE_SESSIONS_CLIENT_SECRET` is not read any more. Unset is "no credential", which fails startup if the gate is on. These three keys were `qits.idp.dial-url` and `qits.edge.sessions.client-*`, whose environment spellings ARE the older variable names — and an environment variable outranks `application.properties`, so with both injected the old one won (qits-163). They stay under `qits.edge.idp` so a container still carrying the older names cannot set them. Nothing injects `QITS_EDGE_IDP_*` |
 | `qits.observability.url` | `QITS_OBSERVABILITY_URL` | `http://qits-observability:8080` | Where telemetry goes; the OTLP endpoint is derived from it |
 
 Six things fail **at startup** rather than per request, deliberately: an environment or application
@@ -436,7 +436,7 @@ demands the platform audience alone.
 vhost and on every path: Bearer, Git's `Basic oauth2:<token>`, and Basic client credentials. A
 person's command-line tool gets this token. The audience has no `{env}`, on purpose: it only says
 the token is for this platform, and the token's roles are what each service checks
-(service-client-identity-plan.md, C4). `qits.edge.auth.audience-pattern` and
+(epic qits-540 dossier, 'Plan (as of 2026-09-13)', C4). `qits.edge.auth.audience-pattern` and
 `qits.edge.auth.platform-audience` were keys until qits-528, each defaulting to that literal; no
 deployment set either.
 
@@ -942,7 +942,8 @@ else — so `QITS_EDGE_ACME_HETZNER_TOKEN_FILE` pointing at
 `/run/secrets/qits-dns-hetzner-token` names a file that exists only in the
 bootstrap's seed stack. The live arrangement is the **by-value arm**:
 `env.QITS_EDGE_ACME_HETZNER_TOKEN` in the edge's config-host extras, beside
-`QITS_EDGE_SESSIONS_CLIENT_SECRET`, which already established that a secret may
+where `QITS_EDGE_SESSIONS_CLIENT_SECRET` rode before the edge read its idp client
+from the deployer's `idp:client` resource, which established that a secret may
 ride there. The file arm wins when both are set, so the file entry must stay
 deleted until a deployer `secrets[i]` facility exists — that facility is the
 structural fix, and the day it lands this section inverts.

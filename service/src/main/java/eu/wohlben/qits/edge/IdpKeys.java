@@ -22,8 +22,8 @@ import java.util.Map;
 import org.jboss.logging.Logger;
 
 /**
- * qits-platform-idp's public signing keys, cached here and refreshed when a token names one this
- * process has not seen.
+ * qits-idp's public signing keys, cached here and refreshed when a token names one this process has
+ * not seen.
  *
  * <p><b>Offline validation is the design</b>, and the campaign's P-idp-2 is why: idp is
  * overlay-only, so a {@code docker login} client on the host cannot reach it — and the edge should

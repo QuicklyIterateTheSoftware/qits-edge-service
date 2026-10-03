@@ -16,7 +16,7 @@ import java.util.concurrent.TimeoutException;
 import org.jboss.logging.Logger;
 
 /**
- * The one place this process asks qits-platform-idp for a token, and the patience it asks with.
+ * The one place this process asks qits-idp for a token, and the patience it asks with.
  *
  * <p><b>Why patience is a feature and not a nicety.</b> idp is a container like any other and is
  * redeployed like any other: for a few seconds its name resolves to an address that refuses, drops

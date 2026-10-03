@@ -188,9 +188,8 @@ public class EdgeSessions {
     if (config.enabled() && !introspection.hasCredential()) {
       throw new IllegalStateException(
           "qits.edge.sessions.enabled is on, but the edge has no idp client to introspect with."
-              + " Declare the idp:client resource (QITS_RESOURCE_IDP_CLIENT_ID and _SECRET), set"
-              + " QITS_EDGE_SESSIONS_CLIENT_ID and _SECRET (the {env}-qits-edge client the"
-              + " bootstrap seeds), or turn the gate off.");
+              + " Declare the idp:client resource (QITS_RESOURCE_IDP_CLIENT_ID and _SECRET), or"
+              + " turn the gate off.");
     }
     if (config.enabled()) {
       LOG.infof(
@@ -222,7 +221,7 @@ public class EdgeSessions {
 
   /**
    * Where the login page is served, below whichever host owns that route. A contract with
-   * qits-platform-idp's SPA rather than a deployment's choice.
+   * qits-idp's SPA rather than a deployment's choice.
    */
   public String loginPath() {
     return config.loginPath();

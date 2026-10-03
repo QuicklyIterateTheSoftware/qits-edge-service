@@ -52,23 +52,21 @@ class IdpTest {
 
   @Test
   void everyEndpointIsBuiltFromTheDialAddress() {
-    Idp idp = idp("http://dev-qits-platform-idp:8080/idp");
+    Idp idp = idp("http://dev-qits-idp:8080/idp");
 
-    assertEquals("http://dev-qits-platform-idp:8080/idp/jwks", idp.jwksUri());
-    assertEquals("http://dev-qits-platform-idp:8080/idp/token", idp.tokenEndpoint());
+    assertEquals("http://dev-qits-idp:8080/idp/jwks", idp.jwksUri());
+    assertEquals("http://dev-qits-idp:8080/idp/token", idp.tokenEndpoint());
     assertEquals(
-        "http://dev-qits-platform-idp:8080/idp/api/sessions/introspect",
-        idp.introspectionEndpoint());
+        "http://dev-qits-idp:8080/idp/api/sessions/introspect", idp.introspectionEndpoint());
     assertEquals(
-        "http://dev-qits-platform-idp:8080/idp/api/tokens/introspect",
-        idp.tokenIntrospectionEndpoint());
+        "http://dev-qits-idp:8080/idp/api/tokens/introspect", idp.tokenIntrospectionEndpoint());
   }
 
   @Test
   void theDialAddressIsTrimmedOfTrailingSlashesBeforeAnythingIsComposedOntoIt() {
     assertEquals(
-        "http://dev-qits-platform-idp:8080/idp/jwks",
-        idp(" http://dev-qits-platform-idp:8080/idp// ").jwksUri(),
+        "http://dev-qits-idp:8080/idp/jwks",
+        idp(" http://dev-qits-idp:8080/idp// ").jwksUri(),
         "a doubled slash is exactly the 404 a key fetch fails on");
   }
 }
