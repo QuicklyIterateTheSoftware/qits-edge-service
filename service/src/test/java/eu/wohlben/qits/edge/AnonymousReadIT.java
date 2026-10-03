@@ -28,7 +28,7 @@ import org.junit.jupiter.api.BeforeAll;
  * MACHINE credential, whose identity is inside its own token, and a read a deployment opened
  * through {@code qits.edge.auth.anonymous-read-apps}, where nobody has vouched for anybody. On
  * those paths there is no trusted value to write, so the temptation is to do nothing; and doing
- * nothing means a client-supplied {@code X-Qits-User} travels to a service that believes it
+ * nothing means a client-supplied {@code X-Qits-User} reaches a service that believes it
  * unconditionally.
  *
  * <p><b>That was the shape of the defect, and it is why the strip moved.</b> It used to live on the
@@ -81,7 +81,7 @@ public class AnonymousReadIT {
 
       Which puts the reserved header namespace in an awkward spot. On an open read nobody has
       vouched for anybody, so the edge has no identity to write — and the tempting thing to do with
-      no identity is nothing at all. Then a stranger's `X-Qits-User: admin` travels, unaltered, to
+      no identity is nothing at all. Then a stranger's `X-Qits-User: admin` reaches, unaltered,
       a service that believes it without checking. That was the shape of it, and it is why the
       strip is now unconditional: it happens at the single point every request leaves this process
       by, whether or not there is anything to put in its place.
@@ -131,7 +131,7 @@ public class AnonymousReadIT {
             "the read is served with no credential at all — and the service is told nothing about"
                 + " who asked, because nobody vouched for anybody. The strip cannot be conditional"
                 + " on there being an identity to replace the forgery with: it is exactly where"
-                + " there is none that a forgery would travel")
+                + " there is none that a forgery would reach")
         .as("an-anonymous-read-arrives-with-the-namespace-empty");
 
     // --- (2) a page that is logged in, fetching from a sibling name with a token of its own. The
@@ -159,7 +159,7 @@ public class AnonymousReadIT {
     assertEquals(
         "Bearer a-token-of-its-own",
         atTheMirror.header("Authorization"),
-        "the caller's own credential travels untouched: its identity is in its token, one hop"
+        "the caller's own credential goes through untouched: its identity is in its token, one hop"
             + " further in, which is precisely why this hop asserts none");
     story
         .note(

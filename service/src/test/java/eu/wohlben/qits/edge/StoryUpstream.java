@@ -132,7 +132,7 @@ public final class StoryUpstream {
             .requestHandler(this::handle)
             // Set separately, because Vert.x routes an upgrade here and never to the request
             // handler. It is also the only way a stand-in speaks the plane an interactive terminal
-            // travels on.
+            // rides on.
             .webSocketHandler(this::handshake);
     int port;
     try {

@@ -676,7 +676,7 @@ refused.
 **A dead cookie still reaches `/idp/`** on idp's own host. The prefix answers every caller with no
 usable credential, not only the ones carrying none — otherwise a browser holding a revoked session
 would be redirected to a login page it is refused at, forever. This is the one place the order
-differs from the plan's, and the reason is that loop. The refused cookie does not travel: the
+differs from the plan's, and the reason is that loop. The refused cookie does not ride along: the
 request is not using it.
 
 ### Introspection, and the cache in front of it

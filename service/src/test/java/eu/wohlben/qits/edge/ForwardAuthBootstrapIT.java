@@ -284,7 +284,8 @@ public class ForwardAuthBootstrapIT {
         arrived.header(StoryTarget.INVENTED_HEADER),
         "the rule is the `X-Qits-` prefix, so a reserved header nobody has thought of yet is"
             + " stripped too — a list of three names would pass this test and fail in a year");
-    // The cookie itself travels on, and that is deliberate on a name a browser holds a session for:
+    // The cookie itself rides along, and that is deliberate on a name a browser holds a session
+    // for:
     // the service behind it is an ordinary qits service and the browser will make its next request
     // with the cookie anyway. It is the MACHINE vhosts that must remove it — AnonymousReadIT.
     assertTrue(
@@ -315,7 +316,7 @@ public class ForwardAuthBootstrapIT {
     assertEquals(
         "application/json",
         asked.headers().get("Content-Type"),
-        "the cookie travels in a JSON body, never in a URL a proxy log would keep");
+        "the cookie rides along in a JSON body, never in a URL a proxy log would keep");
 
     // --- (4) and it asked once. The second read behind the same cookie is served from the belief
     // the first one bought, which is what keeps idp off the path of every image and every poll a
@@ -428,7 +429,7 @@ public class ForwardAuthBootstrapIT {
     assertEquals(
         0,
         upstream.requestsTo(StoryTarget.DOOR_SERVICE_PATH),
-        "a service's route does not travel to the environment's own name, session or no session");
+        "a service's route does not carry over to the environment's own name, session or no session");
     // Two callers, one name, the same 404 — and the diagram draws them as two arrows precisely
     // because the actors differ, which is the whole statement: a session cannot open the door and
     // its absence cannot close it.

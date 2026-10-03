@@ -2014,7 +2014,7 @@ class EdgeRoutingTest {
   @Test
   void aWebSocketUpgradeStillCarriesTheClientsOwnHeaders() {
     // The edge strips nothing but the browser cookie on an upgrade either: an unrelated cookie is a
-    // service's own and travels with the socket.
+    // service's own and goes along with the socket.
     activateCi();
     Map<String, String> headers = new java.util.HashMap<>(token("dev"));
     headers.put("Cookie", "q_session=abc");
@@ -2038,7 +2038,7 @@ class EdgeRoutingTest {
             .findFirst()
             .orElseThrow();
     assertTrue(authorization.startsWith("Bearer "), authorization);
-    assertFalse(authorization.contains(TokenValue.PREFIX), "the token itself never travels");
+    assertFalse(authorization.contains(TokenValue.PREFIX), "the token itself never goes out");
     SignedJwt forwarded = SignedJwt.parse(authorization.substring("Bearer ".length()));
     assertEquals(StubGateways.TOKEN_SUBJECT, forwarded.claims().getString("sub"));
     assertTrue(forwarded.signatureMatches(TestTokens.IDP.getPublic()));
@@ -2527,7 +2527,7 @@ class EdgeRoutingTest {
   @Test
   void aProjectedAnonymousReadArrivesWithTheReservedNamespaceEmpty() {
     // Nobody vouched for anybody on this path, so there is no trusted identity to write — and
-    // doing nothing is exactly what would let a stranger's `X-Qits-User: admin` travel to a
+    // doing nothing is exactly what would let a stranger's `X-Qits-User: admin` reach a
     // service that believes it. The strip cannot be conditional on there being a real identity to
     // replace the forgery with: it is where there is none that a forgery survives. The rule is the
     // whole `X-Qits-` prefix, not the three names the edge happens to write, so a name nobody has
@@ -2740,7 +2740,7 @@ class EdgeRoutingTest {
   void anAcceptedClientIdAndSecretReachTheUpstreamAsABearerAndNotAsThemselves() {
     // The whole of the "only CI may publish" change at this hop. A service cannot check a secret,
     // so a relayed pair tells it nothing about WHICH commissioned client is calling — and hands it
-    // a secret it has no business holding. What travels is the token the edge validated, exactly
+    // a secret it has no business holding. What goes out is the token the edge validated, exactly
     // as it does for git's `oauth2:` pair, so the service builds the roles from the JWT itself.
     EdgeClient.Answer answer =
         client()
@@ -3106,7 +3106,7 @@ class EdgeRoutingTest {
     String authorization = answer.upstreamHeader("Authorization");
     assertNotNull(authorization, answer.body());
     assertTrue(authorization.startsWith("Bearer "), authorization);
-    assertFalse(authorization.contains(TokenValue.PREFIX), "the token itself never travels");
+    assertFalse(authorization.contains(TokenValue.PREFIX), "the token itself never goes out");
     SignedJwt forwarded = SignedJwt.parse(authorization.substring("Bearer ".length()));
     assertEquals(StubGateways.TOKEN_SUBJECT, forwarded.claims().getString("sub"));
     assertTrue(

@@ -28,7 +28,7 @@ import org.junit.jupiter.api.TestMethodOrder;
  * <p>There is no REST layer here and no JAX-RS: a framework that read a body would buffer and
  * re-encode every one of these. {@code vertx-http-proxy} streams instead, and an upgrade is spliced
  * by {@code EdgeWebSocketUpgrade}, the edge's OWN path. Every interactive terminal on the platform,
- * every SSE channel, every {@code git clone} and every OCI layer push travels one of these two.
+ * every SSE channel, every {@code git clone} and every OCI layer push goes over one of these two.
  *
  * <p><b>The socket half is the sharpest forward-auth claim this repository can make, and it belongs
  * here rather than with the ordinary strip story.</b> An upgrade never reaches the interceptor

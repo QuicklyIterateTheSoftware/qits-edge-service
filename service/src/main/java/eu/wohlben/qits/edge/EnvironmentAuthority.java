@@ -48,7 +48,7 @@ import java.util.Map;
  *
  * <p><b>The port is part of the answer</b>, which is what makes {@code
  * http://ci.dev.acme.localhost:8080} work: a developer's whole platform is one port, so an origin
- * without it names nothing. It travels with whichever name was read — the request's own, or the
+ * without it names nothing. It is carried with whichever name was read — the request's own, or the
  * canonical origin's when that is what answered.
  *
  * <p><b>The scheme comes from {@code X-Forwarded-Proto} when there is one</b>, because a TLS
