@@ -317,7 +317,7 @@ public final class HostEnvironments {
    * @param environments the routable environment names; blanks are dropped, case is not significant
    * @param defaultEnvironment where a name that states no environment goes; must be one of the
    *     above
-   * @param apps the configured application names — {@code qits.edge.apps}' key set
+   * @param apps the platform's app labels — {@link PlatformApps#labels()}
    * @param domain the stated domain every served name ends with: {@code wohlben.eu}, {@code
    *     localhost}. It cannot be derived from a name, so it is configuration — see the class
    *     javadoc.

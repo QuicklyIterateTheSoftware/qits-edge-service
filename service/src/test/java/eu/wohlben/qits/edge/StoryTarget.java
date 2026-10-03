@@ -33,8 +33,8 @@ public final class StoryTarget {
   // --- the services behind the door --------------------------------------------------------------
 
   /**
-   * The service the environment door itself points a visitor at, and so the one whose name a person
-   * types first. It stands in for "an ordinary qits service that reads the identity headers".
+   * The service a person reaches first. It stands in for "an ordinary qits service that reads the
+   * identity headers".
    */
   public static final String PROJECTS = "qits-projects";
 
@@ -58,20 +58,29 @@ public final class StoryTarget {
    */
   public static final String IDP = "qits-platform-idp";
 
-  // --- the app labels, which are the first label of a vhost and the key of an `apps` entry
+  // --- the app labels, which are the first label of a vhost: published hosts, and one platform
+  // label
   // --------
 
-  public static final String PROJECTS_APP = "projects";
+  /**
+   * NOT {@code projects}, on purpose. The door's fallback is the host a deployment publishes as
+   * {@code projects} (see {@code EdgeRoutes.projectsHost}), and this host IS published (see {@code
+   * StoryProfile}), so that label would turn the door the stories pin at 404 into a redirect.
+   */
+  public static final String PROJECTS_APP = "tracker";
 
   public static final String DOCS_APP = "docs";
 
   public static final String MIRROR_APP = "mirror";
 
   /**
-   * An application whose address is a port nothing listens on. It is CONFIGURED and it is ROUTED —
+   * An application whose address is a port nothing listens on. It is PUBLISHED and it is ROUTED —
    * which is the whole difference from a name nobody claims — and there is simply nothing there.
    */
   public static final String OFFLINE_APP = "offline";
+
+  /** The application behind {@link #OFFLINE_APP}, as its deployment snapshot names it. */
+  public static final String OFFLINE = "qits-offline";
 
   // --- the names ---------------------------------------------------------------------------------
 

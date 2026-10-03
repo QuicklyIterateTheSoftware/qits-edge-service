@@ -20,26 +20,27 @@ import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeSet;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 /**
  * The edge itself: one catch-all Vert.x route that reads the Host name, picks an environment, and
- * streams each admitted exchange to a deployment-published endpoint or configured application.
+ * streams each admitted exchange to a deployment-published endpoint or a platform application.
  *
  * <p><b>What this does not do</b> is still most of what makes it worth having. It holds no route
- * table beyond the deployment projection and application list, rewrites no path, reads no body, and
- * serves nothing of its own but {@code /q}, {@code /main-navigation} and an admitted origin's CORS
- * preflight — see {@link EdgeCors}, which owns CORS on every service host.
+ * table beyond the deployment projection and the platform's app labels, rewrites no path, reads no
+ * body, and serves nothing of its own but {@code /q}, {@code /main-navigation} and an admitted
+ * origin's CORS preflight — see {@link EdgeCors}, which owns CORS on every service host.
  *
- * <p><b>A name reaches a service two ways now.</b> {@code qits.edge.apps} is the configured one and
- * is a deployment fact — the machine vhosts, and the auth attributes that go with them. The
- * projection is the other: a deployment publishes the public name its service answers to, and
- * {@code <app>.<env>.<domain>} then serves that service's SPA at {@code /} and every wire route it
- * owns. They are the same kind of vhost, so a request to either is gated per request rather than
- * per plane: a machine credential, then a browser session, then the reads the deployment opened.
- * Either way the hostname alone picks the application: a path on a service's name is resolved among
- * that service's own routes only, and a call to another application is a cross-origin call to that
+ * <p><b>A name reaches a service two ways now.</b> {@link PlatformApps} is the first, and it is
+ * code — the machine vhosts, and the auth attributes that go with them. The projection is the
+ * other: a deployment publishes the public name its service answers to, and {@code
+ * <app>.<env>.<domain>} then serves that service's SPA at {@code /} and every wire route it owns.
+ * They are the same kind of vhost, so a request to either is gated per request rather than per
+ * plane: a machine credential, then a browser session, then the reads the deployment opened. Either
+ * way the hostname alone picks the application: a path on a service's name is resolved among that
+ * service's own routes only, and a call to another application is a cross-origin call to that
  * application's own name, whose CORS the edge answers — see {@link #upstreamOf} and {@link
  * EdgeCors}.
  *
@@ -117,7 +118,7 @@ public class EdgeRouter {
 
   private HostEnvironments hostEnvironments;
 
-  /** One reusable proxy per configured application vhost. */
+  /** One reusable proxy per platform application vhost, per environment. */
   private final Map<String, HttpProxy> appProxies = new java.util.LinkedHashMap<>();
 
   /**
@@ -204,22 +205,23 @@ public class EdgeRouter {
   private EdgeWebSocketUpgrade webSocketUpgrade;
 
   void init(@Observes Router router) {
+    requirePlatformLabels(config.apps());
     hostEnvironments =
         HostEnvironments.of(
             config.environments(),
             config.defaultEnvironment(),
-            config.apps().keySet(),
+            PlatformApps.labels(),
             domain(config.domain()));
     client = vertx.createHttpClient(proxyClientOptions(5_000));
     webSocketUpgrade = new EdgeWebSocketUpgrade(client);
 
     for (String environment : hostEnvironments.environments()) {
-      // Every application, in every environment. The app entry is one pattern and the environment
-      // list is the other axis, so the whole grid exists at boot and no address is built per
-      // request — the same SSRF guard as the gateways: a Host name selects an index, never a
+      // Every platform application, in every environment. The label set is one axis and the
+      // environment list is the other, so the whole grid exists at boot and no address is built
+      // per request — the same SSRF guard as the gateways: a Host name selects an index, never a
       // character of an address.
       for (String app : hostEnvironments.apps()) {
-        registerApp(app + "." + environment, appUpstream(config.apps().get(app), environment));
+        registerApp(app + "." + environment, appUpstream(app, environment, config.apps()));
       }
     }
     router.route().order(ROUTE_ORDER).handler(this::handle);
@@ -256,17 +258,37 @@ public class EdgeRouter {
   }
 
   /**
-   * One configured application's upstream in one environment. Package-private and static because
-   * {@code DeploymentActiveSubscriber} asks the same question of the same entry: a published host
-   * that is also a configured vhost is the same service exactly when these two agree.
+   * One platform application's upstream in one environment: {@code <env>-<application>:8080},
+   * derived in {@link PlatformApps}, unless a local or test override names a fixed address.
+   * Package-private and static because {@code DeploymentActiveSubscriber} asks the same question of
+   * the same label: a published host that is also a platform vhost is the same service exactly when
+   * these two agree.
    */
-  static Upstream appUpstream(EdgeConfig.App spec, String environment) {
-    String override = spec.hosts().get(environment);
-    String address =
-        override != null && !override.isBlank()
-            ? override
-            : spec.hostPattern().replace("{env}", environment);
-    return Upstream.parse(address, spec.port());
+  static Upstream appUpstream(
+      String app, String environment, Map<String, EdgeConfig.App> overrides) {
+    EdgeConfig.App override = overrides.get(app);
+    String address = override == null ? null : override.hosts().get(environment);
+    return address != null && !address.isBlank()
+        ? Upstream.parse(address, PlatformApps.PORT)
+        : PlatformApps.upstream(app, environment);
+  }
+
+  /**
+   * An override may only re-address a platform label. It cannot ADD a vhost: which names the edge
+   * serves on its own is code, and a key naming anything else is a typo or a second route table,
+   * both worth failing the startup on.
+   */
+  static void requirePlatformLabels(Map<String, EdgeConfig.App> overrides) {
+    for (String label : overrides.keySet()) {
+      if (!PlatformApps.contains(label)) {
+        throw new IllegalArgumentException(
+            "qits.edge.apps."
+                + label
+                + " overrides an app vhost that does not exist. The platform's app vhosts are "
+                + new TreeSet<>(PlatformApps.labels())
+                + ", in code; any other name is served only by the deployment that publishes it.");
+      }
+    }
   }
 
   private void handle(RoutingContext rc) {
@@ -345,8 +367,8 @@ public class EdgeRouter {
     if (named.toApp() && EdgeAuth.isTokenRequest(request)) {
       // The docker Bearer flow's own endpoint, advertised in the challenge below. It carries the
       // credential that BUYS a token, so it is the one path on an app vhost that cannot require
-      // one. Configured vhosts only: it is the challenge's realm that names it, and only a
-      // configured entry carries the auth attributes that challenge is built from.
+      // one. Platform vhosts only: it is the challenge's realm that names it, and only a platform
+      // label carries the auth attributes that challenge is built from.
       auth.token(request);
       return;
     }
@@ -871,15 +893,15 @@ public class EdgeRouter {
       return;
     }
     // Only a service target reaches this method, and a service with no published host is a
-    // CONFIGURED vhost: the whole name is one service, exactly as it was before the projection
+    // PLATFORM vhost: the whole name is one service, exactly as it was before the projection
     // carried any.
     appProxies.get(target.route().app() + "." + target.environment()).handle(request);
   }
 
   /**
    * The upstream this request is for, one answer for both transports: the published host's own
-   * route that matches, the published host's otherwise, and the configured app grid's for a vhost
-   * the projection has not claimed.
+   * route that matches, the published host's otherwise, and the platform app grid's for a vhost the
+   * projection has not claimed.
    *
    * <p><b>The hostname alone picks the application</b> (epic qits-528). On a service's own name
    * only that service's routes are candidates, longest prefix first — {@code mirror.dev} resolves
@@ -897,7 +919,7 @@ public class EdgeRouter {
           routes.resolve(target.environment(), host.application(), request.path());
       return endpoint == null ? host.upstream() : endpoint.upstream();
     }
-    return appUpstream(config.apps().get(target.route().app()), target.environment());
+    return appUpstream(target.route().app(), target.environment(), config.apps());
   }
 
   private HttpProxy endpointProxy(Upstream upstream) {
