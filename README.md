@@ -197,20 +197,18 @@ and the auth attributes that go with them. The deployment projection is the othe
 publishes the name it answers to, and that name then serves its SPA at `/` and every wire route it
 owns. The two are the same kind of vhost, so everything below treats them alike.
 
-On such a name, **another application's PRIMARY route is still routed to that application — for
-now**: `/projects/api`, `/workspaces/container`, `/ci/api` work from every host, which is what kept
-a platform of a dozen SPAs same-origin with no CORS anywhere. The primary route is the segment an
-application is *known* by, so it means the same thing on everybody's name.
+**The hostname alone picks the application.** On a service's name only that service's routes are
+routed, longest prefix first among them — `mirror.dev` resolves between the mirror's own `/mirror`
+and `/v2`, `githost.dev/git/…` reaches the git host. Another application's route, primary or
+secondary, means nothing there: it falls to the host's own service exactly like a path nobody
+declared, so `ci.dev/projects/api/…` reaches ci, `mirror.dev/artifacts/…` reaches the mirror, and
+`ci.dev/git/…` reaches ci and 404s there. A
+bare `/` is the same rule: it is the catch-all of whichever application declared it, so on a
+service's own name it is that service. A cross-application call from an SPA is therefore a
+cross-origin call to the other application's own name, with the session cookie, and the edge
+answers its CORS.
 
-**That travel is going away** (epic qits-528): a hostname alone will pick the application. The
-first step only observes, behind a TEMPORARY switch that is deleted together with the travel:
-
-| `qits.edge.cross-host-routes` (`QITS_EDGE_CROSS_HOST_ROUTES`) | Behaviour |
-|---|---|
-| `log` (default) | Routes exactly as before, and writes one INFO line per request that travels to another application: `cross-host route: host=<host> method=<method> path=<path> application=<chosen app> origin=<Origin or -> referer=<Referer or ->`. Grep the telemetry logs for `cross-host route:` to find the callers still relying on it. A path the host's own application answers is never logged. |
-| `deny` | The host's own service answers, exactly as for a path nobody declared. |
-
-**CORS replaces it, and the edge owns CORS** on every service host (`EdgeCors`). A request whose
+**The edge owns CORS** on every service host (`EdgeCors`). A request whose
 `Origin` is under the stated domain — `https://<anything, any depth>.<QITS_DOMAIN>` or the apex
 `https://<QITS_DOMAIN>`, and locally `http://<…>.localhost:<edge port>` — gets that origin echoed in
 `Access-Control-Allow-Origin` with `Access-Control-Allow-Credentials: true` and a short
@@ -221,18 +219,6 @@ no `Access-Control-Allow-Origin`. A preflight (`OPTIONS` with `Origin` and
 before the gate and without touching any session, echoing the requested method and headers with
 `Access-Control-Max-Age: 600`. Every `Access-Control-*` header an upstream sends is removed, and
 every service-host response carries `Vary: Origin`.
-
-**Its other routes do not travel.** `/v2`, `/git`, `/bootstrap-git` are wire protocols that several
-services legitimately answer — qits-artifacts and the pull-through mirror both speak `/v2` — and
-only one of them can own the path in a projection whose paths are unique per environment. Routing
-it everywhere would send `mirror.dev/v2/` at the registry and break every pull through the mirror.
-So on a service's own name a secondary route falls through to that service, exactly like a path
-nobody declared: `mirror.dev/v2/…` reaches the mirror, `registry.dev/v2/` reaches artifacts because
-that is its own host, `githost.dev/git/…` reaches the git host, and `ci.dev/git/…` reaches ci and
-404s there — a clone URL names the environment origin, not a service's.
-
-A bare `/` never travels either, whoever declared it: that is the catch-all of one application, and
-on a service's own name the catch-all is that service.
 
 Nothing in a request ever contributes a character to an address: a `Host` selects an *index into a
 fixed list* or a *row of the projection*, which is the whole SSRF guard.

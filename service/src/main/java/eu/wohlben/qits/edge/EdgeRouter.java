@@ -38,6 +38,10 @@ import org.jboss.logging.Logger;
  * {@code <app>.<env>.<domain>} then serves that service's SPA at {@code /} and every wire route it
  * owns. They are the same kind of vhost, so a request to either is gated per request rather than
  * per plane: a machine credential, then a browser session, then the reads the deployment opened.
+ * Either way the hostname alone picks the application: a path on a service's name is resolved among
+ * that service's own routes only, and a call to another application is a cross-origin call to that
+ * application's own name, whose CORS the edge answers — see {@link #upstreamOf} and {@link
+ * EdgeCors}.
  *
  * <p><b>A door serves nothing, and there are three of them.</b> The apex, a project's own name
  * {@code <project>.<domain>}, and an environment's name inside a project {@code
@@ -94,13 +98,6 @@ public class EdgeRouter {
 
   /** CORS on every service host, installed before the gate so a preflight never meets it. */
   @Inject EdgeCors cors;
-
-  /**
-   * TEMPORARY — {@link EdgeConfig#crossHostRoutes()}, read once at boot. Deleted together with
-   * {@link #travels} when the cross-host travel goes. Mutable only so one boot of {@code
-   * EdgeRoutingTest} can prove both values.
-   */
-  private volatile EdgeConfig.CrossHostRoutes crossHostRoutes;
 
   /**
    * The live project projection, which is a routing input as well as a certificate one: every
@@ -213,7 +210,6 @@ public class EdgeRouter {
             config.defaultEnvironment(),
             config.apps().keySet(),
             domain(config.domain()));
-    crossHostRoutes = config.crossHostRoutes();
     client = vertx.createHttpClient(proxyClientOptions(5_000));
     webSocketUpgrade = new EdgeWebSocketUpgrade(client);
 
@@ -251,11 +247,6 @@ public class EdgeRouter {
         client
             .request(originRequestOptions(upstream))
             .onFailure(failure -> LOG.warnf("no upstream connection to %s: %s", upstream, failure));
-  }
-
-  /** Test seam for the temporary switch; see {@link #crossHostRoutes}. */
-  void crossHostRoutes(EdgeConfig.CrossHostRoutes mode) {
-    crossHostRoutes = mode;
   }
 
   /** Where an unmatched Host name goes. */
@@ -885,76 +876,27 @@ public class EdgeRouter {
   }
 
   /**
-   * The upstream this request is for, one answer for both transports: the owning endpoint's when a
-   * route travels here, the published host's otherwise, and the configured app grid's for a vhost
+   * The upstream this request is for, one answer for both transports: the published host's own
+   * route that matches, the published host's otherwise, and the configured app grid's for a vhost
    * the projection has not claimed.
    *
-   * <p><b>The travel to ANOTHER application is going away</b> (epic qits-528), and {@link
-   * EdgeConfig#crossHostRoutes()} is the temporary switch in front of it: {@code log} travels as
-   * before and names every such request in one INFO line, {@code cross-host route: ...}, so the
-   * callers still relying on it can be found; {@code deny} answers from the host's own service, as
-   * for a path nobody declared. A path the host's own application answers is never logged.
+   * <p><b>The hostname alone picks the application</b> (epic qits-528). On a service's own name
+   * only that service's routes are candidates, longest prefix first — {@code mirror.dev} resolves
+   * among the mirror's {@code /mirror} and {@code /v2}, never anybody else's. Another application's
+   * route, primary or not, means nothing here: it falls to the host's own service exactly like a
+   * path nobody declared, so {@code ci.dev/projects/api/...} reaches ci, not qits-projects. An SPA
+   * reads another application on that application's own name, cross-origin, and {@link EdgeCors}
+   * answers the CORS for it. A bare {@code /} is the same rule: it is the catch-all of whichever
+   * application declared it, so on this name it is only ever this service's.
    */
   private Upstream upstreamOf(HttpServerRequest request, Target target) {
     EdgeRoutes.ServiceHost host = target.host();
     if (host != null) {
-      EdgeEndpoint endpoint = routes.resolve(target.environment(), request.path());
-      if (endpoint != null && travels(target, endpoint, host)) {
-        if (endpoint.application().equals(host.application())) {
-          return endpoint.upstream();
-        }
-        if (crossHostRoutes == EdgeConfig.CrossHostRoutes.DENY) {
-          return host.upstream();
-        }
-        LOG.infof(
-            "cross-host route: host=%s method=%s path=%s application=%s origin=%s referer=%s",
-            authority(request),
-            request.method(),
-            request.path(),
-            endpoint.application(),
-            orDash(request.getHeader(HttpHeaders.ORIGIN)),
-            orDash(request.getHeader(HttpHeaders.REFERER)));
-        return endpoint.upstream();
-      }
-      return host.upstream();
+      EdgeEndpoint endpoint =
+          routes.resolve(target.environment(), host.application(), request.path());
+      return endpoint == null ? host.upstream() : endpoint.upstream();
     }
     return appUpstream(config.apps().get(target.route().app()), target.environment());
-  }
-
-  private static String orDash(String value) {
-    return value == null ? "-" : value;
-  }
-
-  /**
-   * Whether another application's route means the same thing on this name. <b>Going away</b>: a
-   * hostname alone will pick the application (epic qits-528), and this is deleted together with
-   * {@link EdgeConfig#crossHostRoutes()}; an SPA reads another application on that application's
-   * own name, cross-origin, which {@link EdgeCors} admits.
-   *
-   * <p><b>Its PRIMARY route does</b> — {@code /projects}, {@code /workspaces}, {@code /ci} are what
-   * each of those applications is known by, so an SPA on any host could read {@code /projects/api}
-   * same-origin; that is what the travel was for, and why CORS was never needed until it goes.
-   *
-   * <p><b>Its other routes do not.</b> {@code /v2}, {@code /git}, {@code /bootstrap-git} are wire
-   * protocols whose names several services legitimately answer: qits-artifacts and the pull-through
-   * mirror both speak {@code /v2}, and only one of them can own that path in a projection whose
-   * paths are unique per environment. Routing it everywhere would send {@code mirror.dev/v2/} at
-   * the registry and break the mirror. So a secondary route falls through to the service whose name
-   * this is, exactly like a path nobody declared — and it is reached on its OWNER's name, which is
-   * the only place it now exists.
-   *
-   * <p>A bare {@code /} never travels either, whether or not it is somebody's primary route: it is
-   * the catch-all of whichever application declared it, and on this name the catch-all is the
-   * service the name belongs to.
-   */
-  private boolean travels(Target target, EdgeEndpoint endpoint, EdgeRoutes.ServiceHost host) {
-    if (endpoint.application().equals(host.application())) {
-      return true;
-    }
-    if (endpoint.path().equals("/")) {
-      return false;
-    }
-    return endpoint.path().equals(routes.primaryPath(target.environment(), endpoint.application()));
   }
 
   private HttpProxy endpointProxy(Upstream upstream) {
