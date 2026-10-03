@@ -10,10 +10,10 @@ import org.junit.jupiter.api.Test;
  * THE ISSUER AND THE ADDRESS ARE TWO FACTS, and these are the assertions that keep them apart.
  *
  * <p>The issuer is DERIVED from the stated domain and never configured (qits-730); the address is
- * {@code qits.idp.dial-url} and nothing else. Every test here holds the two on different hosts and
- * asserts which of them each answer is built from, so a change that re-merged them — an issuer read
- * from configuration, or a dial address falling back to an issuer — fails here rather than on the
- * estate, where every machine token would be refused at once (qits-162).
+ * {@code qits.edge.idp.dial-url} and nothing else. Every test here holds the two on different hosts
+ * and asserts which of them each answer is built from, so a change that re-merged them — an issuer
+ * read from configuration, or a dial address falling back to an issuer — fails here rather than on
+ * the estate, where every machine token would be refused at once (qits-162).
  */
 class IdpTest {
 

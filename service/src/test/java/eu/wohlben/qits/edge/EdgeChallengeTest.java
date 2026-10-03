@@ -491,11 +491,11 @@ class EdgeChallengeTest {
 
   @Test
   void theEdgesOwnIdpCredentialHasNoDefault() throws Exception {
-    // A credential is a deployment fact. The bootstrap injects QITS_EDGE_SESSIONS_CLIENT_ID and
-    // QITS_EDGE_SESSIONS_CLIENT_SECRET, and a value here would be a client id every installation
-    // shared.
-    assertNull(SessionsConfig.class.getMethod("clientId").getAnnotation(WithDefault.class));
-    assertNull(SessionsConfig.class.getMethod("clientSecret").getAnnotation(WithDefault.class));
+    // A credential is a deployment fact. The deployer injects QITS_RESOURCE_IDP_CLIENT_ID/_SECRET
+    // (the bootstrap, QITS_EDGE_SESSIONS_CLIENT_ID/_SECRET), and a value here would be a client id
+    // every installation shared.
+    assertNull(IdpConfig.class.getMethod("clientId").getAnnotation(WithDefault.class));
+    assertNull(IdpConfig.class.getMethod("clientSecret").getAnnotation(WithDefault.class));
   }
 
   // --- the session client's resource-var fallback (service-client-identity-plan.md C4/D6/D7) -----
@@ -530,6 +530,36 @@ class EdgeChallengeTest {
             Map.of(
                 "QITS_RESOURCE_IDP_CLIENT_SECRET", "new-secret",
                 "QITS_EDGE_SESSIONS_CLIENT_SECRET", "old-secret")));
+  }
+
+  /**
+   * THE DEPLOYER'S idp CLIENT WINS FOR REAL, with both pairs injected — the live state of
+   * 2026-10-03 (qits-163). The older names were once the environment spelling of the keys the
+   * expression defined, so the environment source answered those keys with the OLD secret before
+   * the expression was ever read; idp then refused it and the edge's introspection broke. Resolved
+   * through a real environment source, the way a container resolves it.
+   */
+  @Test
+  void anOldEnvironmentPairNeverShadowsTheDeployersIdpClient() throws Exception {
+    Map<String, String> live =
+        Map.of(
+            "QITS_RESOURCE_IDP_CLIENT_ID", "qits-platform-edge",
+            "QITS_RESOURCE_IDP_CLIENT_SECRET", "database-secret",
+            "QITS_EDGE_SESSIONS_CLIENT_ID", "dev-qits-edge",
+            "QITS_EDGE_SESSIONS_CLIENT_SECRET", "environment-secret");
+    assertEquals(Optional.of("database-secret"), sessionClientSecret(live));
+    assertEquals(Optional.of("qits-platform-edge"), sessionClientId(live));
+  }
+
+  /** The same shadowing, on the address: a stated QITS_IDP_DIAL_URL never outranks the resource. */
+  @Test
+  void anOldEnvironmentDialUrlNeverShadowsTheDeployersIdpAddress() throws Exception {
+    assertEquals(
+        "http://dev-qits-idp:8080/idp",
+        dialUrl(
+            Map.of(
+                "QITS_RESOURCE_IDP_URL", "http://dev-qits-idp:8080/idp",
+                "QITS_IDP_DIAL_URL", "http://stated:8080/idp")));
   }
 
   /**
@@ -572,8 +602,8 @@ class EdgeChallengeTest {
   /**
    * THE SHIPPED DIAL ADDRESS RESOLVES, AND IT IS NOT AN ISSUER.
    *
-   * <p>{@code qits.idp.dial-url}'s default is a nested expression — an env name whose fallback is
-   * itself an expression — so a malformed one would not be a wrong value but a config expansion
+   * <p>{@code qits.edge.idp.dial-url}'s default is a nested expression — an env name whose fallback
+   * is itself an expression — so a malformed one would not be a wrong value but a config expansion
    * that throws at startup, which on this service is the platform's only published listener failing
    * to boot and the deploy rolling back. {@code IdpTest} cannot catch that: it constructs {@link
    * Idp} with values it supplies. This reads the shipped file with expansion on, which is the only
@@ -600,42 +630,48 @@ class EdgeChallengeTest {
   private static String dialUrl(Map<String, String> env) throws Exception {
     return applicationProperties(env)
         .build()
-        .getOptionalValue("qits.idp.dial-url", String.class)
+        .getOptionalValue("qits.edge.idp.dial-url", String.class)
         .orElseThrow();
   }
 
   private static Optional<String> sessionClientId(Map<String, String> env) throws Exception {
     return applicationProperties(env)
-        .withMapping(SessionsConfig.class)
+        .withMapping(IdpConfig.class)
         .build()
-        .getConfigMapping(SessionsConfig.class)
+        .getConfigMapping(IdpConfig.class)
         .clientId();
   }
 
   private static Optional<String> sessionClientSecret(Map<String, String> env) throws Exception {
     return applicationProperties(env)
-        .withMapping(SessionsConfig.class)
+        .withMapping(IdpConfig.class)
         .build()
-        .getConfigMapping(SessionsConfig.class)
+        .getConfigMapping(IdpConfig.class)
         .clientSecret();
   }
 
   /**
    * The shipped {@code application.properties}, with expression expansion on (off by default on a
-   * bare builder) and one synthetic, higher-ordinal source standing in for the environment
-   * variables a deployment would set.
+   * bare builder) and a real {@link EnvConfigSource} at its production ordinal standing in for the
+   * environment variables a deployment would set.
+   *
+   * <p><b>A real one, not a properties map at ordinal 300</b> (qits-163). An environment source
+   * does more than hold values: it answers a dotted key from the variable that spells it ({@code
+   * qits.edge.sessions.client-secret} from {@code QITS_EDGE_SESSIONS_CLIENT_SECRET}), outranking
+   * this file. A plain map does not, which is exactly how the shadowing that broke the edge's
+   * introspection passed every precedence test here.
    *
    * <p>The test JVM's classpath carries a SECOND {@code application.properties} — this repository's
    * own, under {@code src/test/resources} — so {@code getResource} alone cannot be trusted to pick
    * the shipped one: the two shadow each other in classpath order rather than merging. This picks
-   * the copy that actually defines {@code qits.idp.dial-url}, which only the shipped one does.
+   * the copy that actually defines {@code qits.edge.idp.dial-url}, which only the shipped one does.
    */
   private static SmallRyeConfigBuilder applicationProperties(Map<String, String> env)
       throws Exception {
     return new SmallRyeConfigBuilder()
         .addDefaultInterceptors()
         .withSources(new PropertiesConfigSource(shippedUrl(), 250))
-        .withSources(new PropertiesConfigSource(env, "env", 300));
+        .withSources(new EnvConfigSource(env, 300));
   }
 
   private static java.net.URL shippedUrl() throws Exception {
@@ -643,14 +679,14 @@ class EdgeChallengeTest {
     java.net.URL shipped = null;
     while (urls.hasMoreElements()) {
       java.net.URL candidate = urls.nextElement();
-      if (new PropertiesConfigSource(candidate, 250).getValue("qits.idp.dial-url") != null) {
+      if (new PropertiesConfigSource(candidate, 250).getValue("qits.edge.idp.dial-url") != null) {
         shipped = candidate;
         break;
       }
     }
     if (shipped == null) {
       throw new IllegalStateException(
-          "no application.properties on the test classpath defines qits.idp.dial-url");
+          "no application.properties on the test classpath defines qits.edge.idp.dial-url");
     }
     return shipped;
   }

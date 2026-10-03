@@ -152,13 +152,13 @@ public class StoryProfile implements QuarkusTestProfile {
     config.put("qits.edge.sessions.enabled", "true");
     config.put("qits.edge.domain", StoryTarget.DOMAIN);
     // No browser-host list and no canonical origin: both are derived from that one stated domain.
-    config.put("qits.edge.sessions.client-id", StoryTarget.EDGE_CLIENT_ID);
-    config.put("qits.edge.sessions.client-secret", StoryTarget.EDGE_CLIENT_SECRET);
+    config.put("qits.edge.idp.client-id", StoryTarget.EDGE_CLIENT_ID);
+    config.put("qits.edge.idp.client-secret", StoryTarget.EDGE_CLIENT_SECRET);
 
     // The dial address only: /jwks, /token and /api/sessions/introspect are derived from it in
     // Idp.java, so a rename on either side fails here rather than in production. The issuer is not
     // a key at all — it is derived from qits.edge.domain.
-    config.put("qits.idp.dial-url", idp.baseUrl() + "/idp");
+    config.put("qits.edge.idp.dial-url", idp.baseUrl() + "/idp");
 
     config.put("qits.eventstream.enabled", "false");
     config.put("qits.events.url", StoryTarget.CLOSED_PORT_URL);

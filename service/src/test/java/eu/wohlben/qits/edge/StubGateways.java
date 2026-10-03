@@ -36,11 +36,12 @@ import java.util.concurrent.TimeUnit;
  * edge must pass through unchanged: an ordinary request with a body, a chunked response written
  * over time, and a WebSocket upgrade. A JDK {@code HttpServer} cannot do the third at all.
  *
- * <p>The stub idp answers the three paths the edge derives from {@code qits.idp.dial-url}: {@code
- * /idp/jwks} publishes {@link TestTokens}' key, {@code /idp/token} issues one for the clients
- * below, and {@code /idp/api/sessions/introspect} answers for the browser sessions. It exists so
- * the auth gate is exercised end to end — a real RS256 signature, a real key fetch, a real broker
- * hop and a real introspection — rather than against a validator that was told to say yes.
+ * <p>The stub idp answers the three paths the edge derives from {@code qits.edge.idp.dial-url}:
+ * {@code /idp/jwks} publishes {@link TestTokens}' key, {@code /idp/token} issues one for the
+ * clients below, and {@code /idp/api/sessions/introspect} answers for the browser sessions. It
+ * exists so the auth gate is exercised end to end — a real RS256 signature, a real key fetch, a
+ * real broker hop and a real introspection — rather than against a validator that was told to say
+ * yes.
  *
  * <p><b>Three sessions, because a cookie has three answers.</b> One is live, one is expired and one
  * starts live and can be {@link #revoke revoked} while the suite runs — which is what proves a
@@ -323,7 +324,7 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     idpPort = bind("idp", idpServer(), 0);
     // Only the ADDRESS is configured: the issuer is derived from qits.edge.domain, never a key, so
     // the stub stamps ISSUER while the edge dials 127.0.0.1 — the two differ here as on the estate.
-    config.put("qits.idp.dial-url", "http://127.0.0.1:" + idpPort + "/idp");
+    config.put("qits.edge.idp.dial-url", "http://127.0.0.1:" + idpPort + "/idp");
     // The three time bounds, shrunk to a suite's patience. Their SHIPPED values are pinned in
     // EdgeChallengeTest instead: a default is a deployment fact and must not be readable from here.
     config.put("qits.edge.auth.basic-cache-ttl-ms", "2000");
@@ -336,8 +337,8 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     // that turns the gate ON, because they are facts about this stub idp: the credential it accepts
     // and the patience its ports deserve. The FLAG stays the profile's, which is what lets the same
     // resource serve both a suite with the gate off and one with it on.
-    config.put("qits.edge.sessions.client-id", EDGE_ID);
-    config.put("qits.edge.sessions.client-secret", EDGE_SECRET);
+    config.put("qits.edge.idp.client-id", EDGE_ID);
+    config.put("qits.edge.idp.client-secret", EDGE_SECRET);
     // The one stated name, which is a fact about this fixture rather than about the gate: the
     // domain the suite types is `example.com`, and the edge has to be told so — it cannot be
     // derived from a host. Everything else composed is built from it. Here rather than in the

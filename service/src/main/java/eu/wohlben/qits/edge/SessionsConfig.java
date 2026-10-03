@@ -3,7 +3,6 @@ package eu.wohlben.qits.edge;
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * The browser half of authentication, terminated at the edge — and the switch that keeps it dark.
@@ -93,22 +92,5 @@ public interface SessionsConfig {
   @WithDefault("60000")
   long staleGraceMs();
 
-  /**
-   * The edge's own static idp client id, for introspection. {@code {env}-qits-edge} on the
-   * platform, seeded by the bootstrap.
-   *
-   * <p><b>No default, and that is deliberate.</b> A credential is a deployment fact — the bootstrap
-   * injects {@code QITS_EDGE_SESSIONS_CLIENT_ID} and {@code QITS_EDGE_SESSIONS_CLIENT_SECRET}, and
-   * those two spellings are a contract with cli/qits-cli-bootstrap. Absent while {@link #enabled()}
-   * is off is the ordinary state and costs nothing; absent while it is ON fails at STARTUP — see
-   * {@link EdgeSessions}, because the alternative is an edge that refuses every browser for a
-   * reason only a stack trace holds.
-   */
-  Optional<String> clientId();
-
-  /**
-   * The secret half of {@link #clientId()}. Never logged, never cached, never sent anywhere but
-   * idp's introspection endpoint.
-   */
-  Optional<String> clientSecret();
+  // The edge's own idp client is not here any more: see IdpConfig (qits-163).
 }

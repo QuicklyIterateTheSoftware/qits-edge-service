@@ -26,12 +26,12 @@ import java.util.Base64;
  * the first time one of them learnt a lesson — a timeout, a header — and the other did not; so
  * {@link EdgeSessions} and {@link EdgeAuth} both come here, and only the endpoint differs.
  *
- * <p><b>The credential is the edge's, and it lives in {@link SessionsConfig}</b> for the historical
- * reason that sessions were its first use. It is what makes introspection a privilege rather than
- * an oracle: without it, anything on the network could ask idp about any cookie or any token.
- * Absent is an ordinary state — the bootstrap seeds it, a clone has none — and {@link
- * #hasCredential()} says so, so each caller decides what absence means for it: the session gate
- * refuses to start, the token path refuses every token.
+ * <p><b>The credential is the edge's, and it lives in {@link IdpConfig}</b> — once under the
+ * sessions keys, because sessions were its first use (qits-163 moved it). It is what makes
+ * introspection a privilege rather than an oracle: without it, anything on the network could ask
+ * idp about any cookie or any token. Absent is an ordinary state — the bootstrap seeds it, a clone
+ * has none — and {@link #hasCredential()} says so, so each caller decides what absence means for
+ * it: the session gate refuses to start, the token path refuses every token.
  *
  * <p><b>The patience is {@link IdpGrants}' own</b>: each attempt bounded by {@link
  * AuthConfig#idpCallTimeoutMs()}, connection included, and connection-classed failures retried with
@@ -49,7 +49,7 @@ public class IdpIntrospection {
 
   @Inject AuthConfig authConfig;
 
-  @Inject SessionsConfig sessionsConfig;
+  @Inject IdpConfig idpConfig;
 
   private HttpClient client;
 
@@ -63,7 +63,7 @@ public class IdpIntrospection {
     client = vertx.createHttpClient();
     authorization =
         basicAuthorization(
-            sessionsConfig.clientId().orElse(null), sessionsConfig.clientSecret().orElse(null));
+            idpConfig.clientId().orElse(null), idpConfig.clientSecret().orElse(null));
   }
 
   /**

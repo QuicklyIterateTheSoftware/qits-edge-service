@@ -352,7 +352,7 @@ a file.
 | `qits.edge.apps.<app>.hosts.<env>` | `QITS_EDGE_APPS_<APP>_HOSTS_<ENV>` | — | A local process's or a suite's override of one **platform** label in one environment, `host` or `host:port`. It cannot add a label; a live deployment sets none |
 | `qits.edge.projection.catchup.required` | `QITS_EDGE_PROJECTION_CATCHUP_REQUIRED` | `true` | Requires a complete deployment-history rebuild before the edge is ready; turn off only in an intentionally offline test/dev setup |
 | `qits.edge.projection.catchup.retry` | `QITS_EDGE_PROJECTION_CATCHUP_RETRY` | `PT1S` | Delay before retrying an incomplete, failed, or unavailable deployment-history read |
-| `qits.idp.dial-url` | `QITS_RESOURCE_IDP_URL`, then `QITS_IDP_DIAL_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-platform-idp:8080/idp` | The address the edge dials. `/jwks`, `/token` and the two introspection paths are derived from it, never configured. It is never the issuer: the accepted `iss` is `https://idp.qits.<qits.edge.domain>`, derived in code and not configurable, plus the legacy `http://qits-platform-idp:8080/idp` until idp stamps the derived one (qits-730) |
+| `qits.edge.idp.dial-url` | `QITS_RESOURCE_IDP_URL`, then `QITS_IDP_DIAL_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-platform-idp:8080/idp` | The address the edge dials. `/jwks`, `/token` and the two introspection paths are derived from it, never configured. It is never the issuer: the accepted `iss` is `https://idp.qits.<qits.edge.domain>`, derived in code and not configurable, plus the legacy `http://qits-platform-idp:8080/idp` until idp stamps the derived one (qits-730) |
 | `qits.edge.auth.enforce-on-apps` | `QITS_EDGE_AUTH_ENFORCE_ON_APPS` | `true` | Service vhosts require a valid idp token |
 | `qits.edge.auth.anonymous-read-apps` | `QITS_EDGE_AUTH_ANONYMOUS_READ_APPS` | — | App labels whose `GET` and `HEAD` are open; every other method on them still needs a token |
 | `qits.edge.auth.clock-skew-seconds` | `QITS_EDGE_AUTH_CLOCK_SKEW_SECONDS` | `30` | How far this clock and idp's may disagree about `exp` |
@@ -370,8 +370,8 @@ a file.
 | `qits.edge.sessions.cache-ttl-ms` | `QITS_EDGE_SESSIONS_CACHE_TTL_MS` | `30000` | How long an introspected session is believed — and how long a logout lingers |
 | `qits.edge.sessions.cache-size` | `QITS_EDGE_SESSIONS_CACHE_SIZE` | `1024` | The most sessions held at once, least-recently-used |
 | `qits.edge.sessions.stale-grace-ms` | `QITS_EDGE_SESSIONS_STALE_GRACE_MS` | `60000` | How long a cached session outlives an **unreachable** idp |
-| `qits.edge.sessions.client-id` | `QITS_RESOURCE_IDP_CLIENT_ID`, then `QITS_EDGE_SESSIONS_CLIENT_ID` | — | The edge's own idp client, for introspection. Today the bootstrap seeds `{env}-qits-edge` under the older name; `QITS_RESOURCE_IDP_CLIENT_ID` is the `idp:client` resource a deployment may declare instead (service-client-identity-plan.md, C4/D6/D7), and it becomes `qits-platform-edge` at the edge's own cutover (D2) |
-| `qits.edge.sessions.client-secret` | `QITS_RESOURCE_IDP_CLIENT_SECRET`, then `QITS_EDGE_SESSIONS_CLIENT_SECRET` | — | Its secret, same fallback. Neither pair set is still "no credential", which fails startup exactly as before if the gate is on |
+| `qits.edge.idp.client-id` | `QITS_RESOURCE_IDP_CLIENT_ID`, then `QITS_EDGE_SESSIONS_CLIENT_ID` | — | The edge's own idp client, for introspection. Today the bootstrap seeds `{env}-qits-edge` under the older name; `QITS_RESOURCE_IDP_CLIENT_ID` is the `idp:client` resource a deployment may declare instead (service-client-identity-plan.md, C4/D6/D7), and it becomes `qits-platform-edge` at the edge's own cutover (D2) |
+| `qits.edge.idp.client-secret` | `QITS_RESOURCE_IDP_CLIENT_SECRET`, then `QITS_EDGE_SESSIONS_CLIENT_SECRET` | — | Its secret, same fallback. Neither pair set is still "no credential", which fails startup exactly as before if the gate is on. These three keys were `qits.idp.dial-url` and `qits.edge.sessions.client-*`, whose environment spellings ARE the older variable names — and an environment variable outranks `application.properties`, so with both injected the old one won and the fallback order was fiction (qits-163). Nothing injects `QITS_EDGE_IDP_*` |
 | `qits.observability.url` | `QITS_OBSERVABILITY_URL` | `http://qits-observability:8080` | Where telemetry goes; the OTLP endpoint is derived from it |
 
 Six things fail **at startup** rather than per request, deliberately: an environment or application
@@ -420,7 +420,7 @@ vhost fronts a service with no external auth of its own.
 
 A request to an application vhost must carry an idp credential: an access token, or the client id
 and secret it is minted from (see *HTTP Basic* below). A token is validated **offline**
-against the keys fetched from `qits.idp.dial-url/jwks` and cached — idp is overlay-only, so a host client
+against the keys fetched from `qits.edge.idp.dial-url/jwks` and cached — idp is overlay-only, so a host client
 cannot reach it, and keeping it off the per-pull path is worth more than the freshness a call-out
 would buy. An unknown `kid` buys **one** refresh, behind a cooldown, so a made-up kid cannot turn
 into a request per request at the identity provider. The checks are RS256 only, an exact accepted `iss`, live
@@ -528,8 +528,8 @@ It is accepted in three spellings, all on the same path:
 - `Authorization: Basic base64(<anything>:qits_tok_…)` — any username at all; the password is what
   says it is a token.
 
-The edge `POST`s it to `<qits.idp.dial-url>/api/tokens/introspect` with its **own** client id and
-secret in HTTP Basic — the pair it introspects browser sessions with (`qits.edge.sessions.client-id`
+The edge `POST`s it to `<qits.edge.idp.dial-url>/api/tokens/introspect` with its **own** client id and
+secret in HTTP Basic — the pair it introspects browser sessions with (`qits.edge.idp.client-id`
 / `-secret`), over the same dial, with the same per-attempt timeout and retry window. idp answers
 the ordinary idp JWT the token currently stands for; the edge holds that JWT to the Bearer rules —
 issuer, expiry, signature, and this vhost's audience — and **forwards the JWT in the token's place**.
@@ -661,7 +661,7 @@ request is not using it.
 ### Introspection, and the cache in front of it
 
 The cookie is **opaque** — 256 random bits, stored hashed at idp — so this process cannot decide
-anything about it alone: it `POST`s `<qits.idp.dial-url>/api/sessions/introspect` with its own client id
+anything about it alone: it `POST`s `<qits.edge.idp.dial-url>/api/sessions/introspect` with its own client id
 and secret in HTTP Basic and reads `{userId, username, roles, expiresAt}`. A non-200 is a refusal.
 The alternative, a signed cookie verified offline against the JWKS already held here, would cost
 revocation — a logout would be a row idp changed and nobody read.

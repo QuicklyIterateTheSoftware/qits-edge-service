@@ -34,7 +34,10 @@
 #
 # THE SESSIONS CLIENT FALLBACK. QITS_EDGE_SESSIONS_CLIENT_ID / _SECRET are read only when the
 # deployer's QITS_RESOURCE_IDP_CLIENT_ID / _SECRET are absent (`${QITS_RESOURCE_IDP_*:${...}}` in
-# application.properties). They stay declared while that fallback exists.
+# application.properties). They stay declared while that fallback exists. That "only when" holds
+# since qits-163: the keys they fall back into are qits.edge.idp.client-*, whose environment
+# spelling nothing injects. Before, the keys were qits.edge.sessions.client-*, these very names
+# outranked the expression, and the old secret won over the deployer's.
 #
 # DELIBERATELY NOT HERE (these show as orphaned):
 #   * QITS_EDGE_ACME_DOMAIN, QITS_EDGE_SESSIONS_CANONICAL_ORIGIN, QITS_EDGE_SESSIONS_BROWSER_HOSTS —

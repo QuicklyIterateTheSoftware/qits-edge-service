@@ -1,9 +1,9 @@
 package eu.wohlben.qits.edge;
 
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import java.util.List;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * Where the idp is, and what it calls itself — two facts, and only one of them is configured.
@@ -16,9 +16,9 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
  * key or a properties default (qits-730): idp derives the same string from the same domain, so the
  * two cannot be configured apart.
  *
- * <p>{@code qits.idp.dial-url} is the address this process actually connects to for keys, tokens
- * and introspection; every path under it is derived here rather than configured, because the paths
- * belong to idp rather than to a deployment.
+ * <p>{@code qits.edge.idp.dial-url} is the address this process actually connects to for keys,
+ * tokens and introspection; every path under it is derived here rather than configured, because the
+ * paths belong to idp rather than to a deployment.
  *
  * <p><b>WHY THEY ARE TWO, and it is not tidiness.</b> The issuer is stamped into every token in
  * flight and compared for equality by every consumer, so it cannot move with a deployment; the
@@ -31,8 +31,15 @@ public class Idp {
 
   @Inject EdgeConfig edge;
 
-  @ConfigProperty(name = "qits.idp.dial-url")
+  @Inject IdpConfig config;
+
+  /** {@link IdpConfig#dialUrl()}, read once; a plain field so a test can state it outright. */
   String configuredDial;
+
+  @PostConstruct
+  void read() {
+    configuredDial = config.dialUrl();
+  }
 
   /** Every {@code iss} an accepted token may carry: the one derived issuer. */
   public List<String> issuers() {
@@ -49,7 +56,9 @@ public class Idp {
     return "https://idp.qits." + EdgeRouter.domain(domain);
   }
 
-  /** The base this process CONNECTS to: {@code qits.idp.dial-url}, trimmed of trailing slashes. */
+  /**
+   * The base this process CONNECTS to: {@code qits.edge.idp.dial-url}, trimmed of trailing slashes.
+   */
   public String dialBase() {
     return trimmed(configuredDial);
   }
