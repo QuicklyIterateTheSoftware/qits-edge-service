@@ -193,16 +193,16 @@ public class EdgeAuth {
 
   /**
    * Say once, at startup, that tokens cannot open anything here. The token path asks idp with the
-   * edge's own client ({@link SessionsConfig#clientId()}), and without one there is nothing to ask
-   * with — so every token is refused, and a WARN now is worth more than a 401 per request whose
-   * reason only a debug log holds. Not a startup FAILURE, unlike the session gate's: a clone and a
-   * suite run with no such client, and every other credential here works without it.
+   * edge's own client ({@link IdpConfig#clientId()}), and without one there is nothing to ask with
+   * — so every token is refused, and a WARN now is worth more than a 401 per request whose reason
+   * only a debug log holds. Not a startup FAILURE, unlike the session gate's: a clone and a suite
+   * run with no such client, and every other credential here works without it.
    */
   void warnWhenTokensCannotBeIntrospected(@Observes StartupEvent ignored) {
     if (!introspection.hasCredential()) {
       LOG.warnf(
-          "the edge holds no idp client of its own (QITS_EDGE_SESSIONS_CLIENT_ID and"
-              + " QITS_EDGE_SESSIONS_CLIENT_SECRET), so every %s… token presented here is refused"
+          "the edge holds no idp client of its own (QITS_RESOURCE_IDP_CLIENT_ID and _SECRET, or"
+              + " QITS_EDGE_SESSIONS_CLIENT_ID and _SECRET), so every %s… token presented here is refused"
               + " without asking %s",
           TokenValue.PREFIX, idp.tokenIntrospectionEndpoint());
     }

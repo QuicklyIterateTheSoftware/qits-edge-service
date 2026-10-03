@@ -284,8 +284,8 @@ public final class StoryTarget {
   /**
    * The credential the edge introspects with. On the platform the bootstrap seeds {@code
    * {env}-qits-edge} and injects the pair; these two spellings are a contract with
-   * cli/qits-bootstrap, and {@link SessionsConfig} deliberately gives them no default — a gate with
-   * no credential of its own could never open, so the process refuses to START rather than refusing
+   * cli/qits-bootstrap, and {@link IdpConfig} deliberately gives them no default — a gate with no
+   * credential of its own could never open, so the process refuses to START rather than refusing
    * every browser for a reason only a stack trace holds.
    */
   public static final String EDGE_CLIENT_ID = ENVIRONMENT + "-qits-edge";
