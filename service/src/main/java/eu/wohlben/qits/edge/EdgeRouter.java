@@ -236,7 +236,8 @@ public class EdgeRouter {
         .origin(origin(upstream))
         .addInterceptor(new EdgeHeaders())
         .addInterceptor(new EdgeCacheControl())
-        .addInterceptor(new EdgeHopByHop());
+        .addInterceptor(new EdgeHopByHop())
+        .addInterceptor(new EdgeRequestFraming());
   }
 
   /**

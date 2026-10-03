@@ -1899,6 +1899,87 @@ class EdgeRoutingTest {
     assertEquals("10", answer.line("body-bytes"));
   }
 
+  // --- request bodies and their framing ---------------------------------------------------
+
+  /** A body streamed in parts, as git streams a push larger than its {@code http.postBuffer}. */
+  private static final List<String> STREAMED_PARTS = List.of("hello ", "streamed ", "edge");
+
+  @Test
+  void anHttp2BodyWithoutALengthReachesTheUpstream() {
+    // The defect: git pushes over 1 MB on HTTP/2 with no Content-Length, and the edge's HTTP/1.1
+    // request to qits-githost carried neither a length nor chunked framing, so githost read an
+    // empty body and answered 500 (measured 2026-10-03).
+    activateCi();
+    EdgeClient.Answer answer =
+        http2()
+            .sendStreamed(
+                HttpMethod.POST,
+                "ci.dev.acme.example.com",
+                "/api/thing",
+                STREAMED_PARTS,
+                token("dev"));
+    assertEquals(HttpVersion.HTTP_2, answer.version());
+    assertEquals(200, answer.status(), answer.body());
+    assertEquals("hello streamed edge", answer.line("body"), answer.body());
+    assertEquals("19", answer.line("body-bytes"));
+  }
+
+  @Test
+  void aLargeHttp2BodyWithoutALengthReachesTheUpstreamWhole() {
+    // Larger than git's 1 MB postBuffer, in many parts, so it crosses many DATA frames and the
+    // outbound write queue, not one buffer.
+    activateCi();
+    String part = "x".repeat(64 * 1024);
+    List<String> parts = java.util.Collections.nCopies(24, part);
+    EdgeClient.Answer answer =
+        http2()
+            .sendStreamed(
+                HttpMethod.POST, "ci.dev.acme.example.com", "/api/thing", parts, token("dev"));
+    assertEquals(200, answer.status());
+    assertEquals(String.valueOf(24 * 64 * 1024), answer.line("body-bytes"));
+  }
+
+  @Test
+  void anHttp2BodyWithALengthReachesTheUpstream() {
+    activateCi();
+    EdgeClient.Answer answer =
+        http2()
+            .send(
+                HttpMethod.POST,
+                "ci.dev.acme.example.com",
+                "/api/thing",
+                "hello edge",
+                token("dev"));
+    assertEquals(HttpVersion.HTTP_2, answer.version());
+    assertEquals("hello edge", answer.line("body"));
+    assertEquals("10", answer.upstreamHeader("Content-Length"));
+  }
+
+  @Test
+  void anHttp11ChunkedBodyReachesTheUpstream() {
+    activateCi();
+    EdgeClient.Answer answer =
+        client()
+            .sendStreamed(
+                HttpMethod.POST,
+                "ci.dev.acme.example.com",
+                "/api/thing",
+                STREAMED_PARTS,
+                token("dev"));
+    assertEquals("hello streamed edge", answer.line("body"), answer.body());
+    assertEquals("chunked", answer.upstreamHeader("Transfer-Encoding"));
+  }
+
+  @Test
+  void anHttp2GetStaysWithoutABody() {
+    // A GET carries no body, so the edge must not frame one: no chunked, no length.
+    activateCi();
+    EdgeClient.Answer answer = http2().get("ci.dev.acme.example.com", "/api/thing", token("dev"));
+    assertEquals(200, answer.status());
+    assertEquals("0", answer.line("body-bytes"));
+    assertNull(answer.upstreamHeader("Transfer-Encoding"), answer.body());
+  }
+
   @Test
   void everyMethodPassesThrough() {
     activateCi();

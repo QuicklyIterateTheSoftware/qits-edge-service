@@ -3,10 +3,13 @@ package eu.wohlben.qits.edge;
 import eu.wohlben.qits.userflows.NetworkCapture;
 import eu.wohlben.qits.userflows.NetworkEdge;
 import io.vertx.core.Context;
+import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpClientOptions;
+import io.vertx.core.http.HttpClientRequest;
+import io.vertx.core.http.HttpClientResponse;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpVersion;
 import io.vertx.core.http.RequestOptions;
@@ -17,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 /**
  * A client that can say whatever it likes in the {@code Host} header — which is the whole of what
@@ -164,6 +168,41 @@ final class EdgeClient implements AutoCloseable {
    */
   CompletableFuture<Answer> sending(
       HttpMethod method, String host, String uri, String body, Map<String, String> headers) {
+    return sending(
+        method,
+        host,
+        uri,
+        headers,
+        request -> body == null ? request.send() : request.send(Buffer.buffer(body)));
+  }
+
+  /**
+   * A request whose body is STREAMED in {@code parts}, with no {@code Content-Length}: chunked on
+   * HTTP/1.1, and on HTTP/2 plain DATA frames with no length at all — what git sends for a push
+   * larger than its {@code http.postBuffer}.
+   */
+  Answer sendStreamed(
+      HttpMethod method, String host, String uri, List<String> parts, Map<String, String> headers) {
+    return await(
+        sending(
+            method,
+            host,
+            uri,
+            headers,
+            request -> {
+              // Chunked is what lets Vert.x write without a length; on HTTP/2 it adds no header.
+              request.setChunked(true);
+              parts.forEach(request::write);
+              return request.end().compose(ended -> request.response());
+            }));
+  }
+
+  private CompletableFuture<Answer> sending(
+      HttpMethod method,
+      String host,
+      String uri,
+      Map<String, String> headers,
+      Function<HttpClientRequest, Future<HttpClientResponse>> send) {
     RequestOptions options = options(method, host, uri, headers);
     // Read here, on the story's own thread, and kept: see the class comment.
     String caller = NetworkCapture.actor();
@@ -172,8 +211,7 @@ final class EdgeClient implements AutoCloseable {
         () ->
             client
                 .request(options)
-                .compose(
-                    request -> body == null ? request.send() : request.send(Buffer.buffer(body)))
+                .compose(send)
                 .compose(
                     response ->
                         response
