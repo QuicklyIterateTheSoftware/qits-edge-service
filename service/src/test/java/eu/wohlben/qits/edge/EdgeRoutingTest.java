@@ -48,9 +48,6 @@ class EdgeRoutingTest {
 
   @Inject EdgeRoutes routes;
 
-  /** For the temporary cross-host switch, which this suite flips to prove both of its values. */
-  @Inject EdgeRouter router;
-
   @Inject EdgeProjects projects;
 
   /**
@@ -189,19 +186,28 @@ class EdgeRoutingTest {
   @Test
   void aDeploymentActiveEndpointIsProxiedDirectlyAndItsPrefixHasABoundary() throws Exception {
     clearProjection();
-    activateArtifacts();
-    activateCi();
+    // ci's second route has an upstream of its own, so reaching it proves the route's endpoint is
+    // proxied, not the host's primary upstream.
+    deployments.onFrame(
+        frame(
+            new JsonObject()
+                .put("applicationName", "qits-ci")
+                .put("environmentName", "dev")
+                .put("browserHost", "ci")
+                .put(
+                    "endpoints",
+                    new io.vertx.core.json.JsonArray()
+                        .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev")))
+                        .add(endpoint("/hooks", upstream("qits.edge.apps.registry.hosts.dev"))))));
 
     assertEquals(
         "registry-dev",
-        client()
-            .get("ci.dev.acme.example.com", "/artifacts/api/files", token("dev"))
-            .line("upstream"));
-    // The route's prefix boundary matters: /artifacts catches a child, never this merely similar
-    // word — which nobody declared, so it falls to the service whose name this is.
+        client().get("ci.dev.acme.example.com", "/hooks/push", token("dev")).line("upstream"));
+    // The route's prefix boundary matters: /hooks catches a child, never this merely similar word
+    // — which nobody declared, so it falls to the service whose name this is.
     assertEquals(
         "mirror-dev",
-        client().get("ci.dev.acme.example.com", "/artifacts-old", token("dev")).line("upstream"));
+        client().get("ci.dev.acme.example.com", "/hooks-old", token("dev")).line("upstream"));
   }
 
   /**
@@ -223,7 +229,6 @@ class EdgeRoutingTest {
   @Test
   void aFullyPopulatedPublisherFrameRoutesAndItsUnmodelledFieldsAreIgnored() throws Exception {
     clearProjection();
-    activateCi(); // the vhost the request below is addressed to, exactly as the test above uses it
     Upstream upstream = upstream("qits.edge.apps.registry.hosts.dev");
 
     deployments.onFrame(
@@ -251,10 +256,12 @@ class EdgeRoutingTest {
                         .add(placement("services.details", "Artifacts", 3)))));
 
     // Decoded, not settled-unhandled: the routes, the public name and the placement all landed.
+    assertEquals("qits-artifacts", routes.resolve("dev", "/artifacts/api/files").application());
+    assertEquals("registry", routes.applicationHost("dev", "qits-artifacts").host());
     assertEquals(
         "registry-dev",
         client()
-            .get("ci.dev.acme.example.com", "/artifacts/api/files", token("dev"))
+            .get("registry.dev.acme.example.com", "/artifacts/api/files", token("dev"))
             .line("upstream"));
     assertNotNull(routes.resolve("dev", "/v2/"));
     assertEquals(
@@ -322,7 +329,8 @@ class EdgeRoutingTest {
         slots.getJsonArray("services.details").stream()
             .map(value -> ((JsonObject) value).getString("app"))
             .toList());
-    // The primary route travels with a hosted entry too: it is what a shell renders an application
+    // The primary route is served with a hosted entry too: it is what a shell renders an
+    // application
     // under until that application is flipped, so nothing leaves the sidebar mid-rollout.
     assertEquals(
         List.of("/ci", "/artifacts"),
@@ -680,8 +688,8 @@ class EdgeRoutingTest {
   @Test
   void aPublishedHostServesItsOwnServiceAtTheRoot() {
     activateCi();
-    // `/` belongs to test-environment in this environment, and it does NOT travel: on a service's
-    // own name the catch-all is that service.
+    // `/` belongs to test-environment in this environment, and on a service's own name it is still
+    // that service's: the hostname alone picks the application, the catch-all included.
     assertEquals(
         "mirror-dev", client().get("ci.dev.acme.example.com", "/", token("dev")).line("upstream"));
     assertEquals(
@@ -690,94 +698,26 @@ class EdgeRoutingTest {
   }
 
   @Test
-  void anotherApplicationsPrimaryRouteIsPathRoutedOnAServiceHost() {
-    // What makes the whole platform same-origin from any host: an SPA on ci.dev.acme.example.com
-    // reads
-    // /artifacts/api without CORS, because the segment an application is KNOWN by means the same
-    // thing on every name.
+  void anotherApplicationsRouteOnAServiceHostIsAnsweredByTheHostsOwnService() {
+    // The hostname alone picks the application. Another application's route — its PRIMARY one,
+    // /artifacts, the segment it is known by, or a secondary wire route like /v2 — means nothing on
+    // ci's name: ci's own service answers, exactly as for a path nobody declared. An SPA reads
+    // another application on that application's own name, cross-origin (EdgeCors).
     activateCi();
     activateArtifacts();
-    assertEquals(
-        "registry-dev",
-        client()
-            .get("ci.dev.acme.example.com", "/artifacts/api/files", token("dev"))
-            .line("upstream"));
-    assertEquals(
-        "/artifacts/api/files",
-        client().get("ci.dev.acme.example.com", "/artifacts/api/files", token("dev")).line("uri"));
-  }
-
-  @Test
-  void aCrossHostRouteIsLoggedInLogModeAndStillTravels() {
-    // log, the shipped default of the TEMPORARY switch: the travel answers as it did, and the one
-    // greppable line names who is still relying on it. The host's own route stays silent.
-    activateCi();
-    activateArtifacts();
-    List<String> lines = captureRouterLog();
-    try {
-      EdgeClient.Answer answer =
-          client()
-              .get(
-                  "ci.dev.acme.example.com",
-                  "/artifacts/api/files",
-                  withToken(
-                      Map.of(
-                          "Origin", "https://ci.dev.acme.example.com",
-                          "Referer", "https://ci.dev.acme.example.com/runs")));
-      assertEquals("registry-dev", answer.line("upstream"));
-      assertEquals(
-          List.of(
-              "cross-host route: host=ci.dev.acme.example.com method=GET"
-                  + " path=/artifacts/api/files application=qits-artifacts"
-                  + " origin=https://ci.dev.acme.example.com"
-                  + " referer=https://ci.dev.acme.example.com/runs"),
-          crossHostLines(lines));
-
-      lines.clear();
-      assertEquals(
-          "mirror-dev",
-          client().get("ci.dev.acme.example.com", "/ci/api/runs", token("dev")).line("upstream"));
-      assertEquals(
-          "mirror-dev",
-          client().get("ci.dev.acme.example.com", "/undeclared", token("dev")).line("upstream"));
-      assertEquals(List.of(), crossHostLines(lines), "the host's own paths are never logged");
-
-      // Absent headers are spelled `-`, so the line keeps one shape.
-      client().get("ci.dev.acme.example.com", "/artifacts/api/files", token("dev"));
-      assertEquals(
-          List.of(
-              "cross-host route: host=ci.dev.acme.example.com method=GET"
-                  + " path=/artifacts/api/files application=qits-artifacts origin=- referer=-"),
-          crossHostLines(lines));
-    } finally {
-      releaseRouterLog();
-    }
-  }
-
-  @Test
-  void aCrossHostRouteIsAnsweredByTheHostsOwnServiceInDenyMode() {
-    // deny: the primary route stops travelling, and the host's own service answers exactly as for
-    // a path nobody declared. Nothing is logged — nothing travelled.
-    activateCi();
-    activateArtifacts();
-    List<String> lines = captureRouterLog();
-    router.crossHostRoutes(EdgeConfig.CrossHostRoutes.DENY);
-    try {
-      EdgeClient.Answer answer =
-          client().get("ci.dev.acme.example.com", "/artifacts/api/files", token("dev"));
-      assertEquals("mirror-dev", answer.line("upstream"));
-      assertEquals("/artifacts/api/files", answer.line("uri"));
-      // On its owner's own name it is still the owner's.
+    for (String path : List.of("/artifacts/api/files", "/v2/")) {
+      EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", path, token("dev"));
+      assertEquals("mirror-dev", answer.line("upstream"), path);
+      assertEquals(path, answer.line("uri"), path);
+      // On its owner's own name it is the owner's.
       assertEquals(
           "registry-dev",
-          client()
-              .get("registry.dev.acme.example.com", "/artifacts/api/files", token("dev"))
-              .line("upstream"));
-      assertEquals(List.of(), crossHostLines(lines));
-    } finally {
-      router.crossHostRoutes(EdgeConfig.CrossHostRoutes.LOG);
-      releaseRouterLog();
+          client().get("registry.dev.acme.example.com", path, token("dev")).line("upstream"),
+          path);
     }
+    // The candidates are the host's own routes, longest prefix first among them.
+    assertNull(routes.resolve("dev", "qits-ci", "/artifacts/api/files"));
+    assertEquals("/v2", routes.resolve("dev", "qits-artifacts", "/v2/library/x").path());
   }
 
   // --- CORS, which the edge owns on every service host ------------------------------------------
@@ -924,60 +864,6 @@ class EdgeRoutingTest {
     Map<String, String> merged = new java.util.HashMap<>(token("dev"));
     merged.putAll(headers);
     return merged;
-  }
-
-  private java.util.logging.Handler routerLog;
-
-  /** Every message EdgeRouter logs from here until {@link #releaseRouterLog}, formatted. */
-  private List<String> captureRouterLog() {
-    List<String> lines = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
-    routerLog =
-        new java.util.logging.Handler() {
-          @Override
-          public void publish(java.util.logging.LogRecord record) {
-            lines.add(
-                record instanceof org.jboss.logmanager.ExtLogRecord ext
-                    ? ext.getFormattedMessage()
-                    : record.getMessage());
-          }
-
-          @Override
-          public void flush() {}
-
-          @Override
-          public void close() {}
-        };
-    java.util.logging.Logger.getLogger(EdgeRouter.class.getName()).addHandler(routerLog);
-    return lines;
-  }
-
-  private void releaseRouterLog() {
-    java.util.logging.Logger.getLogger(EdgeRouter.class.getName()).removeHandler(routerLog);
-  }
-
-  private static List<String> crossHostLines(List<String> lines) {
-    synchronized (lines) {
-      return lines.stream().filter(line -> line.startsWith("cross-host route:")).toList();
-    }
-  }
-
-  @Test
-  void anotherApplicationsSecondaryRouteStaysWithTheHostsOwnService() {
-    // /v2 is a wire protocol several services legitimately answer — the registry and the
-    // pull-through mirror both do — and only one of them can own that path in a projection whose
-    // paths are unique per environment. Routing it everywhere would send mirror.dev/v2/ at the
-    // registry and break every `docker pull` through the mirror. So a secondary route falls through
-    // to the service whose name this is, exactly like a path nobody declared.
-    activateCi();
-    activateArtifacts();
-    assertEquals(
-        "mirror-dev",
-        client().get("ci.dev.acme.example.com", "/v2/", token("dev")).line("upstream"));
-    assertEquals("/v2/", client().get("ci.dev.acme.example.com", "/v2/", token("dev")).line("uri"));
-    // On its owner's own name it is that service's, which is the only place it exists now.
-    assertEquals(
-        "registry-dev",
-        client().get("registry.dev.acme.example.com", "/v2/", token("dev")).line("upstream"));
   }
 
   @Test
@@ -1798,6 +1684,7 @@ class EdgeRoutingTest {
   void anExplicitlyEmptySnapshotRemovesThePredecessorsRoutes() {
     activateArtifacts();
     activateCi();
+    assertNotNull(routes.resolve("dev", "qits-artifacts", "/artifacts/api/files"));
     deployments.onFrame(
         new eu.wohlben.qits.eventstream.control.EventFrame(
             java.util.UUID.randomUUID().toString(),
@@ -1812,12 +1699,8 @@ class EdgeRoutingTest {
             null,
             "dev"));
 
-    // /artifacts is nobody's route any more, so it stops travelling and falls to ci's own service.
-    assertEquals(
-        "mirror-dev",
-        client()
-            .get("ci.dev.acme.example.com", "/artifacts/api/files", token("dev"))
-            .line("upstream"));
+    // /artifacts is nobody's route any more.
+    assertNull(routes.resolve("dev", "qits-artifacts", "/artifacts/api/files"));
   }
 
   /**
