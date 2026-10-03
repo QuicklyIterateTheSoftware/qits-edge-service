@@ -171,8 +171,7 @@ public class EdgeRoutes {
    * A public name and the service behind it.
    *
    * @param upstream the primary route's upstream, which is the process that serves the name itself
-   * @param primaryPath that route's path — the segment OTHER hosts route to this application under,
-   *     which is what keeps a shell's API reads same-origin. See {@code EdgeRouter.travels}.
+   * @param primaryPath that route's path — the segment the application's own SPA is served under
    */
   public record ServiceHost(
       String application, String host, Upstream upstream, String primaryPath) {}
@@ -182,8 +181,8 @@ public class EdgeRoutes {
    * needs and the placement itself does not carry.
    *
    * @param host the application's public name, or null when it publishes none — a legacy frame
-   * @param primaryPath its primary route: the segment OTHER hosts route to this application under,
-   *     and what a shell renders an entry under while the application publishes no host of its own
+   * @param primaryPath its primary route: the segment the application is known by, and what a shell
+   *     renders an entry under while the application publishes no host of its own
    * @param subpath the view this entry opens, relative to the scope the shell composes, or null for
    *     the application's root
    */
@@ -218,6 +217,21 @@ public class EdgeRoutes {
   public EdgeEndpoint resolve(String environment, String path) {
     for (EdgeEndpoint endpoint : view.endpoints().getOrDefault(environment, List.of())) {
       if (endpoint.matches(path)) {
+        return endpoint;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The longest matching active prefix among ONE application's routes in this environment, or null
+   * when none of them matches — what a service host resolves a path against, because on a service's
+   * own name only that service's routes mean anything. Another application's route, however much
+   * longer, is not a candidate.
+   */
+  public EdgeEndpoint resolve(String environment, String application, String path) {
+    for (EdgeEndpoint endpoint : view.endpoints().getOrDefault(environment, List.of())) {
+      if (endpoint.application().equals(application) && endpoint.matches(path)) {
         return endpoint;
       }
     }
@@ -262,7 +276,7 @@ public class EdgeRoutes {
    * This application's first-declared route in this environment, or null when it publishes none.
    *
    * <p>The primary route is the one an application is KNOWN by: the segment its SPA is served
-   * under, and so the only one of its routes that means the same thing on somebody else's name.
+   * under, and what a shell renders an entry under while the application publishes no host.
    */
   public String primaryPath(String environment, String application) {
     return application == null

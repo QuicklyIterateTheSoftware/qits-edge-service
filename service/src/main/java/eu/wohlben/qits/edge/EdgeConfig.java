@@ -95,26 +95,6 @@ public interface EdgeConfig {
    */
   Map<String, App> apps();
 
-  /**
-   * <b>TEMPORARY</b>: what a service host does with another application's primary route — the
-   * cross-host path routing in {@code EdgeRouter.travels}, which is going away (epic qits-528: a
-   * hostname alone picks the application). This switch is the observe step before that deletion,
-   * not a lasting knob, and it is deleted together with the travel.
-   *
-   * <p>{@code log}, the default, routes exactly as before and writes one INFO line beginning {@code
-   * cross-host route:} for every request that travels to another application, so the remaining
-   * callers can be found in the telemetry logs. {@code deny} stops the travel: the host's own
-   * service answers, exactly as for a path nobody declared.
-   */
-  @WithDefault("log")
-  CrossHostRoutes crossHostRoutes();
-
-  /** The two values of {@link #crossHostRoutes()}. Temporary with it. */
-  enum CrossHostRoutes {
-    LOG,
-    DENY
-  }
-
   /** The startup proof that turns a persisted deployment snapshot into an authoritative one. */
   Projection projection();
 

@@ -12,11 +12,11 @@ import java.util.List;
 /**
  * CORS on every service host, owned by the edge and by nothing behind it.
  *
- * <p><b>Why it exists now.</b> An SPA used to read another application's API same-origin, through
- * the primary-route travel in {@code EdgeRouter.travels}. That travel is going away — a hostname
- * alone picks the application (epic qits-528) — so an SPA on {@code ci.<env>.<project>.<domain>}
- * reads {@code projects.<env>.<project>.<domain>} cross-origin, with the session cookie, and the
- * browser needs CORS to let it.
+ * <p><b>Why it exists.</b> A hostname alone picks the application (epic qits-528): a service host
+ * routes only its own application's paths, so an SPA on {@code ci.<env>.<project>.<domain>} reads
+ * another application's API on that application's own name, {@code
+ * projects.<env>.<project>.<domain>} — cross-origin, with the session cookie — and the browser
+ * needs CORS to let it.
  *
  * <p><b>The rule is the domain anchor and nothing narrower.</b> An {@code Origin} under the stated
  * domain, at any depth, or the apex itself — {@link EdgeSessions#admitsOrigin}, the same anchor the
