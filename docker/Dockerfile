@@ -69,7 +69,7 @@ RUN --mount=type=secret,id=qits-client-id \
     QITS_MAVEN_REPOSITORY_URL="https://registry.qits.$QITS_DOMAIN/artifacts/maven/maven" \
     QITS_MAVEN_CENTRAL_URL="https://mirror.qits.$QITS_DOMAIN/mirror/maven/central" \
     ./mvnw -B -ntp -s .qits-maven-settings.xml package -pl service -am -Dnative -DskipTests \
-      -Dqits.maven.repository.url="$QITS_MAVEN_REPOSITORY_URL" \
+      -Dqits.maven.repository.url="https://registry.qits.$QITS_DOMAIN/artifacts/maven/maven" \
       -Dquarkus.native.native-image-xmx=4g \
       org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeBom \
       -DoutputFormat=json -DoutputName=sbom -DschemaVersion=1.6 \
