@@ -1,0 +1,109 @@
+{
+  "environment": "prod",
+  "origin": "https://qits.example.com",
+  "projectOrigin": "https://qits.example.com",
+  "slots": {
+    "system": [
+      {
+        "app": "qits-projects",
+        "label": "Overview",
+        "host": "projects",
+        "origin": "https://projects.qits.example.com",
+        "path": "/projects",
+        "position": 1,
+        "subpath": null
+      }
+    ],
+    "platform": [
+      {
+        "app": "qits-githost",
+        "label": "Git",
+        "host": "githost",
+        "origin": "https://githost.qits.example.com",
+        "path": "/githost",
+        "position": 1,
+        "subpath": null
+      },
+      {
+        "app": "qits-events",
+        "label": "Events",
+        "host": "events",
+        "origin": "https://events.qits.example.com",
+        "path": "/events",
+        "position": 2,
+        "subpath": null
+      },
+      {
+        "app": "qits-maintenance",
+        "label": "Maintenance",
+        "host": "maintenance",
+        "origin": "https://maintenance.qits.example.com",
+        "path": "/maintenance",
+        "position": 3,
+        "subpath": null
+      },
+      {
+        "app": "qits-idp",
+        "label": "Identity",
+        "host": "idp",
+        "origin": "https://idp.qits.example.com",
+        "path": "/idp",
+        "position": 4,
+        "subpath": null
+      }
+    ],
+    "project.detail": [
+      {
+        "app": "qits-workspaces",
+        "label": "Workspaces",
+        "host": "workspaces",
+        "origin": "https://workspaces.qits.example.com",
+        "path": "/workspaces",
+        "position": 1,
+        "subpath": null
+      },
+      {
+        "app": "qits-workspaces",
+        "label": "Editor",
+        "host": "workspaces",
+        "origin": "https://workspaces.qits.example.com",
+        "path": "/workspaces",
+        "position": 2,
+        "subpath": "editor"
+      }
+    ],
+    "services.details": [],
+    "daemons.details": [],
+    "libs.details": [],
+    "apps.details": [],
+    "frontends.details": [],
+    "cli.details": [],
+    "images.details": []
+  },
+  "applications": {
+    "qits-events": {
+      "origin": "https://events.qits.example.com",
+      "apiDocs": "/events/q/swagger-ui"
+    },
+    "qits-githost": {
+      "origin": "https://githost.qits.example.com",
+      "apiDocs": "/githost/q/swagger-ui"
+    },
+    "qits-idp": {
+      "origin": "https://idp.qits.example.com",
+      "apiDocs": "/idp/q/swagger-ui"
+    },
+    "qits-maintenance": {
+      "origin": "https://maintenance.qits.example.com",
+      "apiDocs": "/maintenance/q/swagger-ui"
+    },
+    "qits-projects": {
+      "origin": "https://projects.qits.example.com",
+      "apiDocs": "/projects/q/swagger-ui"
+    },
+    "qits-workspaces": {
+      "origin": "https://workspaces.qits.example.com",
+      "apiDocs": "/workspaces/q/swagger-ui"
+    }
+  }
+}

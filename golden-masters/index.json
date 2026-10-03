@@ -1,0 +1,29 @@
+{
+  "formatVersion": 1,
+  "provider": "qits-edge",
+  "states": [
+    {
+      "name": "a published navigation",
+      "slug": "a-published-navigation",
+      "params": {
+        "host": "projects.qits.example.com"
+      },
+      "dependsOn": [],
+      "operations": [
+        {
+          "operationId": "getMainNavigation",
+          "method": "GET",
+          "path": "/main-navigation",
+          "status": 200,
+          "file": "a-published-navigation/getMainNavigation.json",
+          "frozen": {
+            "ids": [],
+            "instants": [],
+            "strings": [],
+            "listFilteredTo": null
+          }
+        }
+      ]
+    }
+  ]
+}

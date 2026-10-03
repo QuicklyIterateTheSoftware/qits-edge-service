@@ -1,6 +1,12 @@
 archetype: java-service
 artifacts:
   - { type: docker, name: qits/qits-edge, sbom: .sbom/sbom.json }
+# The provider golden masters (epic qits-112): the platform packages `golden-masters/` as
+# `eu.wohlben.qits:qits-edge-golden-masters` and `@qits/edge-golden-masters`, each published only
+# when its content changed. `contracts/GoldenMasterRecordingTest` records them.
+contracts:
+  application: qits-edge
+  golden-masters: { from: golden-masters/, packages: [maven, npm] }
 # THE SITE IS SPELLED, AND IT NAMES THE COMPONENT. `true` derives it from the REPOSITORY name,
 # which would put the retired tier modifier in a storage id and then MOVE that id the day the
 # repository is renamed — a bundle's history stranded under a name nothing publishes to any

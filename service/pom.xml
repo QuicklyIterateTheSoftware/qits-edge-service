@@ -58,6 +58,9 @@
              (a Vert.x recorder in the test JVM). See that class for the four reasons, one per
              story. Released out of libs/qits-integrations-quarkus. -->
         <qits.service-mock.version>2026.1002.70617</qits.service-mock.version>
+        <!-- pact-jvm's JUnit 5 provider, for contracts/ConsumerPactVerificationTest: the version every
+             provider on the estate verifies with, so a consumer's pact is read the same way. -->
+        <pact.version>4.6.21</pact.version>
 
         <!-- INTEGRATION TESTS ARE OFF BY DEFAULT, and this repository now has both halves of that
              sentence: a failsafe plugin bound below, and ForwardAuthBootstrapIT for it to run.
@@ -264,6 +267,14 @@
             <version>${qits.service-mock.version}</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <!-- contracts/ConsumerPactVerificationTest: verifies the consumer pacts this provider
+                 pins. -->
+            <groupId>au.com.dius.pact.provider</groupId>
+            <artifactId>junit5</artifactId>
+            <version>${pact.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -305,6 +316,7 @@
                         <configuration>
                             <excludes>
                                 <exclude>**/EdgeSessionGateTest.java</exclude>
+                                <exclude>**/contracts/**</exclude>
                             </excludes>
                         </configuration>
                     </execution>
@@ -331,6 +343,29 @@
                         <configuration>
                             <includes>
                                 <include>**/EdgeSessionGateTest.java</include>
+                            </includes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <!-- The provider contract: golden-master recording and consumer pact
+                             verification (epic qits-112), in a JVM of their own for two reasons.
+
+                             Their Quarkus start is not EdgeRoutingTest's, and a second start in one
+                             JVM breaks the WebSocket tests of whichever class runs second (see
+                             session-gate-tests above).
+
+                             And a provider state publishes deployments without clearing the
+                             projection, whose tables only the edge's own package can reach. So the
+                             golden master is the whole navigation only if nothing else published
+                             in this JVM: here nothing does, on a database Flyway cleaned at start. -->
+                        <id>contract-tests</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <includes>
+                                <include>**/contracts/*Test.java</include>
                             </includes>
                         </configuration>
                     </execution>
