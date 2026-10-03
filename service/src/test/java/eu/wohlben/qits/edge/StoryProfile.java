@@ -38,18 +38,18 @@ import java.util.Map;
  *       Their urls are carried through system properties rather than static fields, because a test
  *       profile is instantiated in more than one classloader and a field written by one copy is not
  *       the field another reads.
- *   <li><b>The environment list and FOUR application vhosts</b> — the deployment's own inputs,
- *       stated exactly as {@code QITS_EDGE_ENVIRONMENTS} and {@code
- *       QITS_EDGE_APPS_<APP>_HOST_PATTERN} state them. Each {@code host-pattern} is a name nothing
- *       resolves and each {@code hosts.dev} override is the stand-in's real address: a request that
- *       reached the pattern would be a resolution bug rather than a test that happened to pass.
+ *   <li><b>The environment list and FOUR application vhosts</b> — the environments stated exactly
+ *       as {@code QITS_EDGE_ENVIRONMENTS} states them; three hosts seeded into the projection (see
+ *       below) and the mirror, a platform label, re-addressed by its {@code hosts.dev} override.
+ *       The mirror's derived alias is a name nothing here resolves: a request that reached it would
+ *       be a resolution bug rather than a test that happened to pass.
  *       <ul>
- *         <li>{@code projects} and {@code docs} are two ordinary services, gated identically, and
+ *         <li>{@code tracker} and {@code docs} are two ordinary services, gated identically, and
  *             they exist as a PAIR: they answer the same paths, so which of them received a request
  *             is the whole of what a Host name decided.
  *         <li>{@code mirror} is a MACHINE vhost whose reads a deployment opened. No browser talks
  *             to it, which makes it the name on which a person's cookie must not arrive.
- *         <li>{@code offline} is configured, routed, and points at a port nothing listens on. That
+ *         <li>{@code offline} is published, routed, and points at a port nothing listens on. That
  *             is precisely NOT the same as a name nobody claims: this one is somebody's, and the
  *             somebody is not there.
  *       </ul>
@@ -66,20 +66,23 @@ import java.util.Map;
  *       exporter points at {@code http://dev-qits-observability:8080}, another qits-net-only name.
  * </ul>
  *
- * <h2>The deployment projection is deliberately absent</h2>
+ * <h2>The deployment projection is seeded, not replayed</h2>
  *
- * <p>A name reaches a service two ways: {@code qits.edge.apps}, which is configuration, and the
- * projection, which is rebuilt from qits-events at boot. Only the first survives into a launched
- * process without a bus, and these stories are about what the edge does WITH a request rather than
- * about how it learnt the route. {@code qits.edge.projection.catchup.required=false} is the escape
- * hatch the code carries for exactly that.
+ * <p>A name reaches a service two ways: a platform app label ({@code PlatformApps}, in code — the
+ * mirror here), and the projection, which is rebuilt from qits-events at boot. A launched process
+ * has no bus, and these stories are about what the edge does WITH a request rather than about how
+ * it learnt the route. So the projection's rows are written into the edge database before the
+ * process starts — exactly the rows {@code EdgeRoutes.apply} writes for a DeploymentActive that
+ * publishes a host — and the process loads them at {@code StartupEvent} like any persisted
+ * snapshot. {@code qits.edge.projection.catchup.required=false} is the escape hatch the code
+ * carries for the bus being absent.
  *
- * <p>One consequence is load-bearing and is worth stating rather than discovering: with no
- * published host, every vhost here is a CONFIGURED one, and {@code EdgeRouter.handle} routes any
- * target for which {@code Target.service()} holds — which {@code route.toApp()} alone satisfies —
- * into {@code serviceGate}. So a configured vhost carrying a session cookie is introspected,
- * stripped and stamped exactly like a published one. {@code EdgeSessions}' class javadoc says the
- * opposite; the code is what these stories rely on, and the two sentences do not agree.
+ * <p>{@code tracker} (qits-projects' stand-in), {@code docs} and {@code offline} are therefore
+ * PUBLISHED hosts, which is what they are on the platform too: an ordinary service publishes the
+ * name it answers to. They used to be configured {@code qits.edge.apps} entries, and that door is
+ * gone (qits-528): the platform's app labels and their addresses are code, and a {@code
+ * hosts.<env>} override can re-address one of them — the mirror's stand-in, below — but can no
+ * longer add a name.
  */
 public class StoryProfile implements QuarkusTestProfile {
 
@@ -129,12 +132,19 @@ public class StoryProfile implements QuarkusTestProfile {
 
     config.put("qits.edge.environments", "prod," + StoryTarget.ENVIRONMENT);
     config.put("qits.edge.default-environment", "prod");
-    app(config, StoryTarget.PROJECTS_APP, "{env}-qits-projects", projects.address());
-    app(config, StoryTarget.DOCS_APP, "{env}-qits-docs", docs.address());
-    // A PLATFORM service names no placeholder — one process for every environment — which is the
-    // difference between the two kinds of app entry and is worth having one of.
-    app(config, StoryTarget.MIRROR_APP, "qits-platform-mirror", mirror.address());
-    app(config, StoryTarget.OFFLINE_APP, "{env}-qits-offline", StoryTarget.CLOSED_PORT_ADDRESS);
+    // Three published hosts, written into the projection before the launch (see the class javadoc).
+    seedPublishedHosts(
+        edgeUrl,
+        List.of(
+            new Published(StoryTarget.PROJECTS, StoryTarget.PROJECTS_APP, projects.address()),
+            new Published(StoryTarget.DOCS, StoryTarget.DOCS_APP, docs.address()),
+            new Published(
+                StoryTarget.OFFLINE, StoryTarget.OFFLINE_APP, StoryTarget.CLOSED_PORT_ADDRESS)));
+    // The mirror is a PLATFORM app label: where it goes is code (dev-qits-mirror), so the stand-in
+    // reaches it through the one override that exists for a local process and a suite.
+    config.put(
+        "qits.edge.apps." + StoryTarget.MIRROR_APP + ".hosts." + StoryTarget.ENVIRONMENT,
+        mirror.address());
     // ONE of the four, which is the point: the exemption is per app label, so the catalogue has a
     // vhost whose reads are open beside three that are gated on every method.
     config.put("qits.edge.auth.anonymous-read-apps", StoryTarget.MIRROR_APP);
@@ -156,13 +166,6 @@ public class StoryProfile implements QuarkusTestProfile {
     config.put("quarkus.otel.sdk.disabled", "true");
 
     return Map.copyOf(config);
-  }
-
-  /** One application entry, in the two keys a deployment really states. */
-  private static void app(
-      Map<String, String> config, String app, String hostPattern, String address) {
-    config.put("qits.edge.apps." + app + ".host-pattern", hostPattern);
-    config.put("qits.edge.apps." + app + ".hosts." + StoryTarget.ENVIRONMENT, address);
   }
 
   /**
@@ -314,6 +317,63 @@ public class StoryProfile implements QuarkusTestProfile {
     }
     System.setProperty(PROJECT_SEEDED_PROPERTY, "true");
   }
+
+  /** One host a deployment published: the application, its public label, and its one route. */
+  private record Published(String application, String host, String address) {}
+
+  /**
+   * The hosts the stories reach, as the projection would hold them had a DeploymentActive arrived:
+   * one snapshot per application with its {@code browser_host}, and one endpoint — the primary
+   * route, {@code /<host>} — at the stand-in's address. A path no route names falls to the host's
+   * own service, so every path a story sends on that name reaches that stand-in.
+   *
+   * <p>Behind {@link #seedProject}'s migrations, at the epoch, so any real frame would win.
+   */
+  private static synchronized void seedPublishedHosts(String url, List<Published> hosts) {
+    if (System.getProperty(HOSTS_SEEDED_PROPERTY) != null) {
+      return;
+    }
+    try (java.sql.Connection connection =
+            java.sql.DriverManager.getConnection(url, EmbeddedPg.USER, EmbeddedPg.PASSWORD);
+        java.sql.PreparedStatement snapshot =
+            connection.prepareStatement(
+                """
+                insert into edge_deployment_snapshot
+                  (environment_name, application_name, event_id, occurred_at, browser_host)
+                values (?, ?, ?, ?, ?)
+                on conflict (environment_name, application_name) do nothing
+                """);
+        java.sql.PreparedStatement endpoint =
+            connection.prepareStatement(
+                """
+                insert into edge_endpoint
+                  (environment_name, application_name, path, upstream_host, upstream_port, ordinal)
+                values (?, ?, ?, ?, ?, 0)
+                on conflict (environment_name, application_name, path) do nothing
+                """)) {
+      for (Published host : hosts) {
+        Upstream upstream = Upstream.parse(host.address(), PlatformApps.PORT);
+        snapshot.setString(1, StoryTarget.ENVIRONMENT);
+        snapshot.setString(2, host.application());
+        snapshot.setString(3, "seeded-before-the-launch-" + host.host());
+        snapshot.setTimestamp(4, java.sql.Timestamp.from(Instant.EPOCH));
+        snapshot.setString(5, host.host());
+        snapshot.executeUpdate();
+        endpoint.setString(1, StoryTarget.ENVIRONMENT);
+        endpoint.setString(2, host.application());
+        endpoint.setString(3, "/" + host.host());
+        endpoint.setString(4, upstream.host());
+        endpoint.setInt(5, upstream.port());
+        endpoint.executeUpdate();
+      }
+    } catch (java.sql.SQLException failure) {
+      throw new IllegalStateException(
+          "could not seed the story catalogue's published hosts", failure);
+    }
+    System.setProperty(HOSTS_SEEDED_PROPERTY, "true");
+  }
+
+  private static final String HOSTS_SEEDED_PROPERTY = "qits.test.userflow-it.hosts-seeded";
 
   /** Parked in the property table for the same reason as the urls: two classloaders, one JVM. */
   private static final String PROJECT_SEEDED_PROPERTY = "qits.test.userflow-it.project-seeded";

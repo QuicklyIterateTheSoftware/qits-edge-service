@@ -22,15 +22,15 @@
 # NO serviceAddress. The URLs are `string` here. A serviceAddress is rendered by the platform and
 # ignores a stored value, so declaring one would replace a hand-set address in the same step.
 #
-# THE SIX `QITS_EDGE_APPS_*_PATTERN` KEYS ARE DECLARED ONLY SO THE NEXT RELEASE CAN RETIRE THEM.
-# They spell the upstream alias (and, for githost and the editor, the audience) of the configured
+# THE SIX `QITS_EDGE_APPS_*_PATTERN` KEYS ARE RETIRED, and their absence here is the mechanism.
+# They spelled the upstream alias (and, for githost and the editor, the audience) of the platform's
 # app vhosts — registry, mirror, githost, editor. That is not an installation fact: every service on
 # this platform is `<env>-qits-<application>` on qits-net, so the alias is the PLATFORM's, and the
-# owner's ruling (2026-10-03, qits-528) is that it is code. Today's code still reads them, so they
-# are declared here; the release after this one derives them in code and drops them from this file.
-# Two deploys later no pinned version states them, and the GC collects the entries. Declaring them
-# now is what makes them collectable at all: a key no declaration ever stated is `neverDeclared`,
-# which the GC leaves for a person on purpose.
+# owner's ruling (2026-10-03, qits-528) is that it is code. It is now: PlatformApps derives both,
+# and nothing in the edge reads any of the six. The release before this one declared them, so a
+# declaration once stated each key; once no pinned version (serving, or one rollback away) states
+# them, qits-configuration's GC (`RetiredEntryCollector`) collects the entries. Until then they sit
+# inert in the container's environment — `EdgeChallengeTest` pins that they bind nothing.
 #
 # THE SESSIONS CLIENT FALLBACK. QITS_EDGE_SESSIONS_CLIENT_ID / _SECRET are read only when the
 # deployer's QITS_RESOURCE_IDP_CLIENT_ID / _SECRET are absent (`${QITS_RESOURCE_IDP_*:${...}}` in
@@ -41,6 +41,8 @@
 #   * QITS_EDGE_SESSIONS_CANONICAL_ORIGIN — retired; the canonical origin is derived from QITS_DOMAIN.
 #   * QITS_EDGE_SESSIONS_BROWSER_HOSTS — nothing in the edge binds it; the browser authorities are
 #     composed from QITS_DOMAIN.
+#   * QITS_EDGE_APPS_{REGISTRY,MIRROR,GITHOST,EDITOR}_HOST_PATTERN and
+#     QITS_EDGE_APPS_{GITHOST,EDITOR}_AUDIENCE_PATTERN — retired; see above. Code, not configuration.
 #   * QITS_RESOURCE_* — injected by the deployer from its resource registry; never entries.
 #   * aliases[n], mounts[n], publishes[n] — compose topology, not environment. The grammar here
 #     declares `env.` keys only (docs guide §2, §7.4); those entries stay the bootstrap's.
@@ -65,31 +67,7 @@ keys:
     type: string
     description: "Where the apex and every unmatched Host name go. Must be one of QITS_EDGE_ENVIRONMENTS."
 
-  # --- the configured app vhosts: declared only to be retired (see the header) ---------------------
-
-  env.QITS_EDGE_APPS_REGISTRY_HOST_PATTERN:
-    type: string
-    description: "TO BE RETIRED: the registry vhost's upstream alias, {env} standing for the environment. A platform constant; the next release derives it in code."
-
-  env.QITS_EDGE_APPS_MIRROR_HOST_PATTERN:
-    type: string
-    description: "TO BE RETIRED: the mirror vhost's upstream alias, {env} standing for the environment. A platform constant; the next release derives it in code."
-
-  env.QITS_EDGE_APPS_GITHOST_HOST_PATTERN:
-    type: string
-    description: "TO BE RETIRED: the githost vhost's upstream alias, {env} standing for the environment. A platform constant; the next release derives it in code."
-
-  env.QITS_EDGE_APPS_GITHOST_AUDIENCE_PATTERN:
-    type: string
-    description: "TO BE RETIRED: the audience the githost vhost accepts, {env} standing for the environment. A platform constant; the next release derives it in code."
-
-  env.QITS_EDGE_APPS_EDITOR_HOST_PATTERN:
-    type: string
-    description: "TO BE RETIRED: the editor vhost's upstream alias, {env} standing for the environment. A platform constant; the next release derives it in code."
-
-  env.QITS_EDGE_APPS_EDITOR_AUDIENCE_PATTERN:
-    type: string
-    description: "TO BE RETIRED: the audience the editor vhost accepts, {env} standing for the environment. A platform constant; the next release derives it in code."
+  # --- the platform's app vhosts: where each goes is code (PlatformApps); who may read is not -------
 
   env.QITS_EDGE_AUTH_ANONYMOUS_READ_APPS:
     type: string

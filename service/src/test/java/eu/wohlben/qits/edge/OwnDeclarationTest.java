@@ -23,9 +23,9 @@ import org.junit.jupiter.api.Test;
  * <p><b>What this test is NOT.</b> It is not a parser. qits-configuration's {@code
  * DeclarationParser} owns the grammar and is the one strict parser of this document; a second one
  * here would disagree with it the day the grammar grows. The document was checked against the real
- * parser, by running it, when it was written. What is worth a standing assertion is what a hand edit
- * can break unseen until a release is refused: the file at the exact path the deployer fetches, the
- * one top-level key, and no key declared twice.
+ * parser, by running it, when it was written. What is worth a standing assertion is what a hand
+ * edit can break unseen until a release is refused: the file at the exact path the deployer
+ * fetches, the one top-level key, and no key declared twice.
  */
 class OwnDeclarationTest {
 

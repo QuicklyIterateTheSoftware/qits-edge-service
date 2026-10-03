@@ -116,24 +116,24 @@ class SignedJwtTest {
 
   private static final String PLATFORM = "qits-platform";
 
-  /** What EdgeAuth accepts on a vhost with this audience pattern, in dev, with the rule on. */
-  private static List<String> accepted(String pattern) {
+  /** What EdgeAuth accepts on this platform app label's vhost, in dev. */
+  private static List<String> accepted(String app) {
     return EdgeAuth.acceptedAudiences(
-        EdgeAuth.audienceFor(pattern, "dev"), java.util.Optional.of(PLATFORM));
+        EdgeAuth.audienceFor(new HostEnvironments.Route("dev", app, null)));
   }
 
   @Test
   void aPlatformTokenPassesOnEveryVhost() {
     // A person's command-line token names only the platform audience. It must open every service.
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of(PLATFORM)));
-    assertNull(jwt.problem(ACCEPTED, accepted("{env}-qits-artifacts"), Instant.now(), 30));
-    assertNull(jwt.problem(ACCEPTED, accepted("{env}-qits-workspaces"), Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, accepted("editor"), Instant.now(), 30));
   }
 
   @Test
   void aTokenForTheVhostsOwnAudienceStillPasses() {
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of("dev-qits-artifacts")));
-    assertNull(jwt.problem(ACCEPTED, accepted("{env}-qits-artifacts"), Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
   }
 
   @Test
@@ -141,19 +141,7 @@ class SignedJwtTest {
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of("prod-qits-artifacts")));
     assertEquals(
         "the token is not for dev-qits-artifacts or qits-platform",
-        jwt.problem(ACCEPTED, accepted("{env}-qits-artifacts"), Instant.now(), 30));
-  }
-
-  @Test
-  void withTheRuleOffAPlatformTokenIsRefused() {
-    SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of(PLATFORM)));
-    assertEquals(
-        "the token is not for dev-qits-artifacts",
-        jwt.problem(
-            ACCEPTED,
-            EdgeAuth.acceptedAudiences("dev-qits-artifacts", java.util.Optional.empty()),
-            Instant.now(),
-            30));
+        jwt.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
   }
 
   @Test
@@ -167,11 +155,10 @@ class SignedJwtTest {
                 "RS256",
                 TestTokens.claims(ISSUER, List.of(PLATFORM), Instant.now().minusSeconds(3600))));
     assertEquals(
-        "the token expired",
-        expired.problem(ACCEPTED, accepted("{env}-qits-artifacts"), Instant.now(), 30));
+        "the token expired", expired.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
     SignedJwt foreign =
         SignedJwt.parse(TestTokens.valid("http://elsewhere/idp", List.of(PLATFORM)));
-    assertNotNull(foreign.problem(ACCEPTED, accepted("{env}-qits-artifacts"), Instant.now(), 30));
+    assertNotNull(foreign.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
   }
 
   @Test

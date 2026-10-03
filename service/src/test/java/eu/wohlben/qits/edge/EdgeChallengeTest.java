@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.smallrye.config.EnvConfigSource;
 import io.smallrye.config.PropertiesConfigSource;
 import io.smallrye.config.SmallRyeConfigBuilder;
 import io.smallrye.config.WithDefault;
@@ -34,59 +35,103 @@ import org.junit.jupiter.api.Test;
  */
 class EdgeChallengeTest {
 
+  // --- the platform's app vhosts: code, not configuration (qits-528)
+  // -------------------------------
+
   @Test
-  void theDemandedAudienceIsTheVhostsOwnEnvironment() {
-    // One entry, and the tiers cannot unlock each other. idp's audience values are env-prefixed, so
-    // a fixed string would either match one environment or, if widened, all of them.
-    assertEquals("dev-qits-artifacts", EdgeAuth.audienceFor("{env}-qits-artifacts", "dev"));
-    assertEquals("prod-qits-artifacts", EdgeAuth.audienceFor("{env}-qits-artifacts", "prod"));
+  void thePlatformAppVhostsAreExactlyTheFourPlatformApplications() {
+    assertEquals(Set.of("registry", "mirror", "githost", "editor"), PlatformApps.labels());
   }
 
   @Test
-  void aPatternWithNoPlaceholderIsALiteralAudience() {
-    // What a single-audience deployment configures. It must keep working unchanged.
-    assertEquals("qits-registry", EdgeAuth.audienceFor("qits-registry", "dev"));
+  void aPlatformAppIsAddressedByThePlatformsOwnRule() {
+    // <env>-qits-<application>:8080, the alias qits-deployments gives every service on qits-net.
+    // These were six live configuration entries, one of them naming a tier that no longer exists.
+    assertEquals(
+        new Upstream("dev-qits-artifacts", 8080),
+        EdgeRouter.appUpstream("registry", "dev", Map.of()));
+    assertEquals(
+        new Upstream("dev-qits-mirror", 8080), EdgeRouter.appUpstream("mirror", "dev", Map.of()));
+    assertEquals(
+        new Upstream("dev-qits-githost", 8080), EdgeRouter.appUpstream("githost", "dev", Map.of()));
+    assertEquals(
+        new Upstream("dev-qits-workspaces", 8080),
+        EdgeRouter.appUpstream("editor", "dev", Map.of()));
+    assertEquals(
+        new Upstream("prod-qits-artifacts", 8080),
+        EdgeRouter.appUpstream("registry", "prod", Map.of()),
+        "one label serves every tier, each at its own alias");
   }
 
   @Test
-  void aDirectVhostCanDemandItsOwnAudienceWithoutChangingTheDefault() {
-    EdgeConfig.App githost =
-        new EdgeConfig.App() {
-          @Override
-          public String audiencePattern() {
-            return "{env}-qits-githost";
-          }
-
-          @Override
-          public String hostPattern() {
-            return "{env}-qits-githost";
-          }
-
-          @Override
-          public int port() {
-            return 8080;
-          }
-
-          @Override
-          public Map<String, String> hosts() {
-            return Map.of();
-          }
-        };
+  void aLocalOverrideReAddressesOneLabelInOneEnvironmentOnly() {
+    Map<String, EdgeConfig.App> overrides =
+        Map.of("mirror", hosts(Map.of("dev", "127.0.0.1:4711")));
 
     assertEquals(
-        "dev-qits-githost",
-        EdgeAuth.audienceFor(
-            app("githost", "dev"), "{env}-qits-artifacts", Map.of("githost", githost)));
+        new Upstream("127.0.0.1", 4711), EdgeRouter.appUpstream("mirror", "dev", overrides));
     assertEquals(
-        "dev-qits-artifacts",
-        EdgeAuth.audienceFor(
-            app("registry", "dev"), "{env}-qits-artifacts", Map.of("githost", githost)));
+        new Upstream("prod-qits-mirror", 8080),
+        EdgeRouter.appUpstream("mirror", "prod", overrides));
     assertEquals(
-        "prod-qits-artifacts",
-        EdgeAuth.audienceFor(
-            HostEnvironments.Route.apex("prod"),
-            "{env}-qits-artifacts",
-            Map.of("githost", githost)));
+        new Upstream("dev-qits-artifacts", 8080),
+        EdgeRouter.appUpstream("registry", "dev", overrides));
+  }
+
+  @Test
+  void anOverrideCannotAddAVhost() {
+    // Which names the edge serves on its own is code. A key for any other label is a typo or a
+    // second route table, and it fails the startup rather than routing anything.
+    EdgeRouter.requirePlatformLabels(Map.of("githost", hosts(Map.of())));
+    IllegalArgumentException refused =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> EdgeRouter.requirePlatformLabels(Map.of("brochure", hosts(Map.of()))));
+    assertTrue(refused.getMessage().contains("qits.edge.apps.brochure"), refused.getMessage());
+  }
+
+  @Test
+  void theRetiredPatternEntriesStillInTheStoreBindNothing() {
+    // The six QITS_EDGE_APPS_*_PATTERN entries stay in every container's environment until the
+    // configuration GC collects them, two deploys after the release that stops declaring them. In
+    // that window they must be inert: no override, and above all no startup failure.
+    EdgeConfig config =
+        new SmallRyeConfigBuilder()
+            .withMapping(EdgeConfig.class)
+            .withSources(
+                new EnvConfigSource(
+                    Map.of(
+                        "QITS_EDGE_APPS_EDITOR_AUDIENCE_PATTERN", "{env}-qits-workspaces",
+                        "QITS_EDGE_APPS_EDITOR_HOST_PATTERN", "{env}-qits-workspaces",
+                        "QITS_EDGE_APPS_GITHOST_AUDIENCE_PATTERN", "{env}-qits-githost",
+                        "QITS_EDGE_APPS_GITHOST_HOST_PATTERN", "{env}-qits-githost",
+                        "QITS_EDGE_APPS_MIRROR_HOST_PATTERN", "{env}-qits-platform-mirror",
+                        "QITS_EDGE_APPS_REGISTRY_HOST_PATTERN", "{env}-qits-artifacts"),
+                    300))
+            .build()
+            .getConfigMapping(EdgeConfig.class);
+
+    EdgeRouter.requirePlatformLabels(config.apps());
+    assertEquals(
+        new Upstream("dev-qits-mirror", 8080),
+        EdgeRouter.appUpstream("mirror", "dev", config.apps()));
+  }
+
+  @Test
+  void aPlatformVhostDemandsItsApplicationsOwnAudienceInTheNamedTier() {
+    // idp's resource audiences are env-prefixed, so a token for dev's githost does not open prod's.
+    assertEquals("dev-qits-githost", EdgeAuth.audienceFor(app("githost", "dev")));
+    assertEquals("prod-qits-githost", EdgeAuth.audienceFor(app("githost", "prod")));
+    assertEquals("dev-qits-workspaces", EdgeAuth.audienceFor(app("editor", "dev")));
+    assertEquals("dev-qits-artifacts", EdgeAuth.audienceFor(app("registry", "dev")));
+    assertEquals("dev-qits-mirror", EdgeAuth.audienceFor(app("mirror", "dev")));
+  }
+
+  @Test
+  void everyOtherNameDemandsThePlatformAudienceAlone() {
+    // A projected service host and an environment door: roles alone, the open calling model.
+    assertEquals("qits-platform", EdgeAuth.audienceFor(app("ci", "dev")));
+    assertEquals("qits-platform", EdgeAuth.audienceFor(HostEnvironments.Route.apex("prod")));
   }
 
   // --- the platform audience ---------------------------------------------------------------------
@@ -94,44 +139,24 @@ class EdgeChallengeTest {
   @Test
   void thePlatformAudienceIsAcceptedNextToTheVhostsOwn() {
     assertEquals(
-        List.of("dev-qits-artifacts", "qits-platform"),
-        EdgeAuth.acceptedAudiences("dev-qits-artifacts", Optional.of("qits-platform")));
+        List.of("dev-qits-githost", "qits-platform"),
+        EdgeAuth.acceptedAudiences("dev-qits-githost"));
     assertEquals(
-        List.of("dev-qits-artifacts"),
-        EdgeAuth.acceptedAudiences("dev-qits-artifacts", Optional.of("dev-qits-artifacts")),
+        List.of("qits-platform"),
+        EdgeAuth.acceptedAudiences("qits-platform"),
         "an audience that is both is named once");
   }
 
   @Test
-  void anEmptyPlatformAudienceSwitchesTheRuleOff() {
-    assertEquals(
-        List.of("dev-qits-artifacts"),
-        EdgeAuth.acceptedAudiences("dev-qits-artifacts", Optional.empty()));
-    assertEquals(
-        List.of("dev-qits-artifacts"),
-        EdgeAuth.acceptedAudiences("dev-qits-artifacts", Optional.of("  ")));
-  }
-
-  @Test
-  void theShippedPlatformAudienceHasNoTier() throws Exception {
+  void thePlatformAudienceHasNoTier() {
     // Roles, not tiers, are the permission. A placeholder here would make it a tier again.
-    assertEquals("qits-platform", shippedDefault("platformAudience"));
-  }
-
-  @Test
-  void anEmptyConfiguredValueIsReadAsOff() {
-    // The operator's switch: QITS_EDGE_AUTH_PLATFORM_AUDIENCE= must mean "off", not "the default".
-    assertEquals(
-        Optional.empty(),
-        authConfig(Map.of("qits.edge.auth.platform-audience", "")).platformAudience());
-    assertEquals(Optional.of("qits-platform"), authConfig(Map.of()).platformAudience());
+    assertEquals("qits-platform", PlatformApps.PLATFORM_AUDIENCE);
   }
 
   @Test
   void aBasicCredentialFollowsTheSameAudienceRule() {
     // The Basic path judges the minted token's audiences, cached or fresh, with the same rule.
-    List<String> accepted =
-        EdgeAuth.acceptedAudiences("dev-qits-artifacts", Optional.of("qits-platform"));
+    List<String> accepted = EdgeAuth.acceptedAudiences("dev-qits-artifacts");
     assertNull(EdgeAuth.refusalFor(new JsonArray(List.of("qits-platform")), accepted));
     assertNull(EdgeAuth.refusalFor(new JsonArray(List.of("dev-qits-artifacts")), accepted));
     assertEquals(
@@ -233,27 +258,6 @@ class EdgeChallengeTest {
     // vhost needs a token.
     assertFalse(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, Set.of()));
     assertFalse(EdgeAuth.anonymousRead(app("registry", "dev"), HttpMethod.HEAD, Set.of()));
-  }
-
-  @Test
-  void theShippedAudiencePatternsAreTheLiteralPlatformAudience() throws Exception {
-    // The open calling model's own rule (service-client-identity-plan.md, C4): a freshly configured
-    // vhost — the global default and an app entry with no override of its own — opens with roles
-    // alone, not a tier-scoped audience. An explicitly configured pattern still wins; see
-    // StubGateways, which sets one for exactly the app entries this pins.
-    assertEquals("qits-platform", shippedDefault("audiencePattern"));
-    assertEquals(
-        "qits-platform",
-        EdgeConfig.App.class.getMethod("audiencePattern").getAnnotation(WithDefault.class).value());
-  }
-
-  @Test
-  void theShippedAudienceDefaultsCollapseAcceptedAudiencesToOne() {
-    // Both shipped defaults are the SAME literal, so acceptedAudiences names it once rather than
-    // twice — proved against the real defaults above, not a value this test chose on its own.
-    assertEquals(
-        List.of("qits-platform"),
-        EdgeAuth.acceptedAudiences("qits-platform", Optional.of("qits-platform")));
   }
 
   @Test
@@ -910,15 +914,6 @@ class EdgeChallengeTest {
     return AuthConfig.class.getMethod(key).getAnnotation(WithDefault.class).value();
   }
 
-  /** {@link AuthConfig} as SmallRye reads it from these properties and the shipped defaults. */
-  private static AuthConfig authConfig(Map<String, String> properties) {
-    return new SmallRyeConfigBuilder()
-        .withMapping(AuthConfig.class)
-        .withSources(new PropertiesConfigSource(properties, "test", 500))
-        .build()
-        .getConfigMapping(AuthConfig.class);
-  }
-
   private static String sessionDefault(String key) throws Exception {
     return SessionsConfig.class.getMethod(key).getAnnotation(WithDefault.class).value();
   }
@@ -926,6 +921,10 @@ class EdgeChallengeTest {
   private static String encode(String plain) {
     return java.util.Base64.getEncoder()
         .encodeToString(plain.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  }
+
+  private static EdgeConfig.App hosts(Map<String, String> hosts) {
+    return () -> hosts;
   }
 
   private static HostEnvironments.Route app(String app, String environment) {

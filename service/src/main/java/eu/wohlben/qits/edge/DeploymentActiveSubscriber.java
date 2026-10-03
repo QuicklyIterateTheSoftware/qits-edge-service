@@ -137,10 +137,10 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
    * <p>Three refusals, and each of them would otherwise be a name the edge cannot route or a name
    * it routes to the wrong process: a host that is not a DNS label, a host that is an ENVIRONMENT
    * name — {@code HostEnvironments} reads the first label as an application, so the environment
-   * would become unreachable — and a host that is already a configured {@code qits.edge.apps} entry
-   * for a DIFFERENT service. The last one is a match rather than a ban: {@code registry} is both a
-   * configured vhost and the name qits-artifacts publishes, and they are the same service exactly
-   * when the configured pattern resolves to the address the deployment published.
+   * would become unreachable — and a host that is already a platform app vhost ({@link
+   * PlatformApps}) for a DIFFERENT service. The last one is a match rather than a ban: {@code
+   * registry} is both a platform vhost and the name qits-artifacts publishes, and they are the same
+   * service exactly when the platform's derived address is the one the deployment published.
    */
   private String browserHost(
       DeploymentActivePayload active, String environment, List<EdgeEndpoint> endpoints) {
@@ -163,9 +163,8 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
                 + " environment would stop being reachable by name.");
       }
     }
-    EdgeConfig.App configured = config.apps().get(host);
-    if (configured != null) {
-      Upstream pattern = EdgeRouter.appUpstream(configured, environment);
+    if (PlatformApps.contains(host)) {
+      Upstream pattern = EdgeRouter.appUpstream(host, environment, config.apps());
       Upstream published = endpoints.isEmpty() ? null : endpoints.get(0).upstream();
       if (published == null
           || !pattern.host().equalsIgnoreCase(published.host())
@@ -173,11 +172,11 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
         throw new IllegalArgumentException(
             "`"
                 + host
-                + "` is a configured application vhost pointing at "
+                + "` is a platform application vhost pointing at "
                 + pattern
                 + ", and this deployment publishes it as "
                 + published
-                + ". The configured one is kept.");
+                + ". The platform's one is kept.");
       }
     }
     return host;

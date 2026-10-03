@@ -22,7 +22,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import org.jboss.logging.Logger;
 
@@ -70,7 +69,7 @@ import org.jboss.logging.Logger;
  * happens next is the Bearer path exactly — same issuer, same expiry, same signature, same demanded
  * audience — so a commissioned client opens precisely the vhosts its audiences name and no others.
  *
- * <p><b>One audience opens every vhost:</b> {@link AuthConfig#platformAudience()}. A token that
+ * <p><b>One audience opens every vhost:</b> {@link PlatformApps#PLATFORM_AUDIENCE}. A token that
  * names it passes on every path above, next to the vhost's own audience. Its roles are the
  * permission, and the services check them.
  *
@@ -133,9 +132,6 @@ public class EdgeAuth {
   private static final String BASIC = "basic ";
 
   @Inject AuthConfig config;
-
-  /** Direct-vhost entries own the per-application audience pattern. */
-  @Inject EdgeConfig edgeConfig;
 
   @Inject Idp idp;
 
@@ -265,46 +261,33 @@ public class EdgeAuth {
   }
 
   /**
-   * The audience this vhost demands: the configured pattern with {@code {env}} filled in from the
-   * environment the Host name named.
+   * The audience this vhost demands, derived from what it fronts rather than configured.
    *
-   * <p><b>This is the boundary between tiers.</b> idp's audience values are env-prefixed, so
-   * deriving the demand per request is what stops a token minted for dev's registry from opening
-   * prod's vhost — one entry, and neither tier can unlock the other. A pattern with no placeholder
-   * comes back unchanged, which is a literal audience and is what a single-audience deployment
-   * wants.
+   * <p>A platform app vhost ({@link PlatformApps}) demands its application's own resource audience
+   * in the environment the Host name named: {@code githost.dev} demands {@code dev-qits-githost}.
+   * <b>This is the boundary between tiers.</b> idp's resource audiences are env-prefixed, so a
+   * token minted for dev's githost does not open prod's.
+   *
+   * <p>Every other name — a projected service host, an environment door — demands the platform
+   * audience alone, the open calling model's own rule: roles, not tiers, are the permission.
+   *
+   * <p>Package-private and static so it can be asserted without booting an application.
    */
-  static String audienceFor(String pattern, String environment) {
-    return pattern.replace("{env}", environment);
+  static String audienceFor(HostEnvironments.Route route) {
+    return route.toApp() && PlatformApps.contains(route.app())
+        ? PlatformApps.audience(route.app(), route.environment())
+        : PlatformApps.PLATFORM_AUDIENCE;
   }
 
   /**
-   * Resolve the audience for one route without widening the historic default. An application may
-   * opt into its own resource audience; an unknown or environment route deliberately keeps the
-   * configured global audience.
+   * The audiences that open a vhost: the one it demands, and the platform audience. A token needs
+   * only one of them. The platform audience is the same on every vhost and every tier; the token's
+   * roles are what the services then check.
    */
-  static String audienceFor(
-      HostEnvironments.Route route, String defaultPattern, Map<String, EdgeConfig.App> apps) {
-    String pattern = defaultPattern;
-    if (route.toApp()) {
-      EdgeConfig.App app = apps.get(route.app());
-      if (app != null) {
-        pattern = app.audiencePattern();
-      }
-    }
-    return audienceFor(pattern, route.environment());
-  }
-
-  /**
-   * The audiences that open a vhost: the one it demands, and the platform audience when one is set.
-   * A token needs only one of them. The platform audience is the same on every vhost and every
-   * tier; the token's roles are what the services then check.
-   */
-  static List<String> acceptedAudiences(String demanded, Optional<String> platform) {
-    String everywhere = platform.map(String::strip).orElse("");
-    return everywhere.isEmpty() || everywhere.equals(demanded)
+  static List<String> acceptedAudiences(String demanded) {
+    return PlatformApps.PLATFORM_AUDIENCE.equals(demanded)
         ? List.of(demanded)
-        : List.of(demanded, everywhere);
+        : List.of(demanded, PlatformApps.PLATFORM_AUDIENCE);
   }
 
   /** Whether this request is docker fetching a token rather than asking for a registry object. */
@@ -355,10 +338,7 @@ public class EdgeAuth {
    */
   public Future<String> checkCredential(HostEnvironments.Route route, HttpServerRequest request) {
     String header = request.getHeader(HttpHeaders.AUTHORIZATION);
-    List<String> audiences =
-        acceptedAudiences(
-            audienceFor(route, config.audiencePattern(), edgeConfig.apps()),
-            config.platformAudience());
+    List<String> audiences = acceptedAudiences(audienceFor(route));
     if (header != null && header.toLowerCase(Locale.ROOT).startsWith(BASIC)) {
       String credential = header.substring(BASIC.length()).trim();
       String opaque = TokenValue.fromBasic(credential);

@@ -31,7 +31,7 @@ import org.junit.jupiter.api.BeforeAll;
  * <p><b>Which is why the far side is TWO ordinary services rather than one.</b> "The request
  * reached a service" is a status code; "the request reached <i>this</i> service and not that one"
  * is only sayable if there is a that one, and only provable on the receiver's own recording. So
- * {@code qits-projects} and {@code qits-docs} are configured identically, gated identically, and
+ * {@code qits-projects} and {@code qits-docs} are published identically, gated identically, and
  * both answer the same path — and the story asks for that path on both names with the same cookie,
  * so the name is the only thing that differs between the two requests.
  *
@@ -79,7 +79,7 @@ public class VhostRoutingIT {
       string a client can send that reaches a host nobody configured.
 
       The story is one person following one link and then another, and a third caller who is not a
-      person. She asks `projects.dev.acme.example.com` for a version, and qits-projects answers. She
+      person. She asks `tracker.dev.acme.example.com` for a version, and qits-projects answers. She
       follows a link to `docs.dev.acme.example.com` and asks for **the same path**, with the same
       cookie, from the same browser — and a completely different process answers, which is a fact
       neither of the two status codes can tell you and both of the recordings can.
