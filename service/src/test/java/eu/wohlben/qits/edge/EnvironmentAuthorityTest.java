@@ -51,6 +51,20 @@ class EnvironmentAuthorityTest {
   }
 
   @Test
+  void theLandingLabelComposesTheProjectRootNotALandingName() {
+    // `landing` means the project's root, served at the innermost door itself. `landing.<…>` is a
+    // 404 by design, so composing it would hand a browser a dead link.
+    assertEquals(
+        "http://qits.example.com",
+        of("projects.qits.example.com").hostOrigin(HostEnvironments.LANDING));
+    assertEquals(
+        "http://dev.acme.example.com",
+        of("ci.dev.acme.example.com").hostOrigin(HostEnvironments.LANDING));
+    // Inside no project there is no root to name either.
+    assertNull(of("example.com").hostOrigin(HostEnvironments.LANDING));
+  }
+
+  @Test
   void oneProjectComposesBothShapesAccordingToItsFlag() {
     // The platform's own project, on both sides of the day its flag flips. Nothing is hard-coded
     // for it: the same slug composes `<app>.<env>.qits.<domain>` while it supports environments and

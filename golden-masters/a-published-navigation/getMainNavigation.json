@@ -93,6 +93,9 @@
       "origin": "https://idp.qits.example.com",
       "apiDocs": "/idp/q/swagger-ui"
     },
+    "qits-landing": {
+      "origin": "https://qits.example.com"
+    },
     "qits-maintenance": {
       "origin": "https://maintenance.qits.example.com",
       "apiDocs": "/maintenance/q/swagger-ui"

@@ -111,13 +111,11 @@ public class ProviderStates {
   // --- the states ------------------------------------------------------------------------------
 
   /**
-   * The platform project {@code qits} with six applications deployed, each on a host of its own:
-   * qits-projects, qits-githost, qits-events, qits-maintenance, qits-idp and qits-workspaces. Each
-   * places navigation and publishes api docs, so every part of the document has content. Asked on
-   * qits-projects' host.
-   *
-   * <p>qits-landing is left out on purpose: the edge reports it at {@code landing.<project>}, which
-   * is a known, parked defect, and a golden master would publish that as the contract.
+   * The platform project {@code qits} with seven applications deployed. Six are on a host of their
+   * own — qits-projects, qits-githost, qits-events, qits-maintenance, qits-idp and qits-workspaces
+   * — and each places navigation and publishes api docs, so every part of the document has content.
+   * The seventh, qits-landing, publishes the reserved {@code landing} label and nothing else, so
+   * its origin is the project's root. Asked on qits-projects' host.
    */
   private Setup aPublishedNavigation() {
     projects.apply(PROJECT, "p-contract", true, false, UUID.randomUUID().toString(), Instant.now());
@@ -160,6 +158,8 @@ public class ProviderStates {
         List.of(
             placement("project.detail", "Workspaces", 1, null),
             placement("project.detail", "Editor", 2, "editor")));
+    // The project's root: no navigation, no api docs, and the reserved label as its host.
+    publish(environment, "qits-landing", "landing", "/landing", null, List.of());
 
     // The subscriber settles a frame it refuses with a log line and nothing else, so a state that
     // published less than it says would only show up later as a confusing body diff.
@@ -171,7 +171,8 @@ public class ProviderStates {
             "qits-events",
             "qits-maintenance",
             "qits-idp",
-            "qits-workspaces")) {
+            "qits-workspaces",
+            "qits-landing")) {
       if (!published.contains(application)) {
         throw new IllegalStateException(
             "State '" + A_PUBLISHED_NAVIGATION + "' did not publish " + application);
@@ -185,6 +186,17 @@ public class ProviderStates {
   /** One application's whole snapshot in one environment, as the deployments service sends it. */
   private void publish(
       String environment, String application, String host, String path, List<JsonObject> nav) {
+    publish(environment, application, host, path, path + "/q/swagger-ui", nav);
+  }
+
+  /** {@link #publish}, with the api docs path stated; null publishes none. */
+  private void publish(
+      String environment,
+      String application,
+      String host,
+      String path,
+      String apiDocsPath,
+      List<JsonObject> nav) {
     JsonArray navigation = new JsonArray();
     nav.forEach(navigation::add);
     JsonObject payload =
@@ -192,7 +204,7 @@ public class ProviderStates {
             .put("applicationName", application)
             .put("environmentName", environment)
             .put("browserHost", host)
-            .put("apiDocsPath", path + "/q/swagger-ui")
+            .put("apiDocsPath", apiDocsPath)
             .put(
                 "endpoints",
                 new JsonArray()

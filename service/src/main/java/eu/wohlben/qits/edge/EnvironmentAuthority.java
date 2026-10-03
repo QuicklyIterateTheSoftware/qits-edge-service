@@ -85,11 +85,20 @@ public record EnvironmentAuthority(String scheme, String authority, String proje
    * {@code https://ci.dev.acme.example.com} — where one application of this project is. One label,
    * always: the project label and the environment label are already in the authority.
    *
+   * <p>The reserved {@link HostEnvironments#LANDING} label is the one exception: it means this
+   * project's root, which is served at the innermost door itself, so its origin is {@link
+   * #origin()}. {@code landing.<authority>} is a 404 by design and is never composed.
+   *
    * @return null when this name is inside no project, because there is then no application address
    *     to compose. A door answers without a redirect rather than with a name that 404s.
    */
   public String hostOrigin(String host) {
-    return project == null ? null : scheme + "://" + host + "." + authority;
+    if (project == null) {
+      return null;
+    }
+    return HostEnvironments.LANDING.equals(host)
+        ? origin()
+        : scheme + "://" + host + "." + authority;
   }
 
   /**
