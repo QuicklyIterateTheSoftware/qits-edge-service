@@ -39,10 +39,9 @@ proxied.
 A frame is **refused whole** — logged and settled, routes unchanged — when it publishes a path
 another application owns, a host another application owns, a host that is not a DNS label, a host
 that is an environment name, an unknown slot, the same `(slot, label)` placement twice, or a host
-that is also a configured
-`qits.edge.apps.<app>` entry pointing somewhere else. The last one is a match rather than a ban:
-`registry` is both a configured vhost and the name qits-artifacts publishes, and they are the same
-service exactly when the configured pattern resolves to the address the deployment published.
+that is also a platform app label (`PlatformApps`) pointing somewhere else. The last one is a match
+rather than a ban: `registry` is both a platform vhost and the name qits-artifacts publishes, and
+they are the same service exactly when the derived alias is the address the deployment published.
 
 The deployed edge therefore needs two provisioned PostgreSQL resources: `edge` for this projection
 (`QITS_RESOURCE_EDGE_URL`, `_USERNAME`, `_PASSWORD`) and `eventstream` for the durable consumer's
@@ -101,7 +100,7 @@ Historical mentions of it below are exactly that; nothing on the platform runs o
         │ dev-qits-artifacts  │  │ prod-qits-artifacts│  │ dev-qits-ci        │
         │  :8080              │  │  :8080             │  │  :8080             │
         └─────────────────────┘  └────────────────────┘  └────────────────────┘
-         configured, qits.edge.apps                       deployment projection
+         platform app label, in code                      deployment projection
 ```
 
 ## The routing model
@@ -159,7 +158,7 @@ platform's own machine vhosts are docker network aliases of this container — q
 `githost.<env>.localhost` and `githost.<env>.internal` — and they are deliberately not under the
 public domain: every image reference, every maven resolution and every clone from a container goes
 through one of them. Such a name is read as `<app>[.<env>].<machine-suffix>`, with the leftmost
-label joined against `qits.edge.apps` exactly as an app label under the domain is, an optional
+label joined against the platform app labels exactly as an app label under the domain is, an optional
 environment label behind it, and a suffix nobody enumerates — `localhost`, `internal`, whatever else
 this container is aliased as. A name outside the domain that was answered as a door instead took
 docker pulls, dependency resolution and container git down together, which is the incident this
@@ -192,8 +191,8 @@ single label in front of an environment is: a **published service claims it firs
 what is left, because a slug and a published browser host are the same shape and only the deployment
 projection knows the second set.
 
-**A name reaches a service two ways.** `qits.edge.apps` is the configured one — the machine vhosts,
-and the auth attributes that go with them. The deployment projection is the other: a service
+**A name reaches a service two ways.** The platform app labels are the first — the machine vhosts,
+and the auth attributes that go with them, in code (`PlatformApps`). The deployment projection is the other: a service
 publishes the name it answers to, and that name then serves its SPA at `/` and every wire route it
 owns. The two are the same kind of vhost, so everything below treats them alike.
 
@@ -350,17 +349,12 @@ a file.
 | `qits.edge.domain` | `QITS_DOMAIN` | `localhost` | **The one domain this platform states about itself**, and the primitive every composed name is built from: the grammar every Host is read against, the certificate's SANs, the browser return authorities, and the canonical origin. It is the estate's fact rather than this service's, so it is read under the platform's own spelling — qits-deployments writes `QITS_DOMAIN` into every container beside `QITS_ENVIRONMENT`. `QITS_EDGE_ACME_DOMAIN` and `QITS_EDGE_SESSIONS_CANONICAL_ORIGIN` were the same fact under two more names and are **retired** |
 | `qits.edge.environments` | `QITS_EDGE_ENVIRONMENTS` | `prod` | The routable environment names, comma separated |
 | `qits.edge.default-environment` | `QITS_EDGE_DEFAULT_ENVIRONMENT` | `prod` | Where the apex and every unmatched host go. **Must be in the list** |
-| `qits.edge.apps.<app>.host-pattern` | `QITS_EDGE_APPS_<APP>_HOST_PATTERN` | — (`mirror`: `{env}-qits-mirror`) | **Required per app.** `{env}` is the only placeholder, and every application names it. The one shipped entry is `mirror`, whose value is the platform's own pull-through cache rather than a decision |
-| `qits.edge.apps.<app>.port` | `QITS_EDGE_APPS_<APP>_PORT` | `8080` | The port that application listens on |
-| `qits.edge.apps.<app>.hosts.<env>` | `QITS_EDGE_APPS_<APP>_HOSTS_<ENV>` | — | Per-environment override, `host` or `host:port` |
-| `qits.edge.apps.<app>.audience-pattern` | `QITS_EDGE_APPS_<APP>_AUDIENCE_PATTERN` | `qits-platform` | The audience this app's own vhost accepts, next to the platform audience. An app such as githost or the editor names its own resource pattern (`{env}-qits-githost`); an app with none opens with roles alone |
+| `qits.edge.apps.<app>.hosts.<env>` | `QITS_EDGE_APPS_<APP>_HOSTS_<ENV>` | — | A local process's or a suite's override of one **platform** label in one environment, `host` or `host:port`. It cannot add a label; a live deployment sets none |
 | `qits.edge.projection.catchup.required` | `QITS_EDGE_PROJECTION_CATCHUP_REQUIRED` | `true` | Requires a complete deployment-history rebuild before the edge is ready; turn off only in an intentionally offline test/dev setup |
 | `qits.edge.projection.catchup.retry` | `QITS_EDGE_PROJECTION_CATCHUP_RETRY` | `PT1S` | Delay before retrying an incomplete, failed, or unavailable deployment-history read |
 | `qits.idp.dial-url` | `QITS_RESOURCE_IDP_URL`, then `QITS_IDP_DIAL_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-platform-idp:8080/idp` | The address the edge dials. `/jwks`, `/token` and the two introspection paths are derived from it, never configured. It is never the issuer: the accepted `iss` is `https://idp.qits.<qits.edge.domain>`, derived in code and not configurable, plus the legacy `http://qits-platform-idp:8080/idp` until idp stamps the derived one (qits-730) |
 | `qits.edge.auth.enforce-on-apps` | `QITS_EDGE_AUTH_ENFORCE_ON_APPS` | `true` | Service vhosts require a valid idp token |
 | `qits.edge.auth.anonymous-read-apps` | `QITS_EDGE_AUTH_ANONYMOUS_READ_APPS` | — | App labels whose `GET` and `HEAD` are open; every other method on them still needs a token |
-| `qits.edge.auth.audience-pattern` | `QITS_EDGE_AUTH_AUDIENCE_PATTERN` | `qits-platform` | The audience a token must name; `{env}` is resolved per request, a value without it is a literal. The shipped default is the same literal as the platform audience below, so a freshly configured vhost opens with roles alone; an explicitly configured pattern (today's `{env}-qits-artifacts`, or an app's own) keeps working unchanged |
-| `qits.edge.auth.platform-audience` | `QITS_EDGE_AUTH_PLATFORM_AUDIENCE` | `qits-platform` | One audience that opens every gated vhost, next to the vhost's own. No `{env}`: roles are the permission. Empty switches it off |
 | `qits.edge.auth.clock-skew-seconds` | `QITS_EDGE_AUTH_CLOCK_SKEW_SECONDS` | `30` | How far this clock and idp's may disagree about `exp` |
 | `qits.edge.auth.jwks-refresh-cooldown-ms` | `QITS_EDGE_AUTH_JWKS_REFRESH_COOLDOWN_MS` | `5000` | Shortest gap between two JWKS fetches |
 | `qits.edge.auth.basic-cache-ttl-ms` | `QITS_EDGE_AUTH_BASIC_CACHE_TTL_MS` | `300000` | Ceiling on how long a validated HTTP Basic credential is believed; the minted token's own life is the other half |
@@ -380,51 +374,42 @@ a file.
 | `qits.edge.sessions.client-secret` | `QITS_RESOURCE_IDP_CLIENT_SECRET`, then `QITS_EDGE_SESSIONS_CLIENT_SECRET` | — | Its secret, same fallback. Neither pair set is still "no credential", which fails startup exactly as before if the gate is on |
 | `qits.observability.url` | `QITS_OBSERVABILITY_URL` | `http://qits-observability:8080` | Where telemetry goes; the OTLP endpoint is derived from it |
 
-Five things fail **at startup** rather than per request, deliberately: an environment or application
+Six things fail **at startup** rather than per request, deliberately: an environment or application
 name that could not be a DNS label, a default that is not in the list, an application that shares an
-environment's name (the tie-break would make that environment unreachable), and the session gate
-turned on with no client id and secret to introspect with. All would otherwise be a 502, a 404, a
+environment's name (the tie-break would make that environment unreachable), an address override for
+a label that is not a platform app, and the session gate turned on with no client id and secret to
+introspect with. All would otherwise be a 502, a 404, a
 connection error or a 401 on every request, with nothing to read.
 
-The applications map is shipped with **one** entry, `mirror`, and every other application entry is
-the on-switch it always was: a name only reaches an environment's service when a deployment names
-it. A deployment declares those without a file:
+**The platform's app vhosts are code, not configuration** (qits-528). `PlatformApps` maps each
+label to the application it fronts, and the upstream is that application's wire alias in the
+environment the Host name named — `<env>-qits-<application>:8080`, the address qits-deployments
+gives every service on qits-net:
 
-```
-QITS_EDGE_APPS_REGISTRY_HOST_PATTERN={env}-qits-artifacts
-QITS_EDGE_APPS_GITHOST_HOST_PATTERN={env}-qits-githost
-```
+| label | application | `dev`'s upstream | demanded audience |
+|---|---|---|---|
+| `registry` | `qits-artifacts` | `dev-qits-artifacts:8080` | `dev-qits-artifacts` |
+| `mirror` | `qits-mirror` | `dev-qits-mirror:8080` | `dev-qits-mirror` |
+| `githost` | `qits-githost` | `dev-qits-githost:8080` | `dev-qits-githost` |
+| `editor` | `qits-workspaces` | `dev-qits-workspaces:8080` | `dev-qits-workspaces` |
 
-`{env}` is what keeps a tier's services separate, and **every** application entry names it now.
-There used to be a second kind that did not: a platform service was one process for the whole
-estate, addressed bare, so its entry carried no placeholder. That plane is deleted — the mirror is
-an ordinary application in the one tier — and the placeholder is no longer something an entry can
-be an exception to.
+These used to be keys — `qits.edge.apps.<app>.host-pattern`, `audience-pattern` and `port` — and
+the live store held six `QITS_EDGE_APPS_*_PATTERN` entries spelling this one rule, one of them a
+tier that no longer exists (`{env}-qits-platform-mirror`). None of it is a fact about an
+installation, so none of it is configurable. The six entries are left inert until the configuration
+GC collects them: `.config/qits/configuration.yml` stopped declaring them in the release after the
+one that first did.
 
-`mirror` is nonetheless the entry this file ships, and the reason is revocability rather than
-spelling. A map entry cannot be unset by a later config source, only overridden, so shipping one
-costs the ability to revoke it — and there is nothing to revoke: the pull-through cache is the
-platform's own, one per tier, and a tier running a different one would not be this platform. The
-environment variable that used to carry it only respelled that in a second place. An environment's
-own application stays out, because which tiers publish a machine vhost is a deployment's decision
-and has to remain revocable.
-
-`{env}` is the **edge's own** placeholder throughout this family, substituted per request in
-`EdgeRouter.appUpstream` from the environment the Host name named. It is not Quarkus property
-expansion: a `${QITS_ENVIRONMENT:dev}` here would be resolved once at startup and would name the
-container's own tier rather than the requested one.
-
-`qits.edge.apps.<app>.hosts.<env>` exists for the two topologies a pattern cannot describe — a
-developer running one service on `localhost:8000`, and this repository's own tests, where the
-upstreams are stand-in servers on ephemeral ports (`StubGateways` for the suites, `StoryUpstream`
-for the userflow catalogue). Prefer the pattern: an override is a second place an address is
-written, and a stale one sends a whole tier's traffic to the wrong process. Note also that a
-`@ConfigMapping` map key cannot be **unset** by a later config source, only overridden, which is why
-none is shipped in `application.properties`.
+`qits.edge.apps.<app>.hosts.<env>` is what is left: a fixed address for one platform label in one
+environment, for a developer running one service on `localhost:8000` and for this repository's own
+tests, where the upstreams are stand-in servers on ephemeral ports (`StubGateways` for the suites,
+`StoryUpstream` for the userflow catalogue). It cannot add a label — a key naming anything else
+fails startup — and a live deployment sets none: a stale override sends a whole tier's traffic to
+the wrong process.
 
 There is **no** `qits.edge.upstream-host-pattern`, `qits.edge.upstream-port` or
 `qits.edge.upstream-hosts`. Those were the per-environment gateway's address, and there is no
-per-environment gateway: an upstream is an application entry or a host a deployment published, and
+per-environment gateway: an upstream is a platform app label or a host a deployment published, and
 nothing else.
 
 ## Authentication — terminated here, on the first node
@@ -441,25 +426,19 @@ would buy. An unknown `kid` buys **one** refresh, behind a cooldown, so a made-u
 into a request per request at the identity provider. The checks are RS256 only, an exact accepted `iss`, live
 `exp` within the skew, and the demanded audience or the platform audience in `aud`.
 
-**The audience is derived per request**, from `qits.edge.auth.audience-pattern` — or an app's own
-`qits.edge.apps.<app>.audience-pattern`, when it names one — with `{env}` filled in from the
-environment the vhost named, the same placeholder as the host patterns above. idp's audience values
-are env-prefixed, so a **configured** pattern is what keeps the tiers apart: a token minted for
-`registry.dev.…` does not open `registry.prod.…`, from one entry. A pattern with no placeholder is a
-literal audience, for a single-audience deployment.
+**The audience is derived per request, in code.** A platform app vhost demands its application's
+own `<env>-qits-<application>` (the table above), resolved from the environment the vhost named.
+idp's resource audiences are env-prefixed, so that is what keeps the tiers apart: a token minted for
+`githost.dev.…` does not open `githost.prod.…`. Every other name — a published service host —
+demands the platform audience alone.
 
-**One audience opens every vhost.** A token whose `aud` names `qits.edge.auth.platform-audience`
-(`qits-platform`) passes on every gated vhost and on every path: Bearer, Git's
-`Basic oauth2:<token>`, and Basic client credentials. A person's command-line tool gets this token.
-The audience has no `{env}`, on purpose: it only says the token is for this platform, and the
-token's roles are what each service checks. An empty value switches the rule off.
-
-**The shipped default of `audience-pattern` is the same literal, `qits-platform`** — both the
-global key and an app entry's own — so a vhost nobody has configured a tier-scoped pattern for opens
-with roles alone (service-client-identity-plan.md, C4). This is additive: today's live extras still
-set `QITS_EDGE_AUTH_AUDIENCE_PATTERN={env}-qits-artifacts` and the githost and editor entries' own
-`*_AUDIENCE_PATTERN`, and an explicitly configured value always wins over the default — nothing about
-a gated vhost changes until that entry is deleted.
+**One audience opens every vhost.** A token whose `aud` names `qits-platform` passes on every gated
+vhost and on every path: Bearer, Git's `Basic oauth2:<token>`, and Basic client credentials. A
+person's command-line tool gets this token. The audience has no `{env}`, on purpose: it only says
+the token is for this platform, and the token's roles are what each service checks
+(service-client-identity-plan.md, C4). `qits.edge.auth.audience-pattern` and
+`qits.edge.auth.platform-audience` were keys until qits-528, each defaulting to that literal; no
+deployment set either.
 
 ### Anonymous reads, named per app
 
@@ -801,7 +780,7 @@ release published.
 One edge exists because there is one host port to bind, and it fronts every environment's services,
 so it belongs to no tier. The target is also what makes the routing work: a platform service joins
 every environment's per-application networks, so `<env>-qits-artifacts`, `<env>-qits-projects` and
-every other pattern in `qits.edge.apps` resolves for every name in `qits.edge.environments`. An
+every other platform alias resolves for every name in `qits.edge.environments`. An
 environment service would reach only its own tier and answer 502 for the rest — which is exactly
 the shape `UpstreamOutageIT`'s third beat drives on purpose.
 

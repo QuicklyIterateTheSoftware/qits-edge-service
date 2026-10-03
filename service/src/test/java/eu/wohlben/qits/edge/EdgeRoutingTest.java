@@ -970,9 +970,9 @@ class EdgeRoutingTest {
     // The audience comes from the editor app entry's own pattern with the environment the NAME
     // states filled in, so the tier's own token is the only one that opens it.
     assertEquals(
-        401, client().get("editor.dev.acme.example.com", "/editor", token("prod")).status());
+        401, client().get("editor.dev.acme.example.com", "/editor", tierToken("prod")).status());
     assertEquals(
-        401, client().get("editor.prod.acme.example.com", "/editor", token("dev")).status());
+        401, client().get("editor.prod.acme.example.com", "/editor", tierToken("dev")).status());
   }
 
   // --- the project tiers -------------------------------------------------------------------------
@@ -2322,9 +2322,9 @@ class EdgeRoutingTest {
         "registry-dev",
         client().get("registry.dev.acme.example.com", "/v2/", token("dev")).line("upstream"));
     assertEquals(
-        401, client().get("registry.prod.acme.example.com", "/v2/", token("dev")).status());
+        401, client().get("registry.prod.acme.example.com", "/v2/", tierToken("dev")).status());
     assertEquals(
-        401, client().get("registry.dev.acme.example.com", "/v2/", token("prod")).status());
+        401, client().get("registry.dev.acme.example.com", "/v2/", tierToken("prod")).status());
   }
 
   @Test
@@ -2568,13 +2568,12 @@ class EdgeRoutingTest {
   @Test
   void theProjectedExemptedAppVhostIsRoutedByNothingButTheProjection() {
     // The guard against this coverage silently degrading into a second copy of the `mirror` case:
-    // if anyone gives `brochure` a qits.edge.apps entry it becomes a CONFIGURED label, the test
-    // above stops proving anything new, and this test is what fails instead.
+    // if `brochure` ever became a platform app label, the test above would stop proving anything
+    // new, and this test is what fails instead. (An override cannot add a label at all; see
+    // EdgeRouter.requirePlatformLabels.)
     assertFalse(
-        ConfigProvider.getConfig()
-            .getOptionalValue("qits.edge.apps.brochure.host-pattern", String.class)
-            .isPresent(),
-        "`brochure` must stay unconfigured or it is no longer the projected case");
+        PlatformApps.contains("brochure"),
+        "`brochure` must stay a projected name or it is no longer the projected case");
     assertFalse(
         ConfigProvider.getConfig()
             .getOptionalValue("qits.edge.apps.brochure.hosts.dev", String.class)
@@ -3304,9 +3303,23 @@ class EdgeRoutingTest {
     return StubGateways.ISSUER;
   }
 
-  /** A token idp would mint for one environment's registry, and that environment's only. */
+  /**
+   * A token that opens every gated name this suite routes: one environment's four platform
+   * audiences, and the platform audience a published host demands. For the tier boundary itself see
+   * {@link #tierToken}.
+   */
   private static Map<String, String> token(String environment) {
-    return bearer(TestTokens.valid(issuer(), List.of(StubGateways.audience(environment))));
+    List<String> audiences = new java.util.ArrayList<>(StubGateways.platformAudiences(environment));
+    audiences.add(StubGateways.PLATFORM_AUDIENCE);
+    return bearer(TestTokens.valid(issuer(), audiences));
+  }
+
+  /**
+   * A token idp would mint for one environment's platform services, and that environment's only —
+   * no platform audience, so it opens exactly the platform app vhosts of its own tier.
+   */
+  private static Map<String, String> tierToken(String environment) {
+    return bearer(TestTokens.valid(issuer(), StubGateways.platformAudiences(environment)));
   }
 
   private static Map<String, String> bearer(String jwt) {

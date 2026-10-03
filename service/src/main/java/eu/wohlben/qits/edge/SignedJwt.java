@@ -92,7 +92,7 @@ public record SignedJwt(
 
   /**
    * The same checks, where any one of several audiences is enough: the vhost's own, or the platform
-   * audience ({@link AuthConfig#platformAudience()}).
+   * audience ({@link PlatformApps#PLATFORM_AUDIENCE}).
    *
    * @param accepted the audiences that open this vhost; the token must name at least one
    */

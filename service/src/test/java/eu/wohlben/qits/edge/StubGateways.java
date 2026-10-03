@@ -21,11 +21,11 @@ import java.util.concurrent.TimeUnit;
  * process received the request rather than only that something did. The application upstreams are
  * two per app for the same reason — an app name has to reach ITS environment's copy. Their
  * addresses reach the route table as {@code qits.edge.apps.<app>.hosts.<env>} overrides — the one
- * config path that exists for exactly this — and, for the two servers this class still calls
- * "gateways", as the suite's OWN {@code qits.test.environment-upstreams.<env>} key, which the tests
- * read to build a deployment endpoint with. The name is historical: there is no per-environment
- * gateway on the platform any more, and these two are simply the far side a projected deployment
- * endpoint points at.
+ * config path that exists for exactly this, and that may only re-address a platform label — and,
+ * for the two servers this class still calls "gateways", as the suite's OWN {@code
+ * qits.test.environment-upstreams.<env>} key, which the tests read to build a deployment endpoint
+ * with. The name is historical: there is no per-environment gateway on the platform any more, and
+ * these two are simply the far side a projected deployment endpoint points at.
  *
  * <p><b>The applications are two so the auth gate has two answers.</b> {@code mirror} is named in
  * {@code qits.edge.auth.anonymous-read-apps} and {@code registry} is not, so one suite covers both
@@ -75,8 +75,8 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
   static final String OTHER_SECRET = "other-secret";
 
   /**
-   * The platform audience: the shipped default of {@code qits.edge.auth.platform-audience}, which
-   * the suite does not set. It opens every gated vhost on every tier.
+   * The platform audience, {@link PlatformApps#PLATFORM_AUDIENCE}. It opens every gated vhost on
+   * every tier.
    */
   static final String PLATFORM_AUDIENCE = "qits-platform";
 
@@ -241,6 +241,18 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     return environment + "-qits-artifacts";
   }
 
+  /**
+   * One environment's four platform audiences — registry, mirror, githost, editor — each the
+   * application's own {@code <env>-qits-<application>}, as {@link PlatformApps} derives them.
+   */
+  static List<String> platformAudiences(String environment) {
+    return List.of(
+        environment + "-qits-artifacts",
+        environment + "-qits-mirror",
+        environment + "-qits-githost",
+        environment + "-qits-workspaces");
+  }
+
   /** How long {@code /stream} waits between its two chunks — long enough to time from a client. */
   static final long STREAM_GAP_MILLIS = 400;
 
@@ -280,22 +292,17 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
             "127.0.0.1:" + listen(app + "-" + environment));
       }
     }
-    // Required, and unreachable on purpose: every environment above overrides it, so a request that
-    // reached this address would be a resolution bug rather than a test that happened to pass.
-    config.put("qits.edge.apps.registry.host-pattern", "{env}-qits-artifacts");
-    config.put("qits.edge.apps.mirror.host-pattern", "{env}-qits-mirror");
-    // The third app is the editor, one shared container for the whole platform on an ordinary app
-    // vhost: `editor.<env>.<domain>`. Its two upstreams are what makes "the named environment, not
-    // the default" an assertion about which process answered rather than about a status code. It
-    // still answers on the four-label tier too, which is what those routing tests read.
-    config.put("qits.edge.apps.editor.host-pattern", "{env}-qits-workspaces");
-    // Every app vhost here demands the tier-scoped `{env}-qits-artifacts` audience explicitly —
-    // mirroring a live deployment's GITHOST/EDITOR extras, which name a resource pattern of their
-    // own. The shipped DEFAULT of this key is now the literal `qits-platform`, pinned instead in
-    // EdgeChallengeTest, so a change to it is a failing test rather than a silent one here.
-    config.put("qits.edge.apps.registry.audience-pattern", "{env}-qits-artifacts");
-    config.put("qits.edge.apps.mirror.audience-pattern", "{env}-qits-artifacts");
-    config.put("qits.edge.apps.editor.audience-pattern", "{env}-qits-artifacts");
+    // No address for the three apps beyond the overrides above: where each one goes otherwise is
+    // code (PlatformApps), and every environment here overrides it, so a request that reached the
+    // derived alias would be a resolution bug rather than a test that happened to pass. The third
+    // app is the editor, one shared container for the whole platform on an ordinary app vhost:
+    // `editor.<env>.<domain>`. Its two upstreams are what makes "the named environment, not the
+    // default" an assertion about which process answered rather than about a status code.
+    //
+    // No audience either: a platform vhost demands its application's own `<env>-qits-<application>`
+    // or the platform audience, in code. `registry` fronts qits-artifacts, which is why the stub
+    // idp's tier-scoped tokens carry `audience(env)` = `<env>-qits-artifacts`.
+
     // ONE of the two CONFIGURED apps, which is the point: the exemption is per app label, so the
     // suite has a vhost whose reads are open and a vhost that is not, side by side.
     //
@@ -338,12 +345,6 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     config.put("qits.edge.domain", DOMAIN);
     config.put("qits.edge.sessions.cache-ttl-ms", "1000");
     config.put("qits.edge.sessions.stale-grace-ms", "8000");
-    // The environment vhost's own gate falls back to this GLOBAL pattern for a name none of the
-    // three apps above claims — a PUBLISHED (deployment-projected) service such as `ci` in
-    // EdgeRoutingTest. Explicitly set for the same reason as the three per-app entries above: the
-    // SHIPPED default is now `qits-platform`, and this suite still exercises an explicitly
-    // configured, tier-scoped pattern.
-    config.put("qits.edge.auth.audience-pattern", "{env}-qits-artifacts");
     return config;
   }
 

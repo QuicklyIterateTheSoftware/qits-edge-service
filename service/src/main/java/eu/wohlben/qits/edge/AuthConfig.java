@@ -53,43 +53,11 @@ public interface AuthConfig {
    */
   Optional<List<String>> anonymousReadApps();
 
-  /**
-   * The audience a token must name to pass, with {@code {env}} standing in for the environment the
-   * vhost named — the same placeholder, and the same semantics, as the host patterns in {@link
-   * EdgeConfig}.
-   *
-   * <p>The campaign's P-idp-3: the platform's claim model has no registry scope and needs none —
-   * the existing audience is the permission, and docker's own {@code scope} parameter is shaped
-   * away here rather than being given a meaning this process would have to enforce.
-   *
-   * <p><b>The placeholder is a boundary, not a convenience.</b> idp's audience values are
-   * env-prefixed, so a pattern makes the token for one environment's registry fail at another
-   * environment's vhost — one entry, and the tiers cannot unlock each other. A value with no
-   * placeholder is a literal and still works, which is what a single-audience deployment wants.
-   *
-   * <p><b>The shipped default is the literal {@code qits-platform}</b> — the same string as {@link
-   * #platformAudience()} — so a freshly configured vhost opens with roles alone, the open calling
-   * model's own rule. {@link EdgeAuth#acceptedAudiences} then names it once, not twice. A
-   * deployment that still configures the older, tier-scoped pattern (today's {@code
-   * QITS_EDGE_AUTH_AUDIENCE_PATTERN={env}-qits-artifacts}, or the githost and editor entries' own
-   * resource patterns) keeps that pattern unchanged: an explicitly configured value always wins
-   * over this default.
-   */
-  @WithDefault("qits-platform")
-  String audiencePattern();
-
-  /**
-   * One audience that opens every gated vhost, next to the one the vhost demands. A person's
-   * command-line tool gets a token for this audience, and it must reach every qits service.
-   *
-   * <p><b>No {@code {env}} placeholder, on purpose.</b> The audience only says "this token is for
-   * this platform". The token's roles ({@code groups}) are the permission, and each service checks
-   * them. The user decided that roles, not tiers, are the permission system.
-   *
-   * <p>An empty value switches this rule off: then only the vhost's own audience opens it.
-   */
-  @WithDefault("qits-platform")
-  Optional<String> platformAudience();
+  // NO AUDIENCE KEYS. The audience a vhost demands, and the platform audience that opens every one,
+  // are the platform's calling model rather than an installation fact, so they are code: see
+  // PlatformApps and EdgeAuth.audienceFor. `qits.edge.auth.audience-pattern` and
+  // `qits.edge.auth.platform-audience` were keys until qits-528, each defaulting to the literal
+  // `qits-platform`, and no deployment set either.
 
   /** How far this process' clock and idp's may disagree about {@code exp}, in seconds. */
   @WithDefault("30")

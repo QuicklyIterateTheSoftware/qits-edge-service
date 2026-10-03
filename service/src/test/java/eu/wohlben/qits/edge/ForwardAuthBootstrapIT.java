@@ -388,8 +388,8 @@ public class ForwardAuthBootstrapIT {
     NetworkCapture.actor("a visitor");
 
     // --- (1) the door, to a stranger. GET / is the one path a door has an answer to, and here it
-    // is the 404: the redirect it would otherwise send needs a deployment to have published a host
-    // for qits-projects, and this run has published none.
+    // is the 404: the redirect it would otherwise send needs a deployment to have published the
+    // `projects` host, and this run publishes none under that name.
     EdgeClient.Answer door = StoryEdge.client().get(StoryTarget.DOOR_HOST, StoryTarget.DOOR_PATH);
     assertEquals(404, door.status());
     assertTrue(

@@ -7,18 +7,18 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The edge's whole configuration surface: which environments exist, which one is the fallback, and
- * and the direct application vhosts it owns.
+ * The edge's whole configuration surface: which environments exist and which one is the fallback.
+ * The platform's own app vhosts are not configuration; they are {@link PlatformApps}.
  *
  * <p>There is no route table and no path knowledge here, deliberately. The edge demultiplexes by
  * <b>host name</b> only — an environment name, and since the ingress campaign an optional
- * application name in front of it. Deployment events own environment-vhost paths; {@link #apps()}
- * maps a whole NAME to a whole service, never a path to one.
+ * application name in front of it. Deployment events own environment-vhost paths; {@link
+ * PlatformApps} maps a whole platform NAME to a whole service, never a path to one.
  *
- * <p>Every upstream is derived from configuration ONLY. No part of a request selects a host or a
- * port: the Host name picks an environment out of a fixed list, and a name that is not in the list
- * picks the default. That is the SSRF guard, and it is why {@link #environments()} is a list rather
- * than a pattern the request could satisfy.
+ * <p>Every upstream is derived from configuration and code ONLY. No part of a request selects a
+ * host or a port: the Host name picks an environment out of a fixed list, and a name that is not in
+ * the list picks the default. That is the SSRF guard, and it is why {@link #environments()} is a
+ * list rather than a pattern the request could satisfy.
  *
  * <p>Since config sources include environment variables, a deployment declares all of it without a
  * file:
@@ -73,25 +73,15 @@ public interface EdgeConfig {
   String defaultEnvironment();
 
   /**
-   * The applications an {@code $app.$env.$domain} host name may reach directly, keyed by the {@code
-   * $app} label. A label with no entry is refused.
+   * Address overrides for the platform's own app vhosts, keyed by the {@code $app} label. Which
+   * labels exist, and where each one goes, is NOT here: it is {@link PlatformApps}, in code,
+   * because every platform application answers at {@code <env>-<application>} and that is not
+   * something a deployment decides.
    *
-   * <p>One entry ships in {@code application.properties}: {@code mirror}, whose host pattern is
-   * {@code {env}-qits-mirror}. A map entry cannot be unset by a later config source, only
-   * overridden, so shipping one costs the ability to revoke it — which is free here and nowhere
-   * else, because the pull-through cache is the platform's own and its address was never a decision
-   * a deployment made. It carries the {@code {env}} placeholder like every other entry: the mirror
-   * was a platform service addressed bare until that plane was deleted, and it is an ordinary
-   * application in the one tier now.
-   *
-   * <p>An ENVIRONMENT's application is not shipped, and that stays the pre-ingress edge exactly:
-   * its app label routes nowhere of its own until a deployment names it, one prefix per
-   * application:
-   *
-   * <pre>
-   * QITS_EDGE_APPS_REGISTRY_HOST_PATTERN={env}-qits-artifacts
-   * QITS_EDGE_APPS_GITHOST_HOST_PATTERN={env}-qits-githost
-   * </pre>
+   * <p>What is left is {@link App#hosts()}: a fixed {@code host:port} for one label in one
+   * environment, for a developer's local process and for this repository's own suites, whose
+   * stand-ins listen on {@code 127.0.0.1}. A live deployment sets none. A key naming a label that
+   * is not a platform app fails startup — an override cannot add a vhost.
    */
   Map<String, App> apps();
 
@@ -114,47 +104,14 @@ public interface EdgeConfig {
     }
   }
 
-  /**
-   * One application's upstream, in the same shape as the environment gateway's above: a host
-   * pattern plus a port, with per-environment overrides for the topologies a pattern cannot
-   * describe.
-   */
+  /** One platform app label's overrides. */
   interface App {
 
     /**
-     * The audience accepted for this application's direct vhost. It defaults to the literal {@code
-     * qits-platform} — the same string {@link AuthConfig#platformAudience()} ships — so a freshly
-     * configured entry opens with roles alone, the open calling model's own rule; an application
-     * such as githost or the editor can still name its own resource audience (today's {@code
-     * QITS_EDGE_APPS_GITHOST_AUDIENCE_PATTERN}, {@code QITS_EDGE_APPS_EDITOR_AUDIENCE_PATTERN}),
-     * and that explicitly configured value keeps working unchanged.
-     */
-    @WithDefault("qits-platform")
-    String audiencePattern();
-
-    /**
-     * The upstream host, with {@code {env}} standing in for the environment the Host name named.
-     *
-     * <p>The placeholder is what keeps an environment's own services separate: {@code
-     * registry.dev.localhost} resolves {@code {env}-qits-artifacts} to {@code dev-qits-artifacts},
-     * and {@code registry.prod.localhost} to {@code prod-qits-artifacts}, from one entry.
-     *
-     * <p>A PLATFORM service names no placeholder — {@code qits-platform-mirror} is one process for
-     * every environment — and that is the whole difference between the two kinds here.
-     *
-     * <p>No default: an application with no address is a configuration error worth failing the
-     * startup on, not a 502 per request.
-     */
-    String hostPattern();
-
-    /** The port the application listens on. Overridable per environment by {@link #hosts()}. */
-    @WithDefault("8080")
-    int port();
-
-    /**
-     * Per-environment overrides, {@code qits.edge.apps.<app>.hosts.<env> = host} or {@code
-     * host:port}. It exists for a developer's local process and for this repository's test suite; a
-     * stale override sends a whole tier's traffic to the wrong process.
+     * Per-environment address overrides, {@code qits.edge.apps.<app>.hosts.<env> = host} or {@code
+     * host:port}. It exists for a developer's local process and for this repository's test suites;
+     * a stale override sends a whole tier's traffic to the wrong process, which is why a live
+     * deployment carries none.
      */
     Map<String, String> hosts();
   }

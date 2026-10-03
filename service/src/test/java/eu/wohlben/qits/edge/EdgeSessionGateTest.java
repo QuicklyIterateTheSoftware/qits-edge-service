@@ -586,7 +586,9 @@ class EdgeSessionGateTest {
             .get(
                 "ci.dev.acme.example.com",
                 "/api/runs",
-                basic(StubGateways.CLIENT_ID, StubGateways.CLIENT_SECRET))
+                // A published host demands the platform audience, so the client is the one
+                // commissioned for it — the open calling model's own credential.
+                basic(StubGateways.PLATFORM_ID, StubGateways.PLATFORM_SECRET))
             .line("upstream"));
   }
 
@@ -632,7 +634,17 @@ class EdgeSessionGateTest {
   void aMachineCredentialStillOpensAServiceHost() {
     // CI dialing a service by its own name. A machine's identity is in its token, so nothing is
     // asserted for it.
-    EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", "/api/runs", token("dev"));
+    // A published host demands the platform audience; a tier-scoped token alone opens only the
+    // platform app vhosts of its own tier.
+    EdgeClient.Answer answer =
+        client()
+            .get(
+                "ci.dev.acme.example.com",
+                "/api/runs",
+                Map.of(
+                    "Authorization",
+                    "Bearer "
+                        + TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE))));
     assertEquals("mirror-dev", answer.line("upstream"));
     assertNull(answer.upstreamHeader("X-Qits-User"));
   }
