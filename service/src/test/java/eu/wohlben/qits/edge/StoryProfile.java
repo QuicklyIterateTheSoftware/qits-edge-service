@@ -35,7 +35,7 @@ import java.util.Map;
  *       because dark does not mean absent: Quarkus opens the connection and runs Flyway at boot
  *       regardless. Both are databases of this catalogue's own on the same embedded postgres the
  *       surefire suite spawns, so a launched process and any suite can never mean the same schema.
- *       Their urls travel through system properties rather than static fields, because a test
+ *       Their urls are carried through system properties rather than static fields, because a test
  *       profile is instantiated in more than one classloader and a field written by one copy is not
  *       the field another reads.
  *   <li><b>The environment list and FOUR application vhosts</b> — the deployment's own inputs,

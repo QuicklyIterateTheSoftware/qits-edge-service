@@ -1,5 +1,5 @@
 # How qits-platform-deployments deploys this repo. It reads this file from the git host at
-# the built sha, so the answer travels with the commit.
+# the built sha, so the answer is carried along with the commit.
 #
 # CARRYING THE FILE AT ALL is the other thing it says. The release flow reads it to decide whether
 # this repository deploys — a repo without one is finalized on `main` the moment it releases, and a

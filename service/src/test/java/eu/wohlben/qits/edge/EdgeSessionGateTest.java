@@ -264,7 +264,7 @@ class EdgeSessionGateTest {
   @Test
   void aDeadCookieReachesTheLoginPageOnItsOwnHostToo() {
     // The same loop, one step later: a browser holding a session idp has revoked must be able to
-    // log in again. The refused cookie does not travel — the request is not using it.
+    // log in again. The refused cookie does not ride along — the request is not using it.
     publishIdpHost();
     EdgeClient.Answer answer =
         client().get("idp.dev.acme.example.com", "/idp/login", cookieHeader("no-such-session"));

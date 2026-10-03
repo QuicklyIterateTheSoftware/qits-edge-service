@@ -601,6 +601,21 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
           .end("upstream=" + environment + "\n");
       return;
     }
+    if (request.path().endsWith("/hop-by-hop")) {
+      // What qits-landing-app (Express) answers at the apex, plus a Connection header nominating a
+      // custom name: every connection-specific field an upstream may send, which on an HTTP/2
+      // client resets the stream unless the edge drops them. See EdgeHopByHop.
+      HttpServerResponse response = request.response().setStatusCode(302);
+      response.headers().add("X-Powered-By", "Express");
+      response.headers().add("Location", "/projects");
+      response.headers().add("Connection", "keep-alive");
+      response.headers().add("Keep-Alive", "timeout=5");
+      response.headers().add("Connection", "close, X-Custom-Hop");
+      response.headers().add("X-Custom-Hop", "1");
+      response.headers().add("Proxy-Connection", "keep-alive");
+      response.end();
+      return;
+    }
     if (request.path().equals("/stream")) {
       // Two chunks with a measurable gap. A proxy that buffered the response would deliver both at
       // once, and the client's timing is what catches that — a body assertion alone would not.

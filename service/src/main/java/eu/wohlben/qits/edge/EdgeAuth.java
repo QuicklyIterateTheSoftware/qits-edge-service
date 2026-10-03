@@ -217,9 +217,9 @@ public class EdgeAuth {
    * belief stops. The audiences are kept rather than a yes/no, because the demanded audience is a
    * per-request question — one cached validation must still refuse the vhost of another tier.
    *
-   * <p><b>The token is held because it is what travels.</b> An accepted request leaves this process
-   * carrying it, so a cache hit that had only a verdict would have to forward nothing at all —
-   * which is an accepted request arriving upstream as an anonymous one. It is a secret with a
+   * <p><b>The token is held because it is what goes out.</b> An accepted request leaves this
+   * process carrying it, so a cache hit that had only a verdict would have to forward nothing at
+   * all — which is an accepted request arriving upstream as an anonymous one. It is a secret with a
    * lifetime, and it is treated as one: in memory only, never logged, never written down, dropped
    * the moment {@link #expiresAtMillis} passes, and bounded in number by {@link
    * AuthConfig#basicCacheSize()} like every other entry.
@@ -532,7 +532,7 @@ public class EdgeAuth {
    * and expiry — or a refusal. One record for both, because both are cached under the same key and
    * a lookup has to answer either.
    *
-   * <p>The JWT is held for the reason {@link Validated} holds one: it is what travels. An accepted
+   * <p>The JWT is held for the reason {@link Validated} holds one: it is what goes out. An accepted
    * request leaves carrying it, so a hit with only a verdict would forward nothing. In memory only,
    * never logged, retired {@link #TOKEN_MARGIN_MS} before its own {@code exp}.
    *
@@ -575,11 +575,11 @@ public class EdgeAuth {
    * Whether an opaque token opens this vhost: cached belief first, then idp — and, when it does,
    * the request's {@code Authorization} header replaced by the JWT the token stands for.
    *
-   * <p><b>The token never travels past this process.</b> An upstream could do nothing with one — it
-   * holds no keys for it and no introspection credential — and it is a durable secret besides,
-   * which is the opposite of what a hop one further in should hold. What goes on is the JWT idp
-   * minted for it, validated here exactly as a presented Bearer is, so the upstream's own OIDC
-   * mechanism validates it again and builds the roles from its claims.
+   * <p><b>The token never leaves this process.</b> An upstream could do nothing with one — it holds
+   * no keys for it and no introspection credential — and it is a durable secret besides, which is
+   * the opposite of what a hop one further in should hold. What goes on is the JWT idp minted for
+   * it, validated here exactly as a presented Bearer is, so the upstream's own OIDC mechanism
+   * validates it again and builds the roles from its claims.
    *
    * <p><b>A REFUSAL IS CACHED, and that is the deliberate difference from {@link #checkBasic}.</b>
    * The Basic path declines to cache one because the case it would slow down is a rotated secret
@@ -778,7 +778,7 @@ public class EdgeAuth {
    *
    * <p>The credential is decoded here and NOWHERE else: this process does not log it, store it or
    * carry it past this call, and what it relays to idp is the header exactly as it arrived. It is
-   * also where the secret's travels END — an accepted pair is replaced on the request by the token
+   * also where the secret's journey ENDS — an accepted pair is replaced on the request by the token
    * it bought ({@link #checkBasic}), so no upstream ever sees it.
    *
    * <p><b>What IS held, and only this.</b> The fingerprint below, which is a one-way hash of the

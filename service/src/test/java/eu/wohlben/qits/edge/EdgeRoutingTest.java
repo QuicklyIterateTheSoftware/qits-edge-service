@@ -14,6 +14,7 @@ import io.quarkus.test.common.WithTestResource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.RestAssured;
 import io.vertx.core.http.HttpMethod;
+import io.vertx.core.http.HttpVersion;
 import io.vertx.core.json.JsonObject;
 import jakarta.inject.Inject;
 import java.nio.charset.StandardCharsets;
@@ -83,11 +84,25 @@ class EdgeRoutingTest {
     return client;
   }
 
+  private static EdgeClient http2;
+
+  /** The same, speaking cleartext HTTP/2 with prior knowledge — see {@link EdgeClient}. */
+  private static EdgeClient http2() {
+    if (http2 == null) {
+      http2 = new EdgeClient(RestAssured.port, HttpVersion.HTTP_2);
+    }
+    return http2;
+  }
+
   @AfterAll
   static void close() {
     if (client != null) {
       client.close();
       client = null;
+    }
+    if (http2 != null) {
+      http2.close();
+      http2 = null;
     }
   }
 
@@ -1988,6 +2003,58 @@ class EdgeRoutingTest {
             + "ms — the response was buffered");
   }
 
+  // --- hop-by-hop headers ------------------------------------------------------------------
+
+  @Test
+  void anUpstreamsHopByHopHeadersNeverReachTheClient() {
+    // The apex's Express upstream answered with Connection and Keep-Alive, which the edge copied
+    // through; on HTTP/1.1 that is merely wrong, and the ordinary headers must still arrive.
+    activateCi();
+    EdgeClient.Answer answer =
+        client().get("ci.dev.acme.example.com", "/ci/hop-by-hop", token("dev"));
+    assertEquals(302, answer.status(), answer.raw().toString());
+    assertEquals(List.of("/projects"), answer.headerValues("Location"));
+    assertEquals(List.of("Express"), answer.headerValues("X-Powered-By"));
+    assertEquals(List.of(), answer.headerValues("Keep-Alive"), answer.raw().toString());
+    assertEquals(List.of(), answer.headerValues("Proxy-Connection"), answer.raw().toString());
+    assertEquals(List.of(), answer.headerValues("X-Custom-Hop"), answer.raw().toString());
+    // Vert.x may frame its own answer with a Connection header of its own; what it must not say is
+    // anything the upstream said about ITS connection.
+    for (String connection : answer.headerValues("Connection")) {
+      assertFalse(
+          connection.toLowerCase(java.util.Locale.ROOT).contains("x-custom-hop"),
+          answer.raw().toString());
+    }
+  }
+
+  @Test
+  void anHttp2ClientGetsTheAnswerAnUpstreamWithHopByHopHeadersGave() {
+    // The defect itself: a connection-specific header on an h2 stream is malformed (RFC 9113
+    // §8.2.2) and Netty resets the stream, so the request never completed at all.
+    activateCi();
+    EdgeClient.Answer answer =
+        http2().get("ci.dev.acme.example.com", "/ci/hop-by-hop", token("dev"));
+    assertEquals(HttpVersion.HTTP_2, answer.version());
+    assertEquals(302, answer.status(), answer.raw().toString());
+    assertEquals(List.of("/projects"), answer.headerValues("Location"));
+    assertEquals(List.of("Express"), answer.headerValues("X-Powered-By"));
+    assertEquals(List.of(), answer.headerValues("Connection"), answer.raw().toString());
+    assertEquals(List.of(), answer.headerValues("Keep-Alive"), answer.raw().toString());
+    assertEquals(List.of(), answer.headerValues("X-Custom-Hop"), answer.raw().toString());
+  }
+
+  @Test
+  void aStreamedAnswerStillCompletesOverHttp2() {
+    // The chunked stub's Transfer-Encoding is dropped like every hop-by-hop header; h2 frames the
+    // body itself, so the whole of it must still arrive.
+    activateCi();
+    EdgeClient.Answer answer = http2().get("ci.dev.acme.example.com", "/stream", token("dev"));
+    assertEquals(HttpVersion.HTTP_2, answer.version());
+    assertEquals(200, answer.status());
+    assertEquals("chunk-1\nchunk-2\n", answer.body());
+    assertEquals(List.of(), answer.headerValues("Transfer-Encoding"));
+  }
+
   // --- websockets ----------------------------------------------------------------------------
 
   @Test
@@ -2014,7 +2081,7 @@ class EdgeRoutingTest {
   @Test
   void aWebSocketUpgradeStillCarriesTheClientsOwnHeaders() {
     // The edge strips nothing but the browser cookie on an upgrade either: an unrelated cookie is a
-    // service's own and travels with the socket.
+    // service's own and goes along with the socket.
     activateCi();
     Map<String, String> headers = new java.util.HashMap<>(token("dev"));
     headers.put("Cookie", "q_session=abc");
@@ -2038,7 +2105,7 @@ class EdgeRoutingTest {
             .findFirst()
             .orElseThrow();
     assertTrue(authorization.startsWith("Bearer "), authorization);
-    assertFalse(authorization.contains(TokenValue.PREFIX), "the token itself never travels");
+    assertFalse(authorization.contains(TokenValue.PREFIX), "the token itself never goes out");
     SignedJwt forwarded = SignedJwt.parse(authorization.substring("Bearer ".length()));
     assertEquals(StubGateways.TOKEN_SUBJECT, forwarded.claims().getString("sub"));
     assertTrue(forwarded.signatureMatches(TestTokens.IDP.getPublic()));
@@ -2527,7 +2594,7 @@ class EdgeRoutingTest {
   @Test
   void aProjectedAnonymousReadArrivesWithTheReservedNamespaceEmpty() {
     // Nobody vouched for anybody on this path, so there is no trusted identity to write — and
-    // doing nothing is exactly what would let a stranger's `X-Qits-User: admin` travel to a
+    // doing nothing is exactly what would let a stranger's `X-Qits-User: admin` reach a
     // service that believes it. The strip cannot be conditional on there being a real identity to
     // replace the forgery with: it is where there is none that a forgery survives. The rule is the
     // whole `X-Qits-` prefix, not the three names the edge happens to write, so a name nobody has
@@ -2740,7 +2807,7 @@ class EdgeRoutingTest {
   void anAcceptedClientIdAndSecretReachTheUpstreamAsABearerAndNotAsThemselves() {
     // The whole of the "only CI may publish" change at this hop. A service cannot check a secret,
     // so a relayed pair tells it nothing about WHICH commissioned client is calling — and hands it
-    // a secret it has no business holding. What travels is the token the edge validated, exactly
+    // a secret it has no business holding. What goes out is the token the edge validated, exactly
     // as it does for git's `oauth2:` pair, so the service builds the roles from the JWT itself.
     EdgeClient.Answer answer =
         client()
@@ -3106,7 +3173,7 @@ class EdgeRoutingTest {
     String authorization = answer.upstreamHeader("Authorization");
     assertNotNull(authorization, answer.body());
     assertTrue(authorization.startsWith("Bearer "), authorization);
-    assertFalse(authorization.contains(TokenValue.PREFIX), "the token itself never travels");
+    assertFalse(authorization.contains(TokenValue.PREFIX), "the token itself never goes out");
     SignedJwt forwarded = SignedJwt.parse(authorization.substring("Bearer ".length()));
     assertEquals(StubGateways.TOKEN_SUBJECT, forwarded.claims().getString("sub"));
     assertTrue(
