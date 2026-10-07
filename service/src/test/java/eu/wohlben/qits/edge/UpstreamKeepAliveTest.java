@@ -11,6 +11,7 @@ import io.netty.channel.socket.nio.NioChannelOption;
 import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpClient;
+import io.vertx.core.http.HttpClientRequest;
 import io.vertx.core.http.HttpClientResponse;
 import io.vertx.core.http.HttpConnection;
 import io.vertx.core.http.HttpMethod;
@@ -57,6 +58,12 @@ class UpstreamKeepAliveTest {
             .createHttpServer()
             .requestHandler(
                 request -> {
+                  if (request.method() == HttpMethod.CONNECT) {
+                    // A tunnel: the connection stops being HTTP, the shape of every 101 the edge
+                    // splices. Echo, so the client side has a live socket to close.
+                    request.toNetSocket().onSuccess(socket -> socket.handler(socket::write));
+                    return;
+                  }
                   if (request.path().equals("/hold")) {
                     held.add(request);
                     return;
@@ -148,6 +155,79 @@ class UpstreamKeepAliveTest {
 
     connection.close().toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
     awaitTrue(() -> pools.open().isEmpty(), "a closed connection gives its slot back");
+  }
+
+  @Test
+  void aConnectionTurnedIntoARawSocketIsStillUncountedWhenItCloses() throws Exception {
+    // A 101 — a WebSocket through EdgeWebSocketUpgrade, any other upgrade through the proxy — and a
+    // CONNECT end the same way: the HttpConnection becomes a raw socket and its close handler is
+    // never called again. Counted down there, every tunnel would be a slot counted forever; the
+    // channel's close future is what fires.
+    UpstreamPools pools = new UpstreamPools(64, Upstream::toString);
+    HttpClient client =
+        EdgeRouter.proxyClient(vertx, EdgeRouter.proxyClientOptions(5000), pools::connected);
+    Upstream origin = new Upstream("localhost", server.actualPort());
+
+    io.vertx.core.net.NetSocket tunnel =
+        client
+            .request(
+                EdgeRouter.originRequestOptions(origin)
+                    .setMethod(HttpMethod.CONNECT)
+                    .setURI("upstream:1"))
+            .compose(request -> request.connect())
+            .map(HttpClientResponse::netSocket)
+            .toCompletionStage()
+            .toCompletableFuture()
+            .get(10, TimeUnit.SECONDS);
+    assertEquals(
+        Map.of(origin, 1), pools.open(), "a tunnel is a socket to the origin, and is counted");
+
+    tunnel.close().toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+    awaitTrue(() -> pools.open().isEmpty(), "a closed tunnel is uncounted like any connection");
+  }
+
+  @Test
+  void aTunnelKeepsItsPoolSlotUntilItCloses() throws Exception {
+    // Why a WebSocket belongs in the count: Vert.x does not evict a spliced connection from the
+    // pool. With a pool of ONE, an open tunnel leaves nothing for the next request, which waits
+    // out its acquisition bound; once the tunnel closes, the slot is back.
+    HttpClient client =
+        EdgeRouter.proxyClient(
+            vertx,
+            EdgeRouter.proxyClientOptions(5000).setMaxPoolSize(1),
+            new UpstreamPools(1, Upstream::toString)::connected);
+    Upstream origin = new Upstream("localhost", server.actualPort());
+    io.vertx.core.net.NetSocket tunnel =
+        client
+            .request(
+                EdgeRouter.originRequestOptions(origin)
+                    .setMethod(HttpMethod.CONNECT)
+                    .setURI("upstream:1"))
+            .compose(request -> request.connect())
+            .map(HttpClientResponse::netSocket)
+            .toCompletionStage()
+            .toCompletableFuture()
+            .get(10, TimeUnit.SECONDS);
+
+    CompletableFuture<HttpClientRequest> queued =
+        client
+            .request(
+                EdgeRouter.originRequestOptions(origin)
+                    .setConnectTimeout(500)
+                    .setMethod(HttpMethod.GET)
+                    .setURI("/"))
+            .toCompletionStage()
+            .toCompletableFuture();
+    java.util.concurrent.ExecutionException starved =
+        org.junit.jupiter.api.Assertions.assertThrows(
+            java.util.concurrent.ExecutionException.class, () -> queued.get(10, TimeUnit.SECONDS));
+    assertTrue(
+        starved.getCause() instanceof java.util.concurrent.TimeoutException
+            || starved.getCause() instanceof io.vertx.core.http.ConnectionPoolTooBusyException,
+        "the tunnel holds the only slot: " + starved.getCause());
+
+    tunnel.close().toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+    assertEquals(200, get(client, origin, "/").statusCode(), "and gives it back when it closes");
   }
 
   @Test

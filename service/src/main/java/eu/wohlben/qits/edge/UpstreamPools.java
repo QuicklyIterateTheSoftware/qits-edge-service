@@ -28,9 +28,22 @@ import org.jboss.logging.Logger;
  * than the IP it reached, so {@code dev-qits-projects:8080} is one key however often swarm moves
  * the task behind it.
  *
- * <p><b>Counted from the connection's own life</b>: up in the client's connect handler, down in the
- * connection's close handler. Both run on the connection's event loop, so a connection cannot close
- * before it was counted. A pooled idle connection counts — it holds a slot, which is the question.
+ * <p><b>Counted from the connection's own life</b>: up in the client's connect handler, down when
+ * the Netty CHANNEL under it closes — not in the {@link HttpConnection}'s close handler. In Vert.x
+ * 4.5.26 the two agree: a tunnel ({@code request.connect()} and {@code response.netSocket()}, which
+ * is how both {@link EdgeWebSocketUpgrade} and {@code vertx-http-proxy} splice a {@code 101}) keeps
+ * the HTTP connection as the channel's handler, so its close handler does fire — measured in {@code
+ * UpstreamKeepAliveTest}. The channel is preferred anyway because it is the one signal no change of
+ * handler can take away (Vert.x's own {@code Http1xClientConnection.toNetSocket} replaces the
+ * handler and with it the close handler), and it leaves the public close handler free for anybody
+ * else. A listener added to a channel that has already closed fires at once, so nothing counted is
+ * left uncounted.
+ *
+ * <p><b>What {@code open} counts.</b> A pooled idle connection — it holds a slot, which is the
+ * question. And a WebSocket, or any other spliced {@code 101}: the edge opens it through this same
+ * client as an ordinary pooled HTTP/1.1 request, so the connect handler fires for it, and Vert.x
+ * does not evict a tunnel from the pool — it keeps its slot until it closes. So {@code open} is the
+ * pool's real occupancy, terminals included, and an origin full of terminals is a full pool.
  */
 final class UpstreamPools {
 
@@ -54,7 +67,9 @@ final class UpstreamPools {
 
     final AtomicInteger open = new AtomicInteger();
 
-    /** Bumped every time a close leaves the pool below max. Written by the close handlers. */
+    /**
+     * Bumped every time a close leaves the pool below max. Written by the channel close listeners.
+     */
     final AtomicLong dips = new AtomicLong();
 
     /** {@link #check}'s own memory of the previous check; nothing else touches these. */
@@ -111,8 +126,8 @@ final class UpstreamPools {
 
   /**
    * The proxy client's connect handler: set the socket's keepalive timers, count the connection
-   * against its origin, and uncount it when it closes. Never throws — a connect handler that threw
-   * would fail a request over bookkeeping.
+   * against its origin, and uncount it when its channel closes. Never throws — a connect handler
+   * that threw would fail a request over bookkeeping.
    */
   void connected(HttpConnection connection) {
     UpstreamKeepAlive.apply(connection);
@@ -121,7 +136,15 @@ final class UpstreamPools {
       return;
     }
     opened(origin);
-    connection.closeHandler(closed -> closed(origin));
+    try {
+      // The channel, not the connection — see the class comment. A listener added to a future
+      // already done runs at once, so a socket that closed in between is still uncounted.
+      UpstreamChannel.of(connection).closeFuture().addListener(closed -> closed(origin));
+    } catch (RuntimeException unreachable) {
+      // The internal cast no longer holds (UpstreamKeepAlive has said so, once). The connection's
+      // own close handler is the public fallback, and in 4.5.26 it covers tunnels too.
+      connection.closeHandler(closed -> closed(origin));
+    }
   }
 
   /**

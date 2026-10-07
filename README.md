@@ -332,8 +332,12 @@ machine token are both answered `404` like any other request.
   client's connect handler, reached through Vert.x internal API in one class (`UpstreamChannel`).
   An option that cannot be set is an ERROR once per process per option and never fails a request.
 - **Says when a pool stays full.** The same connect handler counts open connections per origin
-  (`host:port`, what Vert.x pools by), and a check every 60 s logs one WARN per origin that sat at
-  `64/64` for the whole interval — full at the previous check, full now, and no close in between.
+  (`host:port`, what Vert.x pools by) and counts each one down when its Netty channel closes — the
+  one close signal that survives any change of handler on that channel. A check every 60 s logs one
+  WARN per origin that sat at `64/64` for the whole interval — full at the previous check, full now,
+  and no close in between. WebSockets count: they are opened through the same client as pooled
+  HTTP/1.1 requests, and a spliced `101` keeps its pool slot until it closes, so a full pool of
+  terminals is a full pool.
 - **Serves `/upstream-pools` on every vhost**, never proxied, `Cache-Control: no-store`: a JSON
   array with one entry per origin holding a connection, fullest first —
   `{"name":"qits-projects","environment":"dev","origin":"dev-qits-projects:8080","open":12,"max":64}`.
