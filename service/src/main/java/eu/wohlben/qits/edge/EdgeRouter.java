@@ -2,9 +2,11 @@ package eu.wohlben.qits.edge;
 
 import io.quarkus.vertx.http.runtime.RouteConstants;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpClientOptions;
+import io.vertx.core.http.HttpConnection;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerRequest;
@@ -30,8 +32,9 @@ import org.jboss.logging.Logger;
  *
  * <p><b>What this does not do</b> is still most of what makes it worth having. It holds no route
  * table beyond the deployment projection and the platform's app labels, rewrites no path, reads no
- * body, and serves nothing of its own but {@code /q}, {@code /main-navigation} and an admitted
- * origin's CORS preflight — see {@link EdgeCors}, which owns CORS on every service host.
+ * body, and serves nothing of its own but {@code /q}, {@code /main-navigation}, {@code
+ * /upstream-pools} and an admitted origin's CORS preflight — see {@link EdgeCors}, which owns CORS
+ * on every service host.
  *
  * <p><b>A name reaches a service two ways now.</b> {@link PlatformApps} is the first, and it is
  * code — the machine vhosts, and the auth attributes that go with them. The projection is the
@@ -129,6 +132,9 @@ public class EdgeRouter {
 
   private HttpClient client;
 
+  /** What {@link #client} holds open per origin — see {@link UpstreamPools}. */
+  private UpstreamPools pools;
+
   /**
    * Where one Host name goes, once the projection has had its say.
    *
@@ -188,7 +194,34 @@ public class EdgeRouter {
         // long exchange alive, and a timeout here would sever exactly what that exists for
         // — a terminal socket, an SSE channel, a slow layer push.
         .setIdleTimeout(0)
+        // SO_KEEPALIVE, so the kernel probes a silent upstream socket at all. The three timers
+        // that make it probe within a minute rather than two hours are NOT set here: the
+        // tcpKeepAlive* options exist on these options, but no Vert.x 4.5 transport applies them to
+        // a client socket, so they are set per channel in the connect handler instead — see
+        // UpstreamKeepAlive. Together they are what closes a stream whose upstream task swarm
+        // redeployed away, which no FIN, no RST and — with the idle timeout at zero — no timeout
+        // ever would.
+        .setTcpKeepAlive(true)
         .setConnectTimeout(connectTimeoutMs);
+  }
+
+  /**
+   * The proxy client itself, from {@link #proxyClientOptions} and a connect handler. Static so the
+   * socket test builds the same client the edge does.
+   *
+   * <p><b>The pool options are passed explicitly, and that is load-bearing.</b> {@code
+   * createHttpClient(options)} hands the builder {@code options.getPoolOptions()}; the builder
+   * itself does not, and given only the client options it pools with {@code new PoolOptions()} —
+   * five connections per origin behind an unbounded queue, silently undoing both bounds above.
+   */
+  static HttpClient proxyClient(
+      Vertx vertx, HttpClientOptions options, Handler<HttpConnection> onConnect) {
+    return vertx
+        .httpClientBuilder()
+        .with(options)
+        .with(options.getPoolOptions())
+        .withConnectHandler(onConnect)
+        .build();
   }
 
   /**
@@ -212,7 +245,13 @@ public class EdgeRouter {
             config.defaultEnvironment(),
             PlatformApps.labels(),
             domain(config.domain()));
-    client = vertx.createHttpClient(proxyClientOptions(5_000));
+    HttpClientOptions options = proxyClientOptions(5_000);
+    pools =
+        new UpstreamPools(options.getMaxPoolSize(), upstream -> owner(upstream).describe(upstream));
+    client = proxyClient(vertx, options, pools::connected);
+    // A pool that stays full is said out loud, once a minute, by the edge itself — not first by
+    // the thirty-second timeout of the request that queued behind it.
+    vertx.setPeriodic(UpstreamPools.CHECK_INTERVAL_MS, ignored -> pools.check());
     webSocketUpgrade = new EdgeWebSocketUpgrade(client);
 
     for (String environment : hostEnvironments.environments()) {
@@ -251,6 +290,32 @@ public class EdgeRouter {
         client
             .request(originRequestOptions(upstream))
             .onFailure(failure -> LOG.warnf("no upstream connection to %s: %s", upstream, failure));
+  }
+
+  /** The proxy client's per-origin counts, for {@code /upstream-pools}. */
+  UpstreamPools pools() {
+    return pools;
+  }
+
+  /**
+   * Whose an upstream origin is, for {@code /upstream-pools} and the full-pool WARN: the
+   * application a deployment published it for, then the platform app grid — the same two sources,
+   * in the same order, that {@link #upstreamOf} dials from — and the wire alias read as {@code
+   * <env>-<application>} when neither names it any more.
+   */
+  UpstreamPools.Owner owner(Upstream upstream) {
+    EdgeEndpoint published = routes.owner(upstream);
+    if (published != null) {
+      return new UpstreamPools.Owner(published.application(), published.environment());
+    }
+    for (String environment : hostEnvironments.environments()) {
+      for (String app : hostEnvironments.apps()) {
+        if (appUpstream(app, environment, config.apps()).equals(upstream)) {
+          return new UpstreamPools.Owner(PlatformApps.application(app), environment);
+        }
+      }
+    }
+    return UpstreamPools.Owner.guess(upstream, hostEnvironments.environments());
   }
 
   /** Where an unmatched Host name goes. */
