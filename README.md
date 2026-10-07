@@ -233,7 +233,7 @@ What the door answers is:
 - `GET /` (and `HEAD /`) — `302` to qits-projects' host once the projection names one: the `system`
   placement qits-projects publishes, or a host called `projects`. An anonymous visitor lands on the
   login through the host that owns it. `404` while no such host is known;
-- `/q` and `/main-navigation` — the edge's own two surfaces;
+- `/q`, `/main-navigation` and `/upstream-pools` — the edge's own surfaces;
 - everything else — `404` in plain text, naming `<app>.<authority>`, logged at INFO so anything
   still dialling the door can be found.
 
@@ -257,7 +257,7 @@ machine token are both answered `404` like any other request.
   still does its own hygiene and has to — a request can reach it from qits-net without passing this
   process. `Authorization`, `Cookie` and every custom header pass through untouched.
 - **No UI, no SPA, no landing page, no `/api`.** The paths this process answers are `/q`,
-  `/main-navigation`, and, on a configured application vhost only, `/token`. It knows nothing about
+  `/main-navigation`, `/upstream-pools`, and, on a configured application vhost only, `/token`. It knows nothing about
   projects or repositories: a navigation slot says WHERE the shell hangs an entry, and the shell
   decides what hangs there.
 - **No TLS of its own to configure.** The image carries a Let's Encrypt certificate *slot* and
@@ -322,6 +322,31 @@ machine token are both answered `404` like any other request.
   application under, so nothing leaves the sidebar during a rollout. There is no flat list and no
   synthesized `Home`: the environment's own door is qits-projects' `system` entry, a deployment fact
   like every other entry here.
+- **Keeps upstream sockets honest.** Every upstream connection has `SO_KEEPALIVE` on and the
+  kernel's keepalive timers set to probe after 60 s of silence, every 10 s, and give up after 3
+  (`UpstreamKeepAlive`). An SSE stream whose upstream task swarm redeployed away gets no FIN and no
+  RST, the edge only reads, and the proxy client's idle timeout is zero on purpose — so without
+  these the socket stayed ESTABLISHED for good and held one of its origin's 64 pool slots; after 64
+  such streams every request to that origin waited out the 30 s acquisition bound and failed.
+  Vert.x 4.5 applies no `tcpKeepAlive*` timer to a client socket, so they are set per channel in the
+  client's connect handler, reached through Vert.x internal API in one class (`UpstreamChannel`).
+  An option that cannot be set is an ERROR once per process per option and never fails a request.
+- **Says when a pool stays full.** The same connect handler counts open connections per origin
+  (`host:port`, what Vert.x pools by) and counts each one down when its Netty channel closes — the
+  one close signal that survives any change of handler on that channel. A check every 60 s logs one
+  WARN per origin that sat at `64/64` for the whole interval — full at the previous check, full now,
+  and no close in between. WebSockets count: they are opened through the same client as pooled
+  HTTP/1.1 requests, and a spliced `101` keeps its pool slot until it closes, so a full pool of
+  terminals is a full pool.
+- **Serves `/upstream-pools` on every vhost**, never proxied, `Cache-Control: no-store`: a JSON
+  array with one entry per origin holding a connection, fullest first —
+  `{"name":"qits-projects","environment":"dev","origin":"dev-qits-projects:8080","open":12,"max":64}`.
+  `name` and `environment` come from the deployment projection, then the platform app grid, then
+  the wire alias read as `<env>-<application>`; an origin none of them names is listed under its
+  host with a null environment. `max` is the configured pool size. It answers only a caller the
+  edge would let through to a service — a machine credential carrying the platform audience, or,
+  with the browser gate on, a live `qits-session` — and `401` (a `Bearer` challenge, never `Basic`)
+  to everybody else.
 - **Answers `/q/health/{live,ready}` itself**, never proxied, whatever the `Host` says. Readiness
   reports the resolved environment → upstream map as health data and stays DOWN until the
   deployment projection has reached qits-events' confirmed head.

@@ -173,6 +173,27 @@ class EdgeSessionGateTest {
   // --- the login page's own host ----------------------------------------------------------------
 
   @Test
+  void upstreamPoolsAnswersALiveSessionAndRefusesADeadOne() {
+    // The landing page's bumps menu reads this document with the person's own cookie, same-origin,
+    // on the project's door — a name that proxies nothing, which is why the edge answers it there.
+    EdgeClient.Answer live = client().get("acme.example.com", UpstreamPoolsRoute.PATH, session());
+    assertEquals(200, live.status(), live.body());
+    assertEquals("no-store", live.headers().get("cache-control"));
+    assertTrue(live.body().startsWith("["), live.body());
+
+    EdgeClient.Answer expired =
+        client()
+            .get(
+                "acme.example.com",
+                UpstreamPoolsRoute.PATH,
+                cookieHeader(StubGateways.EXPIRED_SESSION));
+    assertEquals(401, expired.status());
+    // Bearer and never Basic: a Basic challenge on a background fetch opens a browser's own
+    // credential dialog.
+    assertEquals(List.of("Bearer"), expired.headerValues("WWW-Authenticate"));
+  }
+
+  @Test
   void aRefusedNavigationIsSentToTheHostThatOWNSTheLoginPath() {
     // The login moved off the door with every other service. The origin is read off the projection
     // — whoever owns /idp/login and publishes a host — and never from the canonical origin, which

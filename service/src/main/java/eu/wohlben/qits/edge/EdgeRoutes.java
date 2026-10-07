@@ -238,6 +238,23 @@ public class EdgeRoutes {
     return null;
   }
 
+  /**
+   * The published route whose upstream is this address, in any environment, or null when no
+   * deployment names it — which application, in which environment, an upstream pool belongs to. A
+   * scan, because it is asked per {@code /upstream-pools} answer and per pool WARN, never per
+   * proxied request.
+   */
+  public EdgeEndpoint owner(Upstream upstream) {
+    for (List<EdgeEndpoint> endpoints : view.endpoints().values()) {
+      for (EdgeEndpoint endpoint : endpoints) {
+        if (endpoint.upstream().equals(upstream)) {
+          return endpoint;
+        }
+      }
+    }
+    return null;
+  }
+
   /** The service this public name reaches in this environment, or null when nothing claims it. */
   public ServiceHost serviceHost(String environment, String host) {
     return host == null
