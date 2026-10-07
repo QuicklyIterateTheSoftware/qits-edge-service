@@ -1,6 +1,7 @@
 package eu.wohlben.qits.edge;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.vertx.core.http.HttpClientOptions;
 import org.junit.jupiter.api.Test;
@@ -47,6 +48,15 @@ class EdgeProxyClientOptionsTest {
     // reconnected per request would turn every hop into a handshake.
     HttpClientOptions options = EdgeRouter.proxyClientOptions(5000);
     assertEquals(true, options.isKeepAlive());
+  }
+
+  @Test
+  void upstreamSocketsAreKeptAliveByTheKernel() {
+    // The other half of keeping the idle timeout at zero. A stream whose upstream task was
+    // redeployed away gets no FIN and no RST, and the edge only reads, so without SO_KEEPALIVE
+    // nothing ever closes it and it holds its pool slot for good. The timers that make the kernel
+    // probe within a minute are per channel — see UpstreamKeepAliveTest.
+    assertTrue(EdgeRouter.proxyClientOptions(5000).isTcpKeepAlive());
   }
 
   @Test

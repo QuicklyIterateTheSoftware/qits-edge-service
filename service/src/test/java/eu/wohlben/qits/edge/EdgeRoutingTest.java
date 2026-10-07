@@ -698,6 +698,65 @@ class EdgeRoutingTest {
             .getString("origin"));
   }
 
+  // --- /upstream-pools
+  // ----------------------------------------------------------------------------
+
+  @Test
+  void upstreamPoolsAnswersNobodyWithoutACredential() {
+    // The document names every upstream on the estate and how loaded it is. A cookie is no
+    // credential here either: the browser gate is off in this suite, so the edge reads none.
+    for (Map<String, String> credential :
+        List.of(
+            Map.<String, String>of(),
+            Map.of("Cookie", "qits-session=" + StubGateways.SESSION),
+            bearer("not-a-jwt"),
+            tierToken("dev"))) {
+      EdgeClient.Answer answer =
+          client().get("dev.acme.example.com", UpstreamPoolsRoute.PATH, credential);
+      assertEquals(401, answer.status(), credential.toString());
+      assertEquals("no-store", answer.headers().get("cache-control"));
+      assertNull(answer.line("upstream"), "answered by the edge, never proxied");
+    }
+  }
+
+  @Test
+  void upstreamPoolsListsEachOpenPoolWithItsApplicationFullestFirst() {
+    // One request to dev's registry leaves one pooled connection to its stub — keep-alive is the
+    // point of a pool — and the platform app grid says whose that address is.
+    assertEquals(
+        "registry-dev",
+        client().get("registry.dev.acme.example.com", "/v2/", token("dev")).line("upstream"));
+
+    for (String host : List.of("dev.acme.example.com", "ci.dev.acme.example.com", "localhost")) {
+      EdgeClient.Answer answer = client().get(host, UpstreamPoolsRoute.PATH, token("dev"));
+      assertEquals(200, answer.status(), host);
+      assertEquals("no-store", answer.headers().get("cache-control"));
+      assertNull(answer.line("upstream"), "answered by the edge on every name, never proxied");
+
+      io.vertx.core.json.JsonArray pools = new io.vertx.core.json.JsonArray(answer.body());
+      JsonObject registry = null;
+      int previous = Integer.MAX_VALUE;
+      for (int i = 0; i < pools.size(); i++) {
+        JsonObject pool = pools.getJsonObject(i);
+        assertEquals(
+            java.util.Set.of("name", "environment", "origin", "open", "max"),
+            pool.fieldNames(),
+            pool.encode());
+        assertEquals(64, pool.getInteger("max"), "the configured pool size");
+        assertTrue(pool.getInteger("open") >= 1, "only origins holding a connection are listed");
+        assertTrue(pool.getInteger("open") <= previous, "fullest first: " + pools.encode());
+        previous = pool.getInteger("open");
+        if (pool.getString("origin")
+            .equals(upstream("qits.edge.apps.registry.hosts.dev").toString())) {
+          registry = pool;
+        }
+      }
+      assertNotNull(registry, "dev's registry holds a connection: " + pools.encode());
+      assertEquals("qits-artifacts", registry.getString("name"));
+      assertEquals("dev", registry.getString("environment"));
+    }
+  }
+
   // --- a service's own name ---------------------------------------------------------------------
 
   @Test
