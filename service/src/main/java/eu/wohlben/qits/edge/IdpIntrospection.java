@@ -58,8 +58,9 @@ public class IdpIntrospection {
 
   @PostConstruct
   void open() {
-    // Its own client, like IdpGrants': the proxy's is tuned for 64 concurrent layer pushes with no
-    // idle timeout, which is the opposite of a small JSON POST that must fail fast and be retried.
+    // Its own client, like IdpGrants': the proxy's is tuned for 256 concurrent layer pushes with
+    // no idle timeout, which is the opposite of a small JSON POST that must fail fast and be
+    // retried.
     client = vertx.createHttpClient();
     authorization =
         basicAuthorization(

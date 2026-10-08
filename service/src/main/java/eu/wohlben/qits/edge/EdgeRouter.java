@@ -182,12 +182,17 @@ public class EdgeRouter {
         // queue. Every request for an environment shares one origin here, so the default
         // would make a single `docker push` — up to five concurrent layer uploads, each
         // holding its connection for minutes — starve that whole environment with nothing
-        // logged to say why. The same number, for the same reason, as qits-gateway's.
-        .setMaxPoolSize(64)
+        // logged to say why. It was 64, qits-gateway's number, until a fleet of agents each
+        // holding an MCP event stream to qits-projects filled 64 by itself. A slot is one
+        // socket and a few KB of buffers here and on the upstream — cheap next to an outage.
+        .setMaxPoolSize(256)
         // The wait queue is bounded too, where Vert.x defaults to unbounded. An exhausted pool
         // used to queue every further request forever — the whole vhost hung, nothing logged.
         // Beyond this depth callers get an immediate failure, which the proxy answers as a 502;
         // the acquisition timeout on each origin request bounds the wait of those still queued.
+        // Kept at 256 when the pool grew to the same number: the queue only matters once the pool
+        // is exhausted, and a full pool with a queue as deep again is already an incident that
+        // fast 502s describe better than a minute of hanging requests.
         .setMaxWaitQueueSize(256)
         // Stated rather than inherited. Zero, no client-side idle timeout, is already the
         // default and has to stay: quarkus.http.idle-timeout keeps the inbound half of a

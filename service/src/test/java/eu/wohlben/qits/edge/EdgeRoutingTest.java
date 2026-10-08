@@ -742,7 +742,7 @@ class EdgeRoutingTest {
             java.util.Set.of("name", "environment", "origin", "open", "max"),
             pool.fieldNames(),
             pool.encode());
-        assertEquals(64, pool.getInteger("max"), "the configured pool size");
+        assertEquals(256, pool.getInteger("max"), "the configured pool size");
         assertTrue(pool.getInteger("open") >= 1, "only origins holding a connection are listed");
         assertTrue(pool.getInteger("open") <= previous, "fullest first: " + pools.encode());
         previous = pool.getInteger("open");

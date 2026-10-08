@@ -36,10 +36,12 @@ class EdgeProxyClientOptionsTest {
   }
 
   @Test
-  void thePoolIsWideEnoughForAConcurrentLayerPush() {
+  void thePoolIsWideEnoughForAConcurrentLayerPushAndAFleetOfStreams() {
     // Vert.x pools per origin and defaults to five, and every request for an environment shares
-    // one origin here, so one `docker push` would starve that whole environment.
-    assertEquals(64, EdgeRouter.proxyClientOptions(5000).getMaxPoolSize());
+    // one origin here, so one `docker push` would starve that whole environment. It was 64 until
+    // agents' MCP event streams filled 64 to qits-projects on their own; the streams have a pool of
+    // their own now, built from these same options, so this number is both pools' width.
+    assertEquals(256, EdgeRouter.proxyClientOptions(5000).getMaxPoolSize());
   }
 
   @Test
@@ -61,8 +63,9 @@ class EdgeProxyClientOptionsTest {
 
   @Test
   void theWaitQueueIsBoundedSoAnExhaustedPoolFailsInsteadOfHangingSilently() {
-    // Vert.x defaults the wait queue to unbounded. With 64 slots gone — the leak this bound
-    // backstops held all 64 for a day — every further request to that origin queued forever with
+    // Vert.x defaults the wait queue to unbounded. With every slot gone — the leak this bound
+    // backstops held all of a 64-slot pool for a day — every further request to that origin queued
+    // forever with
     // nothing logged: the whole vhost hung, plain document GETs included. Bounded, the excess
     // fails immediately and the origin provider's log line names the origin.
     assertEquals(256, EdgeRouter.proxyClientOptions(5000).getMaxWaitQueueSize());

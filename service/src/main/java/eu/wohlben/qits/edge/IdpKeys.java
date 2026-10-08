@@ -58,7 +58,7 @@ public class IdpKeys {
 
   @PostConstruct
   void open() {
-    // Its own client, not the proxy's: that one is tuned for 64 concurrent layer pushes with no
+    // Its own client, not the proxy's: that one is tuned for 256 concurrent layer pushes with no
     // idle timeout, which is the opposite of a small JSON GET that must fail fast.
     client = vertx.createHttpClient();
   }
