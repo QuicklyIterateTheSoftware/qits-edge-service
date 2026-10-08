@@ -50,6 +50,11 @@ import org.jboss.logging.Logger;
  * secret, reaches its upstream carrying {@code Bearer <the JWT it was validated with>}, exactly as
  * a plain request does; and a refused credential is answered 401 before any upstream connection is
  * acquired.
+ *
+ * <p><b>A socket is acquired from the STREAM pool</b> — {@link EdgeRouter} hands this class that
+ * client and its {@link UpstreamPools} — because a terminal holds its connection for as long as
+ * somebody is typing into it. Its lease is ended by the channel closing and by nothing else: a
+ * spliced socket has no response end, and every exit before the splice closes the connection.
  */
 final class EdgeWebSocketUpgrade {
 
@@ -57,8 +62,15 @@ final class EdgeWebSocketUpgrade {
 
   private final HttpClient client;
 
-  EdgeWebSocketUpgrade(HttpClient client) {
+  private final UpstreamPools pools;
+
+  /**
+   * @param client the stream pool's client
+   * @param pools that client's counts, where the handshake's wait and its lease are recorded
+   */
+  EdgeWebSocketUpgrade(HttpClient client, UpstreamPools pools) {
     this.client = client;
+    this.pools = pools;
   }
 
   /**
@@ -70,17 +82,24 @@ final class EdgeWebSocketUpgrade {
    *     plain request
    */
   void handle(HttpServerRequest request, Upstream upstream, RequestOptions origin) {
+    UpstreamLease lease = UpstreamLease.of(request);
+    long since = pools.acquiring();
     client
         .request(origin)
         .onFailure(
             failure -> {
+              pools.failed(upstream, since);
               // The one saturation log line for this origin: pool exhaustion used to hang here
               // silently instead.
               LOG.warnf(
                   "no upstream connection to %s for a WebSocket upgrade: %s", upstream, failure);
               refuse(request, saturated(failure) ? 503 : 502);
             })
-        .onSuccess(handshake -> forward(request, upstream, handshake));
+        .onSuccess(
+            handshake -> {
+              pools.granted(upstream, since, handshake, lease, true);
+              forward(request, upstream, handshake);
+            });
   }
 
   /** Whether this failure is a full pool rather than a broken upstream. */

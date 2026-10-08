@@ -20,6 +20,7 @@ import io.vertx.httpproxy.OriginRequestProvider;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeSet;
@@ -121,19 +122,44 @@ public class EdgeRouter {
 
   private HostEnvironments hostEnvironments;
 
-  /** One reusable proxy per platform application vhost, per environment. */
-  private final Map<String, HttpProxy> appProxies = new java.util.LinkedHashMap<>();
+  /** One reusable pair of proxies per platform application vhost, per environment. */
+  private final Map<String, Proxies> appProxies = new java.util.LinkedHashMap<>();
 
   /**
    * Direct deployment endpoints arrive after boot, so their proxies are created lazily and reused.
    */
-  private final Map<Upstream, HttpProxy> endpointProxies =
+  private final Map<Upstream, Proxies> endpointProxies =
       new java.util.concurrent.ConcurrentHashMap<>();
 
-  private HttpClient client;
+  /** The client ordinary requests are proxied through, and what it holds open per origin. */
+  private Pool ordinary;
 
-  /** What {@link #client} holds open per origin — see {@link UpstreamPools}. */
-  private UpstreamPools pools;
+  /**
+   * The client long-lived streams are proxied through — see {@link #isStream} — and what it holds
+   * open per origin.
+   */
+  private Pool stream;
+
+  /**
+   * One proxy client and its {@link UpstreamPools}. There are two, and the split is the fix for a
+   * real outage: every SSE GET and every WebSocket holds a pooled HTTP/1.1 connection for its whole
+   * life, and when they shared one pool with everything else, dozens of agents' MCP event streams
+   * to qits-projects held every slot of it and each ordinary request to qits-projects queued for
+   * its thirty seconds and failed. A stream now competes only with other streams, and an exhausted
+   * stream pool refuses the next stream rather than the next page load.
+   */
+  private record Pool(HttpClient client, UpstreamPools pools) {}
+
+  /**
+   * The two proxies for one upstream, one per {@link Pool}. Built together so a request can be
+   * moved between them per exchange without creating anything on the request path.
+   */
+  private record Proxies(HttpProxy ordinary, HttpProxy stream) {
+
+    HttpProxy pick(boolean isStream) {
+      return isStream ? stream : ordinary;
+    }
+  }
 
   /**
    * Where one Host name goes, once the projection has had its say.
@@ -183,8 +209,11 @@ public class EdgeRouter {
         // would make a single `docker push` — up to five concurrent layer uploads, each
         // holding its connection for minutes — starve that whole environment with nothing
         // logged to say why. It was 64, qits-gateway's number, until a fleet of agents each
-        // holding an MCP event stream to qits-projects filled 64 by itself. A slot is one
-        // socket and a few KB of buffers here and on the upstream — cheap next to an outage.
+        // holding an MCP event stream to qits-projects filled 64 by itself; streams have a pool
+        // of their own now (EdgeRouter.Pool), and both pools are 256 so that neither a busy
+        // estate's ordinary traffic nor its streams meet the ceiling in normal operation. A slot
+        // is one socket and a few KB of buffers here and on the upstream — cheap next to an
+        // outage — and the per-pool WARN still says when one gets close.
         .setMaxPoolSize(256)
         // The wait queue is bounded too, where Vert.x defaults to unbounded. An exhausted pool
         // used to queue every further request forever — the whole vhost hung, nothing logged.
@@ -250,14 +279,19 @@ public class EdgeRouter {
             config.defaultEnvironment(),
             PlatformApps.labels(),
             domain(config.domain()));
-    HttpClientOptions options = proxyClientOptions(5_000);
-    pools =
-        new UpstreamPools(options.getMaxPoolSize(), upstream -> owner(upstream).describe(upstream));
-    client = proxyClient(vertx, options, pools::connected);
-    // A pool that stays full is said out loud, once a minute, by the edge itself — not first by
+    ordinary = pool(UpstreamPools.ORDINARY);
+    stream = pool(UpstreamPools.STREAM);
+    // A pool under pressure is said out loud, once a minute, by the edge itself — not first by
     // the thirty-second timeout of the request that queued behind it.
-    vertx.setPeriodic(UpstreamPools.CHECK_INTERVAL_MS, ignored -> pools.check());
-    webSocketUpgrade = new EdgeWebSocketUpgrade(client);
+    vertx.setPeriodic(
+        UpstreamPools.CHECK_INTERVAL_MS,
+        ignored -> {
+          ordinary.pools().check();
+          stream.pools().check();
+        });
+    // A WebSocket is a stream for its whole life, so its handshake is acquired from the stream
+    // pool — see isStream.
+    webSocketUpgrade = new EdgeWebSocketUpgrade(stream.client(), stream.pools());
 
     for (String environment : hostEnvironments.environments()) {
       // Every platform application, in every environment. The label set is one axis and the
@@ -271,13 +305,29 @@ public class EdgeRouter {
     router.route().order(ROUTE_ORDER).handler(this::handle);
   }
 
-  private void registerApp(String key, Upstream upstream) {
-    appProxies.put(key, reverseProxy(upstream));
+  /**
+   * One proxy client of its own, from the same options as the other: a separate Vert.x pool per
+   * origin, its own connect handler, its own counts.
+   */
+  private Pool pool(String name) {
+    HttpClientOptions options = proxyClientOptions(5_000);
+    UpstreamPools pools =
+        new UpstreamPools(
+            name, options.getMaxPoolSize(), upstream -> owner(upstream).describe(upstream));
+    return new Pool(proxyClient(vertx, options, pools::connected), pools);
   }
 
-  private HttpProxy reverseProxy(Upstream upstream) {
-    return HttpProxy.reverseProxy(client)
-        .origin(origin(upstream))
+  private void registerApp(String key, Upstream upstream) {
+    appProxies.put(key, proxies(upstream));
+  }
+
+  private Proxies proxies(Upstream upstream) {
+    return new Proxies(reverseProxy(upstream, ordinary), reverseProxy(upstream, stream));
+  }
+
+  private HttpProxy reverseProxy(Upstream upstream, Pool pool) {
+    return HttpProxy.reverseProxy(pool.client())
+        .origin(origin(upstream, pool))
         .addInterceptor(new EdgeHeaders())
         .addInterceptor(new EdgeCacheControl())
         .addInterceptor(new EdgeHopByHop())
@@ -285,21 +335,36 @@ public class EdgeRouter {
   }
 
   /**
-   * {@code .origin(port, host)} with two additions the built-in provider lacks: the acquisition
-   * bound of {@link #originRequestOptions}, and a log line. An exhausted pool used to fail with
-   * nothing anywhere naming the origin that was full — the proxy answers the caller a 502 either
-   * way, but the operator reads this.
+   * {@code .origin(port, host)} with what the built-in provider lacks: the acquisition bound of
+   * {@link #originRequestOptions}, a log line, and the pool's bookkeeping. An exhausted pool used
+   * to fail with nothing anywhere naming the origin that was full — the proxy answers the caller a
+   * 502 either way, but the operator reads this.
+   *
+   * <p>The lease is read off the inbound request HERE, before the connection is asked for, and the
+   * acquisition is timed from here to the grant or the failure — see {@link UpstreamPools}. The
+   * grant listener is registered before the future is handed back, so it runs before the proxy's
+   * own and the lease exists before a byte is sent.
    */
-  private OriginRequestProvider origin(Upstream upstream) {
-    return context ->
-        client
-            .request(originRequestOptions(upstream))
-            .onFailure(failure -> LOG.warnf("no upstream connection to %s: %s", upstream, failure));
+  private OriginRequestProvider origin(Upstream upstream, Pool pool) {
+    return context -> {
+      UpstreamLease lease = UpstreamLease.of(context.request().proxiedRequest());
+      long since = pool.pools().acquiring();
+      return pool.client()
+          .request(originRequestOptions(upstream))
+          .onSuccess(request -> pool.pools().granted(upstream, since, request, lease, false))
+          .onFailure(
+              failure -> {
+                pool.pools().failed(upstream, since);
+                LOG.warnf(
+                    "no upstream connection to %s from the %s pool: %s",
+                    upstream, pool.pools().pool(), failure);
+              });
+    };
   }
 
-  /** The proxy client's per-origin counts, for {@code /upstream-pools}. */
-  UpstreamPools pools() {
-    return pools;
+  /** Both proxy clients' per-origin counts and leases, for {@code /upstream-pools}. */
+  List<UpstreamPools> pools() {
+    return List.of(ordinary.pools(), stream.pools());
   }
 
   /**
@@ -959,14 +1024,51 @@ public class EdgeRouter {
       webSocketUpgrade.handle(request, upstream, originRequestOptions(upstream));
       return;
     }
+    boolean streams = isStream(request);
     if (target.host() != null) {
-      endpointProxy(upstreamOf(request, target)).handle(request);
+      endpointProxies(upstreamOf(request, target)).pick(streams).handle(request);
       return;
     }
     // Only a service target reaches this method, and a service with no published host is a
     // PLATFORM vhost: the whole name is one service, exactly as it was before the projection
     // carried any.
-    appProxies.get(target.route().app() + "." + target.environment()).handle(request);
+    appProxies.get(target.route().app() + "." + target.environment()).pick(streams).handle(request);
+  }
+
+  /**
+   * Whether this exchange is a long-lived stream, and so goes through the stream pool: a WebSocket
+   * upgrade, or a GET or HEAD that asks for {@code text/event-stream}. See {@link
+   * #streams(HttpMethod, List)} for the rule and {@link Pool} for why there are two pools.
+   */
+  static boolean isStream(HttpServerRequest request) {
+    return isWebSocketUpgrade(request)
+        || streams(request.method(), request.headers().getAll(HttpHeaders.ACCEPT));
+  }
+
+  /**
+   * The SSE half of {@link #isStream}, pure so it is asserted without a request.
+   *
+   * <p><b>The method is half of the rule, and the half that matters most.</b> An MCP client POSTs
+   * every JSON-RPC message with {@code Accept: application/json, text/event-stream} — the protocol
+   * requires it, because the server MAY answer one with a short SSE stream — and an agent sends
+   * many of those a minute. Read by its {@code Accept} alone, every one of them would be filed as a
+   * stream, and the ordinary pool would be what the agents' traffic DIDN'T reach. A POST is an
+   * ordinary exchange that may happen to stream its answer; the long-lived thing an MCP session
+   * holds is its GET, which opens the server-to-client channel and keeps it for the session's life.
+   * So: GET or HEAD, and {@code text/event-stream} anywhere in any {@code Accept} value, case
+   * folded — a browser's {@code EventSource} sends it alone, a client library may list it among
+   * others or repeat the header.
+   */
+  static boolean streams(HttpMethod method, List<String> accepts) {
+    if (method != HttpMethod.GET && method != HttpMethod.HEAD) {
+      return false;
+    }
+    for (String accept : accepts) {
+      if (accept != null && accept.toLowerCase(Locale.ROOT).contains("text/event-stream")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -993,8 +1095,8 @@ public class EdgeRouter {
     return appUpstream(target.route().app(), target.environment(), config.apps());
   }
 
-  private HttpProxy endpointProxy(Upstream upstream) {
-    return endpointProxies.computeIfAbsent(upstream, this::reverseProxy);
+  private Proxies endpointProxies(Upstream upstream) {
+    return endpointProxies.computeIfAbsent(upstream, this::proxies);
   }
 
   /**

@@ -277,7 +277,7 @@ machine token are both answered `404` like any other request.
   included, with nothing logged. The edge's path never registers a body handler on the handshake
   (a WebSocket client sends nothing before the `101`), closes the upstream connection on every
   failure after acquisition, and answers a refused upgrade with the upstream's own status.
-  Saturation is bounded and visible now, whatever causes it: the per-origin pool (64) fronts a
+  Saturation is bounded and visible now, whatever causes it: each per-origin pool (256) fronts a
   bounded wait queue (256) and every origin acquisition carries a 30 s bound, so exhaustion answers
   fast — 503 on the upgrade path, 502 through the proxy — with a WARN line naming the origin,
   instead of queueing forever with nothing logged.
@@ -331,19 +331,31 @@ machine token are both answered `404` like any other request.
   Vert.x 4.5 applies no `tcpKeepAlive*` timer to a client socket, so they are set per channel in the
   client's connect handler, reached through Vert.x internal API in one class (`UpstreamChannel`).
   An option that cannot be set is an ERROR once per process per option and never fails a request.
-- **Says when a pool stays full.** The same connect handler counts open connections per origin
-  (`host:port`, what Vert.x pools by) and counts each one down when its Netty channel closes — the
-  one close signal that survives any change of handler on that channel. A check every 60 s logs one
-  WARN per origin that sat at `64/64` for the whole interval — full at the previous check, full now,
-  and no close in between. WebSockets count: they are opened through the same client as pooled
-  HTTP/1.1 requests, and a spliced `101` keeps its pool slot until it closes, so a full pool of
-  terminals is a full pool.
+- **Proxies streams through a pool of their own.** An SSE GET and a WebSocket each hold a pooled
+  HTTP/1.1 upstream connection for their whole life, so agents' MCP event streams to qits-projects
+  once filled its whole pool (then 64) and every ordinary request to it queued 30 s and failed. A
+  request is a *stream* when it is a WebSocket upgrade, or a GET/HEAD whose `Accept` names
+  `text/event-stream` (any value, any case); those go through a second proxy client with its own
+  per-origin pool of 256. Everything else — MCP's POSTs included, although they send
+  `Accept: application/json, text/event-stream` — goes through the ordinary client, also 256.
+- **Says when a pool is under pressure, and what it is full of.** Each client's connect handler
+  counts open connections per origin (`host:port`, what Vert.x pools by) and counts each one down
+  when its Netty channel closes — the one close signal that survives any change of handler on that
+  channel. Every connection the pool grants is *leased* to the exchange it carries — method, path
+  without query, inbound client (first `X-Forwarded-For` hop, else the peer), `User-Agent`, the
+  `workspaceId` query parameter, and the trace id — until the upstream response ends, the exchange
+  fails, or the channel closes; an idle pooled connection has no lease. A check every 60 s logs one
+  WARN per pool and origin that spent more than 30 s of the interval at max, or where any
+  acquisition waited more than 5 s for a connection, with the time at max, the longest wait, the
+  count of slow waits and the five oldest leases. WebSockets count: a spliced `101` keeps its pool
+  slot until it closes, so a full pool of terminals is a full pool.
 - **Serves `/upstream-pools` on every vhost**, never proxied, `Cache-Control: no-store`: a JSON
-  array with one entry per origin holding a connection, fullest first —
-  `{"name":"qits-projects","environment":"dev","origin":"dev-qits-projects:8080","open":12,"max":64}`.
+  array with one entry per pool and origin holding a connection, fullest first —
+  `{"name":"qits-projects","environment":"dev","origin":"dev-qits-projects:8080","pool":"stream","open":12,"max":256,"held":[{"method":"GET","path":"/projects/mcp","ageMs":3605211,"client":"10.0.0.7","userAgent":"…","workspaceId":"ws-1","traceId":"4bf9…"}]}`.
+  `held` is the pool's leases on that origin, oldest first.
   `name` and `environment` come from the deployment projection, then the platform app grid, then
   the wire alias read as `<env>-<application>`; an origin none of them names is listed under its
-  host with a null environment. `max` is the configured pool size. It answers only a caller the
+  host with a null environment. `max` is that pool's configured size. It answers only a caller the
   edge would let through to a service — a machine credential carrying the platform audience, or,
   with the browser gate on, a live `qits-session` — and `401` (a `Bearer` challenge, never `Basic`)
   to everybody else.

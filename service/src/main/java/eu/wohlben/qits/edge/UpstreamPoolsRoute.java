@@ -14,25 +14,34 @@ import jakarta.inject.Inject;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import org.jboss.logging.Logger;
 
 /**
- * {@code GET /upstream-pools}: how full the proxy client's pool to each upstream origin is, on
- * every vhost, answered by the edge itself and never proxied — the same shape of route as {@link
- * NavigationRoute}.
+ * {@code GET /upstream-pools}: how full each of the edge's two proxy pools is to each upstream
+ * origin, and what is holding the connections, on every vhost, answered by the edge itself and
+ * never proxied — the same shape of route as {@link NavigationRoute}.
  *
- * <p>The document is an array with one entry per origin holding at least one open connection,
- * fullest first:
+ * <p>The document is an array with one entry per pool and origin holding at least one open
+ * connection, fullest first:
  *
  * <pre>{@code
- * [{"name":"qits-projects","environment":"dev","origin":"dev-qits-projects:8080","open":12,"max":64}]
+ * [{"name":"qits-projects","environment":"dev","origin":"dev-qits-projects:8080","pool":"stream",
+ *   "open":12,"max":256,
+ *   "held":[{"method":"GET","path":"/projects/mcp","ageMs":3605211,"client":"10.0.0.7",
+ *            "userAgent":"claude-code/2.1","workspaceId":"ws-1","traceId":"4bf92f35..."}]}]
  * }</pre>
  *
  * {@code name} and {@code environment} are whose the origin is — see {@link EdgeRouter#owner},
  * which names an origin no deployment claims any more by its wire alias, and by its bare host with
- * a null environment when even that does not read. {@code max} is the client's configured pool
- * size, read from the options rather than written here, so the two cannot disagree.
+ * a null environment when even that does not read. {@code pool} is {@code ordinary} or {@code
+ * stream} — see {@link UpstreamPools} for why there are two — and {@code max} is THAT pool's
+ * configured size, read from its options rather than written here, so the two cannot disagree.
+ *
+ * <p>{@code held} is one entry per leased connection, oldest first: the exchange it is carrying now
+ * — see {@link UpstreamLease} — and {@code ageMs}, how long it has held it. {@code open} minus the
+ * length of {@code held} is the origin's idle connections. Every field of a held entry but {@code
+ * method}, {@code path} and {@code ageMs} may be null; they are written as null rather than left
+ * out, so a reader iterates one shape. A path is listed without its query string.
  *
  * <p><b>Only a caller the edge would let through to a service is answered.</b> The document names
  * every upstream on the estate and how loaded it is, which is not a thing to hand an anonymous
@@ -120,40 +129,59 @@ public class UpstreamPoolsRoute {
   }
 
   private void answer(HttpServerRequest request) {
-    UpstreamPools pools = edgeRouter.pools();
+    List<UpstreamPools.Snapshot> snapshots = new ArrayList<>();
+    for (UpstreamPools pools : edgeRouter.pools()) {
+      snapshots.addAll(pools.snapshot());
+    }
     request
         .response()
         .putHeader(HttpHeaders.CONTENT_TYPE, "application/json; charset=utf-8")
         .putHeader(HttpHeaders.CACHE_CONTROL, "no-store")
-        .end(document(pools.open(), pools.max(), edgeRouter::owner).encode());
+        .end(document(snapshots, edgeRouter::owner).encode());
   }
 
   /**
-   * The document, from the counts and an owner lookup. Static so its shape and order are asserted
-   * without a boot.
+   * The document, from both pools' snapshots and an owner lookup. Static so its shape and order are
+   * asserted without a boot.
    *
-   * <p>Sorted by {@code open}, fullest first, then by origin so two equal pools keep one order
-   * between two reads.
+   * <p>Sorted by {@code open}, fullest first, then by origin and then by pool, so two equal entries
+   * keep one order between two reads. The leases keep the order the snapshot gave them, oldest
+   * first.
    */
   static JsonArray document(
-      Map<Upstream, Integer> open,
-      int max,
+      List<UpstreamPools.Snapshot> snapshots,
       java.util.function.Function<Upstream, UpstreamPools.Owner> owner) {
-    List<Map.Entry<Upstream, Integer>> entries = new ArrayList<>(open.entrySet());
+    List<UpstreamPools.Snapshot> entries = new ArrayList<>(snapshots);
     entries.sort(
-        Comparator.<Map.Entry<Upstream, Integer>>comparingInt(Map.Entry::getValue)
+        Comparator.comparingInt(UpstreamPools.Snapshot::open)
             .reversed()
-            .thenComparing(entry -> entry.getKey().toString()));
+            .thenComparing(entry -> entry.origin().toString())
+            .thenComparing(UpstreamPools.Snapshot::pool));
     JsonArray document = new JsonArray();
-    for (Map.Entry<Upstream, Integer> entry : entries) {
-      UpstreamPools.Owner whose = owner.apply(entry.getKey());
+    for (UpstreamPools.Snapshot entry : entries) {
+      UpstreamPools.Owner whose = owner.apply(entry.origin());
+      JsonArray held = new JsonArray();
+      for (UpstreamPools.Holder holder : entry.held()) {
+        UpstreamLease lease = holder.lease();
+        held.add(
+            new JsonObject()
+                .put("method", lease.method())
+                .put("path", lease.path())
+                .put("ageMs", holder.ageMs())
+                .put("client", lease.client())
+                .put("userAgent", lease.userAgent())
+                .put("workspaceId", lease.workspaceId())
+                .put("traceId", lease.traceId()));
+      }
       document.add(
           new JsonObject()
               .put("name", whose.name())
               .put("environment", whose.environment())
-              .put("origin", entry.getKey().toString())
-              .put("open", entry.getValue())
-              .put("max", max));
+              .put("origin", entry.origin().toString())
+              .put("pool", entry.pool())
+              .put("open", entry.open())
+              .put("max", entry.max())
+              .put("held", held));
     }
     return document;
   }
