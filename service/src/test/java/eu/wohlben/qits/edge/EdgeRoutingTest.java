@@ -739,22 +739,147 @@ class EdgeRoutingTest {
       for (int i = 0; i < pools.size(); i++) {
         JsonObject pool = pools.getJsonObject(i);
         assertEquals(
-            java.util.Set.of("name", "environment", "origin", "open", "max"),
+            java.util.Set.of("name", "environment", "origin", "pool", "open", "max", "held"),
             pool.fieldNames(),
+            pool.encode());
+        assertTrue(
+            java.util.Set.of(UpstreamPools.ORDINARY, UpstreamPools.STREAM)
+                .contains(pool.getString("pool")),
             pool.encode());
         assertEquals(256, pool.getInteger("max"), "the configured pool size");
         assertTrue(pool.getInteger("open") >= 1, "only origins holding a connection are listed");
         assertTrue(pool.getInteger("open") <= previous, "fullest first: " + pools.encode());
+        assertTrue(
+            pool.getJsonArray("held").size() <= pool.getInteger("open"),
+            "a lease is on an open connection: " + pool.encode());
         previous = pool.getInteger("open");
         if (pool.getString("origin")
-            .equals(upstream("qits.edge.apps.registry.hosts.dev").toString())) {
+                .equals(upstream("qits.edge.apps.registry.hosts.dev").toString())
+            && pool.getString("pool").equals(UpstreamPools.ORDINARY)) {
           registry = pool;
         }
       }
-      assertNotNull(registry, "dev's registry holds a connection: " + pools.encode());
+      assertNotNull(registry, "dev's registry holds an ordinary connection: " + pools.encode());
       assertEquals("qits-artifacts", registry.getString("name"));
       assertEquals("dev", registry.getString("environment"));
     }
+  }
+
+  @Test
+  void anEventStreamGetIsCarriedByTheStreamPoolAndNamedByItsLeaseUntilItCloses() throws Exception {
+    // The fix and its evidence in one exchange. An SSE GET holds its upstream connection for as
+    // long as it is open, so it must be counted in the STREAM pool and leave the ordinary pool's
+    // count alone — and while it is open, /upstream-pools names it: the path without its query,
+    // the workspace, the caller, the trace. The edge's OTel SDK is off in this suite, so the trace
+    // id is the caller's traceparent's — the id the server span would have continued.
+    Upstream registry = upstream("qits.edge.apps.registry.hosts.dev");
+    String traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+    int ordinaryBefore = openTo(UpstreamPools.ORDINARY, registry);
+    io.vertx.core.Vertx vertx = io.vertx.core.Vertx.vertx();
+    try {
+      io.vertx.core.http.RequestOptions options =
+          new io.vertx.core.http.RequestOptions()
+              .setServer(
+                  io.vertx.core.net.SocketAddress.inetSocketAddress(RestAssured.port, "127.0.0.1"))
+              .setHost("registry.dev.acme.example.com")
+              .setPort(80)
+              .setMethod(HttpMethod.GET)
+              .setURI(StubGateways.SSE_HOLD_PATH + "?workspaceId=ws-42&token=not-in-the-lease");
+      token("dev").forEach(options::putHeader);
+      options.putHeader("Accept", "text/event-stream");
+      options.putHeader("User-Agent", "lease-test/1");
+      options.putHeader("X-Forwarded-For", "203.0.113.7, 10.0.0.1");
+      options.putHeader("traceparent", "00-" + traceId + "-00f067aa0ba902b7-01");
+      java.util.concurrent.CompletableFuture<io.vertx.core.http.HttpClientResponse> opened =
+          new java.util.concurrent.CompletableFuture<>();
+      java.util.concurrent.CompletableFuture<String> firstChunk =
+          new java.util.concurrent.CompletableFuture<>();
+      vertx
+          .createHttpClient()
+          .request(options)
+          .compose(request -> request.send())
+          .onSuccess(
+              response -> {
+                response.handler(chunk -> firstChunk.complete(chunk.toString()));
+                opened.complete(response);
+              })
+          .onFailure(opened::completeExceptionally);
+      io.vertx.core.http.HttpClientResponse response =
+          opened.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      assertEquals(200, response.statusCode());
+      assertEquals(": open\n\n", firstChunk.get(30, java.util.concurrent.TimeUnit.SECONDS));
+
+      JsonObject held = held(UpstreamPools.STREAM, registry, StubGateways.SSE_HOLD_PATH);
+      assertNotNull(held, "the open stream is leased in the stream pool: " + poolsDocument());
+      assertEquals("GET", held.getString("method"));
+      assertEquals(StubGateways.SSE_HOLD_PATH, held.getString("path"), "no query string");
+      assertEquals("ws-42", held.getString("workspaceId"));
+      assertEquals("203.0.113.7", held.getString("client"), "the first forwarded hop");
+      assertEquals("lease-test/1", held.getString("userAgent"));
+      assertEquals(traceId, held.getString("traceId"));
+      assertTrue(held.getLong("ageMs") >= 0, held.encode());
+      assertNull(
+          held(UpstreamPools.ORDINARY, registry, StubGateways.SSE_HOLD_PATH),
+          "and not in the ordinary pool: " + poolsDocument());
+      assertTrue(
+          openTo(UpstreamPools.ORDINARY, registry) <= ordinaryBefore,
+          "the stream took no ordinary connection: " + poolsDocument());
+
+      // The caller goes away. The edge resets the origin request, which closes its connection,
+      // and the lease goes with it — nothing about a closed stream is left holding a name.
+      response.request().connection().close();
+      long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+      while (held(UpstreamPools.STREAM, registry, StubGateways.SSE_HOLD_PATH) != null) {
+        assertTrue(
+            System.nanoTime() < deadline,
+            "a closed stream's lease is released: " + poolsDocument());
+        Thread.sleep(50);
+      }
+    } finally {
+      StubGateways.releaseStreams();
+      vertx.close();
+    }
+  }
+
+  /** The {@code /upstream-pools} document as an admitted caller reads it. */
+  private static io.vertx.core.json.JsonArray poolsDocument() {
+    EdgeClient.Answer answer =
+        client().get("dev.acme.example.com", UpstreamPoolsRoute.PATH, token("dev"));
+    assertEquals(200, answer.status(), answer.body());
+    return new io.vertx.core.json.JsonArray(answer.body());
+  }
+
+  /** One pool's entry for one origin, or null when that pool holds nothing open to it. */
+  private static JsonObject entry(String pool, Upstream origin) {
+    io.vertx.core.json.JsonArray document = poolsDocument();
+    for (int i = 0; i < document.size(); i++) {
+      JsonObject entry = document.getJsonObject(i);
+      if (entry.getString("pool").equals(pool)
+          && entry.getString("origin").equals(origin.toString())) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  private static int openTo(String pool, Upstream origin) {
+    JsonObject entry = entry(pool, origin);
+    return entry == null ? 0 : entry.getInteger("open");
+  }
+
+  /** The lease on one path in one pool's entry for one origin, or null. */
+  private static JsonObject held(String pool, Upstream origin, String path) {
+    JsonObject entry = entry(pool, origin);
+    if (entry == null) {
+      return null;
+    }
+    io.vertx.core.json.JsonArray held = entry.getJsonArray("held");
+    for (int i = 0; i < held.size(); i++) {
+      if (path.equals(held.getJsonObject(i).getString("path"))) {
+        return held.getJsonObject(i);
+      }
+    }
+    return null;
   }
 
   // --- a service's own name ---------------------------------------------------------------------

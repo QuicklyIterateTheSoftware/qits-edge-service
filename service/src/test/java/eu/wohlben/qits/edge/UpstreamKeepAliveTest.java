@@ -83,7 +83,7 @@ class UpstreamKeepAliveTest {
 
   @Test
   void everyUpstreamSocketProbesAfterSixtySecondsEveryTenAndGivesUpAfterThree() throws Exception {
-    UpstreamPools pools = new UpstreamPools(64, Upstream::toString);
+    UpstreamPools pools = new UpstreamPools(UpstreamPools.ORDINARY, 256, Upstream::toString);
     CompletableFuture<Map<String, Object>> readBack = new CompletableFuture<>();
     HttpClient client =
         EdgeRouter.proxyClient(
@@ -134,7 +134,7 @@ class UpstreamKeepAliveTest {
   @Test
   void aConnectionIsCountedAgainstTheOriginItWasDialledAsAndUncountedWhenItCloses()
       throws Exception {
-    UpstreamPools pools = new UpstreamPools(64, Upstream::toString);
+    UpstreamPools pools = new UpstreamPools(UpstreamPools.ORDINARY, 256, Upstream::toString);
     CompletableFuture<HttpConnection> connected = new CompletableFuture<>();
     HttpClient client =
         EdgeRouter.proxyClient(
@@ -163,7 +163,7 @@ class UpstreamKeepAliveTest {
     // CONNECT end the same way: the HttpConnection becomes a raw socket and its close handler is
     // never called again. Counted down there, every tunnel would be a slot counted forever; the
     // channel's close future is what fires.
-    UpstreamPools pools = new UpstreamPools(64, Upstream::toString);
+    UpstreamPools pools = new UpstreamPools(UpstreamPools.ORDINARY, 256, Upstream::toString);
     HttpClient client =
         EdgeRouter.proxyClient(vertx, EdgeRouter.proxyClientOptions(5000), pools::connected);
     Upstream origin = new Upstream("localhost", server.actualPort());
@@ -195,7 +195,7 @@ class UpstreamKeepAliveTest {
         EdgeRouter.proxyClient(
             vertx,
             EdgeRouter.proxyClientOptions(5000).setMaxPoolSize(1),
-            new UpstreamPools(1, Upstream::toString)::connected);
+            new UpstreamPools(UpstreamPools.STREAM, 1, Upstream::toString)::connected);
     Upstream origin = new Upstream("localhost", server.actualPort());
     io.vertx.core.net.NetSocket tunnel =
         client
@@ -236,7 +236,7 @@ class UpstreamKeepAliveTest {
     // a client built from proxyClientOptions alone would hold FIVE connections per origin, and
     // the sixth request would queue. Six concurrent requests held open by the server must
     // therefore open six connections.
-    UpstreamPools pools = new UpstreamPools(64, Upstream::toString);
+    UpstreamPools pools = new UpstreamPools(UpstreamPools.ORDINARY, 256, Upstream::toString);
     HttpClient client =
         EdgeRouter.proxyClient(vertx, EdgeRouter.proxyClientOptions(5000), pools::connected);
     Upstream origin = new Upstream("localhost", server.actualPort());
@@ -250,6 +250,76 @@ class UpstreamKeepAliveTest {
     for (CompletableFuture<HttpClientResponse> response : responses) {
       assertEquals(200, response.get(10, TimeUnit.SECONDS).statusCode());
     }
+  }
+
+  @Test
+  void aLeaseLastsFromTheGrantToTheEndOfTheResponseAndAnIdleConnectionHasNone() throws Exception {
+    // The lease is what /upstream-pools and the WARN name a held connection by, so it has to end
+    // when the exchange does — not when the connection does, which for a pooled one is much later.
+    UpstreamPools pools = new UpstreamPools(UpstreamPools.ORDINARY, 256, Upstream::toString);
+    HttpClient client =
+        EdgeRouter.proxyClient(vertx, EdgeRouter.proxyClientOptions(5000), pools::connected);
+    Upstream origin = new Upstream("localhost", server.actualPort());
+    UpstreamLease lease =
+        new UpstreamLease("GET", "/hold", "203.0.113.7", "agent/1", "ws-42", null);
+
+    CompletableFuture<HttpClientResponse> response = sendLeased(client, pools, origin, lease);
+    awaitTrue(() -> held.size() == 1, "the request reached the server");
+    assertEquals(List.of(lease), leases(pools), "held while the exchange is in flight");
+
+    held.get(0).response().end("released");
+    assertEquals(200, response.get(10, TimeUnit.SECONDS).statusCode());
+    awaitTrue(() -> leases(pools).isEmpty(), "the response ended, so the lease did");
+    assertEquals(
+        Map.of(origin, 1),
+        pools.open(),
+        "the connection is still open — idle in the pool, unleased");
+  }
+
+  @Test
+  void aLeaseEndsWhenTheUpstreamDropsTheConnectionMidResponse() throws Exception {
+    // No end ever comes: the response future fails, or the channel closes, and either ends it.
+    UpstreamPools pools = new UpstreamPools(UpstreamPools.ORDINARY, 256, Upstream::toString);
+    HttpClient client =
+        EdgeRouter.proxyClient(vertx, EdgeRouter.proxyClientOptions(5000), pools::connected);
+    Upstream origin = new Upstream("localhost", server.actualPort());
+    UpstreamLease lease = new UpstreamLease("GET", "/hold", null, null, null, null);
+
+    CompletableFuture<HttpClientResponse> response = sendLeased(client, pools, origin, lease);
+    awaitTrue(() -> held.size() == 1, "the request reached the server");
+    assertEquals(List.of(lease), leases(pools));
+    held.get(0).connection().close();
+    awaitTrue(() -> leases(pools).isEmpty(), "a dropped connection ends its lease");
+    awaitTrue(() -> pools.open().isEmpty(), "and gives its slot back");
+    awaitTrue(response::isDone, "and the exchange it carried failed rather than hung");
+  }
+
+  @Test
+  void aTunnelsLeaseLastsUntilItsChannelCloses() throws Exception {
+    // A WebSocket's lease: a spliced socket has no response end, so only the close ends it.
+    UpstreamPools pools = new UpstreamPools(UpstreamPools.STREAM, 256, Upstream::toString);
+    HttpClient client =
+        EdgeRouter.proxyClient(vertx, EdgeRouter.proxyClientOptions(5000), pools::connected);
+    Upstream origin = new Upstream("localhost", server.actualPort());
+    UpstreamLease lease = new UpstreamLease("GET", "/terminal", null, null, "ws-7", null);
+
+    long since = pools.acquiring();
+    io.vertx.core.net.NetSocket tunnel =
+        client
+            .request(
+                EdgeRouter.originRequestOptions(origin)
+                    .setMethod(HttpMethod.CONNECT)
+                    .setURI("upstream:1"))
+            .onSuccess(request -> pools.granted(origin, since, request, lease, true))
+            .compose(request -> request.connect())
+            .map(HttpClientResponse::netSocket)
+            .toCompletionStage()
+            .toCompletableFuture()
+            .get(10, TimeUnit.SECONDS);
+    assertEquals(List.of(lease), leases(pools), "the 101's response is over; the tunnel is not");
+
+    tunnel.close().toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+    awaitTrue(() -> leases(pools).isEmpty(), "a closed tunnel ends its lease");
   }
 
   @Test
@@ -284,6 +354,28 @@ class UpstreamKeepAliveTest {
         .compose(response -> response.body().map(body -> response))
         .onComplete(answered);
     return answered.future().toCompletionStage().toCompletableFuture();
+  }
+
+  /**
+   * One request leased the way {@code EdgeRouter}'s origin provider leases it: timed from the
+   * acquisition, granted in the request future's own success listener.
+   */
+  private static CompletableFuture<HttpClientResponse> sendLeased(
+      HttpClient client, UpstreamPools pools, Upstream origin, UpstreamLease lease) {
+    Promise<HttpClientResponse> answered = Promise.promise();
+    long since = pools.acquiring();
+    client
+        .request(EdgeRouter.originRequestOptions(origin).setMethod(HttpMethod.GET).setURI("/hold"))
+        .onSuccess(request -> pools.granted(origin, since, request, lease, false))
+        .compose(request -> request.send())
+        .compose(response -> response.body().map(body -> response))
+        .onComplete(answered);
+    return answered.future().toCompletionStage().toCompletableFuture();
+  }
+
+  /** Every lease, whatever its origin's count says — so a leaked one cannot hide behind a zero. */
+  private static List<UpstreamLease> leases(UpstreamPools pools) {
+    return pools.leases();
   }
 
   private static void awaitTrue(java.util.function.BooleanSupplier condition, String message)

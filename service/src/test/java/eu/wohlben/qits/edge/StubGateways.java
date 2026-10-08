@@ -257,6 +257,29 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
   /** How long {@code /stream} waits between its two chunks — long enough to time from a client. */
   static final long STREAM_GAP_MILLIS = 400;
 
+  /**
+   * The path every stub upstream answers with an event stream it holds open — see {@link #answer}.
+   */
+  static final String SSE_HOLD_PATH = "/sse-hold";
+
+  /** Every held event stream not yet let go. */
+  private static final List<HttpServerResponse> HELD_STREAMS =
+      new java.util.concurrent.CopyOnWriteArrayList<>();
+
+  /** End every held event stream, so no test leaves a connection behind for the next. */
+  static void releaseStreams() {
+    for (HttpServerResponse response : HELD_STREAMS) {
+      try {
+        if (!response.ended() && !response.closed()) {
+          response.end();
+        }
+      } catch (RuntimeException alreadyGone) {
+        // The client side closed it first, which is what most tests do.
+      }
+    }
+    HELD_STREAMS.clear();
+  }
+
   /** The header names a WebSocket handshake reports back, so a test can assert what arrived. */
   static final List<String> REPORTED_HANDSHAKE_HEADERS =
       List.of(
@@ -616,6 +639,17 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
       response.headers().add("X-Custom-Hop", "1");
       response.headers().add("Proxy-Connection", "keep-alive");
       response.end();
+      return;
+    }
+    if (request.path().equals(SSE_HOLD_PATH)) {
+      // An event stream that stays open until the test lets it go: the shape of an MCP client's
+      // GET channel, which holds its upstream connection for the whole session. The comment line is
+      // flushed at once so the caller knows the stream is up before it asks the edge about it.
+      HttpServerResponse response = request.response().setChunked(true);
+      response.putHeader("Content-Type", "text/event-stream");
+      response.putHeader("X-Upstream", environment);
+      response.write(": open\n\n");
+      HELD_STREAMS.add(response);
       return;
     }
     if (request.path().equals("/stream")) {
