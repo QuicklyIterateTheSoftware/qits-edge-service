@@ -604,7 +604,8 @@ class EdgeChallengeTest {
     idp.configuredDial = dialUrl(env);
 
     assertEquals("http://dev-qits-idp:8080/idp", idp.dialBase());
-    assertEquals("http://dev-qits-idp:8080/idp/jwks", idp.jwksUri());
+    assertEquals(
+        "http://dev-qits-idp:8080/idp/.well-known/openid-configuration", idp.discoveryUri());
     assertFalse(
         Idp.issuers("localhost").contains(idp.dialBase()),
         "the iss claim idp stamps does not move because the deployer injected an address");

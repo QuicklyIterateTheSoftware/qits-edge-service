@@ -36,12 +36,12 @@ import java.util.concurrent.TimeUnit;
  * edge must pass through unchanged: an ordinary request with a body, a chunked response written
  * over time, and a WebSocket upgrade. A JDK {@code HttpServer} cannot do the third at all.
  *
- * <p>The stub idp answers the three paths the edge derives from {@code qits.edge.idp.dial-url}:
- * {@code /idp/jwks} publishes {@link TestTokens}' key, {@code /idp/token} issues one for the
- * clients below, and {@code /idp/api/sessions/introspect} answers for the browser sessions. It
- * exists so the auth gate is exercised end to end — a real RS256 signature, a real key fetch, a
- * real broker hop and a real introspection — rather than against a validator that was told to say
- * yes.
+ * <p>The stub idp answers the paths the edge derives from {@code qits.edge.idp.dial-url}: {@code
+ * /idp/.well-known/openid-configuration} names {@code /idp/jwks} as its {@code jwks_uri}, which
+ * publishes {@link TestTokens}' key, {@code /idp/token} issues one for the clients below, and
+ * {@code /idp/api/sessions/introspect} answers for the browser sessions. It exists so the auth gate
+ * is exercised end to end — a real RS256 signature, a real key fetch, a real broker hop and a real
+ * introspection — rather than against a validator that was told to say yes.
  *
  * <p><b>Three sessions, because a cookie has three answers.</b> One is live, one is expired and one
  * starts live and can be {@link #revoke revoked} while the suite runs — which is what proves a
@@ -382,6 +382,18 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
         .createHttpServer()
         .requestHandler(
             request -> {
+              if (request.path().equals("/idp/.well-known/openid-configuration")) {
+                // The key set's address is whatever discovery names: here, this stub's own /jwks.
+                request
+                    .response()
+                    .putHeader("Content-Type", "application/json")
+                    .end(
+                        new io.vertx.core.json.JsonObject()
+                            .put("issuer", "https://idp.qits." + DOMAIN)
+                            .put("jwks_uri", "http://" + request.getHeader("Host") + "/idp/jwks")
+                            .encode());
+                return;
+              }
               if (request.path().equals("/idp/jwks")) {
                 request
                     .response()

@@ -18,6 +18,7 @@ import java.security.interfaces.RSAPublicKey;
 import java.security.spec.RSAPublicKeySpec;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.jboss.logging.Logger;
 
@@ -34,6 +35,10 @@ import org.jboss.logging.Logger;
  * key or an idp landing on an empty database, and until the new set is picked up every token fails.
  * Without a cooldown, that same state lets any caller with a made-up {@code kid} drive one HTTP
  * request per request at the identity provider.
+ *
+ * <p><b>The key set's address comes from discovery</b>: {@code jwks_uri} in idp's {@code
+ * /.well-known/openid-configuration}, read once and kept until a key fetch from it fails. The edge
+ * does not compose a key path of its own, so it reads the keys where idp says they are.
  */
 @ApplicationScoped
 public class IdpKeys {
@@ -52,6 +57,9 @@ public class IdpKeys {
   private volatile Map<String, RSAPublicKey> keys = Map.of();
 
   private volatile long lastFetchMillis;
+
+  /** The discovery document's {@code jwks_uri}; null until read, and again after a failed fetch. */
+  volatile String jwksUri;
 
   /** The fetch in progress, so a burst of unknown-kid requests makes one request, not a burst. */
   private Future<Map<String, RSAPublicKey>> inFlight;
@@ -105,19 +113,60 @@ public class IdpKeys {
           }
           if (result.succeeded()) {
             keys = result.result();
-            LOG.infof("read %d signing keys from %s", keys.size(), idp.jwksUri());
+            LOG.infof("read %d signing keys from %s", keys.size(), jwksUri);
           } else {
-            LOG.errorf(result.cause(), "could not read the signing keys from %s", idp.jwksUri());
+            // Discover again next time: a moved key set must not strand the edge on the old
+            // address.
+            jwksUri = null;
+            LOG.errorf(result.cause(), "could not read the signing keys of %s", idp.dialBase());
           }
         });
     return fetch;
   }
 
   private Future<Map<String, RSAPublicKey>> fetch() {
+    return discoverJwksUri().compose(this::get).map(body -> parse(new JsonObject(body)));
+  }
+
+  /** The {@code jwks_uri} idp's discovery document names, read once and then kept. */
+  Future<String> discoverJwksUri() {
+    String known = jwksUri;
+    if (known != null) {
+      return Future.succeededFuture(known);
+    }
+    return get(idp.discoveryUri())
+        .map(
+            body -> {
+              String discovered = discovered(new JsonObject(body), idp.issuers());
+              jwksUri = discovered;
+              return discovered;
+            });
+  }
+
+  /**
+   * The {@code jwks_uri} of a discovery document. Its {@code issuer} is only compared: the accepted
+   * issuer is derived from the domain ({@link Idp#issuers()}) and never read from idp, so a
+   * mismatch is logged rather than adopted.
+   */
+  static String discovered(JsonObject document, List<String> issuers) {
+    String uri = document.getString("jwks_uri");
+    if (uri == null || uri.isBlank()) {
+      throw new IllegalArgumentException("idp's discovery document names no jwks_uri");
+    }
+    String issuer = document.getString("issuer");
+    if (issuer != null && !issuers.contains(issuer)) {
+      LOG.warnf(
+          "idp calls itself %s, but this edge accepts only %s: its tokens will be refused",
+          issuer, issuers);
+    }
+    return uri;
+  }
+
+  private Future<String> get(String uri) {
     RequestOptions options =
         new RequestOptions()
             .setMethod(HttpMethod.GET)
-            .setAbsoluteURI(idp.jwksUri())
+            .setAbsoluteURI(uri)
             // BOUNDED, and this one is not a nicety either: a fetch is SHARED — every request that
             // met an unknown kid waits on the same future, and `inFlight` is only cleared when it
             // completes. An idp that accepts the connection and never answers would therefore wedge
@@ -130,9 +179,8 @@ public class IdpKeys {
         .compose(
             response ->
                 response.statusCode() == 200
-                    ? response.body()
-                    : Future.failedFuture(idp.jwksUri() + " answered " + response.statusCode()))
-        .map(body -> parse(new JsonObject(body)));
+                    ? response.body().map(Object::toString)
+                    : Future.failedFuture(uri + " answered " + response.statusCode()));
   }
 
   /**

@@ -155,7 +155,7 @@ public class StoryProfile implements QuarkusTestProfile {
     config.put("qits.edge.idp.client-id", StoryTarget.EDGE_CLIENT_ID);
     config.put("qits.edge.idp.client-secret", StoryTarget.EDGE_CLIENT_SECRET);
 
-    // The dial address only: /jwks, /token and /api/sessions/introspect are derived from it in
+    // The dial address only: discovery, /token and /api/sessions/introspect are derived from it in
     // Idp.java, so a rename on either side fails here rather than in production. The issuer is not
     // a key at all — it is derived from qits.edge.domain.
     config.put("qits.edge.idp.dial-url", idp.baseUrl() + "/idp");
