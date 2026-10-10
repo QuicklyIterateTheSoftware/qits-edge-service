@@ -52,9 +52,6 @@
           ],
           "Content-Type": [
             "application/x-www-form-urlencoded"
-          ],
-          "content-type": [
-            "application/x-www-form-urlencoded"
           ]
         },
         "method": "POST",
@@ -396,9 +393,6 @@
             "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA=="
           ],
           "Content-Type": [
-            "application/x-www-form-urlencoded"
-          ],
-          "content-type": [
             "application/x-www-form-urlencoded"
           ]
         },

@@ -56,7 +56,7 @@ public final class AcmeCertificateIssuer {
                 .findChallenge(Dns01Challenge.class)
                 .orElseThrow(
                     () -> new IllegalStateException("ACME server offered no DNS-01 challenge"));
-        String name = Dns01Challenge.toRRName(authorization.getIdentifier());
+        String name = challenge.getRRName(authorization.getIdentifier());
         String value = challenge.getDigest();
         dns.present(name, value);
         presented.add(new PresentedChallenge(name, value, challenge));
