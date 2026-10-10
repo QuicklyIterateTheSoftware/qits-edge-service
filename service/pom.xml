@@ -66,7 +66,7 @@
              internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
         <qits.idp-golden-masters.version>2026.1010.134259</qits.idp-golden-masters.version>
         <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
-        <qits.pact-consumer.version>2026.1010.140259</qits.pact-consumer.version>
+        <qits.pact-consumer.version>2026.1010.141817</qits.pact-consumer.version>
 
         <!-- INTEGRATION TESTS ARE OFF BY DEFAULT, and this repository now has both halves of that
              sentence: a failsafe plugin bound below, and ForwardAuthBootstrapIT for it to run.
