@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
  * <p>Plain JUnit against an environment source, because the thing worth pinning is the NAME: the
  * bootstrap writes {@code QITS_EDGE_ACME_ADDITIONAL_NAMES} into a compose file and a deploy
  * argument, and a mapping renamed here would leave that key inert with every build green — the
- * certificate would simply come back without the editor hosts on it.
+ * certificate would simply come back without those hosts on it.
  */
 class AcmeConfigTest {
 
@@ -41,10 +41,10 @@ class AcmeConfigTest {
   @Test
   void theAdditionalNamesArriveUnderTheKeyTheBootstrapRenders() {
     AcmeConfig acme =
-        of(Map.of("QITS_EDGE_ACME_ADDITIONAL_NAMES", "editor.acme,editor.gizmo.wohlben.eu"));
+        of(Map.of("QITS_EDGE_ACME_ADDITIONAL_NAMES", "status.acme,status.gizmo.wohlben.eu"));
 
     assertEquals(
-        Optional.of(List.of("editor.acme", "editor.gizmo.wohlben.eu")), acme.additionalNames());
+        Optional.of(List.of("status.acme", "status.gizmo.wohlben.eu")), acme.additionalNames());
   }
 
   @Test
@@ -78,7 +78,7 @@ class AcmeConfigTest {
             manager.domain(),
             List.of("prod", "dev"),
             Map.of("acme", true, "qits", false),
-            List.of("editor.gizmo"));
+            List.of("status.gizmo"));
 
     assertEquals(
         Set.of(
@@ -88,7 +88,7 @@ class AcmeConfigTest {
             "*.prod.acme.wohlben.eu",
             "*.dev.acme.wohlben.eu",
             "*.qits.wohlben.eu",
-            "editor.gizmo.wohlben.eu"),
+            "status.gizmo.wohlben.eu"),
         derived.names());
     assertTrue(derived.droppedProjects().isEmpty());
   }

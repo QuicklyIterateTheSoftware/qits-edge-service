@@ -45,8 +45,7 @@ final class PlatformApps {
       Map.of(
           "registry", "qits-artifacts",
           "mirror", "qits-mirror",
-          "githost", "qits-githost",
-          "editor", "qits-workspaces");
+          "githost", "qits-githost");
 
   private PlatformApps() {}
 

@@ -17,7 +17,7 @@ import java.util.Set;
  *   wohlben.eu                     the apex, which serves nothing
  *   qits.wohlben.eu                the qits project's door
  *   projects.qits.wohlben.eu       an app of the qits project, which supports no environments
- *   editor.qits.wohlben.eu         the editor — an app of qits, like any other
+ *   githost.qits.wohlben.eu        githost — an app of qits, like any other
  *   someproject.wohlben.eu         another project's door
  *   dev.someproject.wohlben.eu     that project's dev environment door
  *   ci.dev.someproject.wohlben.eu  an app of that project, in dev

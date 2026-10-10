@@ -39,17 +39,17 @@ public interface AcmeConfig {
   /**
    * The names this certificate must carry beyond the wildcard set the edge derives for itself.
    *
-   * <p>A wildcard is leftmost-only, so {@code *.<domain>} answers for {@code editor.<domain>} and
-   * for nothing under it, and {@code *.<env>.<domain>} only holds where that middle label is an
+   * <p>A wildcard is leftmost-only, so {@code *.<domain>} answers for {@code idp.<domain>} and for
+   * nothing under it, and {@code *.<env>.<domain>} only holds where that middle label is an
    * environment. The edge derives a tier per known project for both of the depths a project label
-   * makes — see {@code CertificateNames} — so the editor host no longer needs a name here at all.
-   * What is left for this key is what it always said it was: a list of NAMES, for the ones no tier
+   * makes — see {@code CertificateNames} — so a project's app hosts need no name here at all. What
+   * is left for this key is what it always said it was: a list of NAMES, for the ones no tier
    * describes.
    *
    * <p>The bootstrap renders it, whole or relative to the domain:
    *
    * <pre>
-   * QITS_EDGE_ACME_ADDITIONAL_NAMES=editor.acme,editor.gizmo.wohlben.eu
+   * QITS_EDGE_ACME_ADDITIONAL_NAMES=status.acme,status.gizmo.wohlben.eu
    * </pre>
    *
    * <p>Absent is the ordinary platform and orders exactly the derived set. A name added here
@@ -67,9 +67,9 @@ public interface AcmeConfig {
    * week. One window covers the whole burst, and the order that follows carries every slug.
    *
    * <p>Thirty seconds is chosen against the two things it trades: an order placed too early is a
-   * rate-limited mistake, and an order placed late is a project whose editor host has no
-   * certificate for half a minute longer. There is no key in the bootstrap for it; it is here for
-   * an operator who has a reason.
+   * rate-limited mistake, and an order placed late is a project whose app hosts have no certificate
+   * for half a minute longer. There is no key in the bootstrap for it; it is here for an operator
+   * who has a reason.
    */
   @WithDefault("PT30S")
   Duration reconcileDebounce();

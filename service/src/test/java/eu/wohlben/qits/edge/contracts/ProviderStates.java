@@ -155,9 +155,7 @@ public class ProviderStates {
         "qits-workspaces",
         "workspaces",
         "/workspaces",
-        List.of(
-            placement("project.detail", "Workspaces", 1, null),
-            placement("project.detail", "Editor", 2, "editor")));
+        List.of(placement("project.detail", "Workspaces", 1, null)));
     // The project's root: no navigation, no api docs, and the reserved label as its host.
     publish(environment, "qits-landing", "landing", "/landing", null, List.of());
 

@@ -39,8 +39,8 @@ class EdgeChallengeTest {
   // -------------------------------
 
   @Test
-  void thePlatformAppVhostsAreExactlyTheFourPlatformApplications() {
-    assertEquals(Set.of("registry", "mirror", "githost", "editor"), PlatformApps.labels());
+  void thePlatformAppVhostsAreExactlyTheThreePlatformApplications() {
+    assertEquals(Set.of("registry", "mirror", "githost"), PlatformApps.labels());
   }
 
   @Test
@@ -54,9 +54,6 @@ class EdgeChallengeTest {
         new Upstream("dev-qits-mirror", 8080), EdgeRouter.appUpstream("mirror", "dev", Map.of()));
     assertEquals(
         new Upstream("dev-qits-githost", 8080), EdgeRouter.appUpstream("githost", "dev", Map.of()));
-    assertEquals(
-        new Upstream("dev-qits-workspaces", 8080),
-        EdgeRouter.appUpstream("editor", "dev", Map.of()));
     assertEquals(
         new Upstream("prod-qits-artifacts", 8080),
         EdgeRouter.appUpstream("registry", "prod", Map.of()),
@@ -122,7 +119,6 @@ class EdgeChallengeTest {
     // idp's resource audiences are env-prefixed, so a token for dev's githost does not open prod's.
     assertEquals("dev-qits-githost", EdgeAuth.audienceFor(app("githost", "dev")));
     assertEquals("prod-qits-githost", EdgeAuth.audienceFor(app("githost", "prod")));
-    assertEquals("dev-qits-workspaces", EdgeAuth.audienceFor(app("editor", "dev")));
     assertEquals("dev-qits-artifacts", EdgeAuth.audienceFor(app("registry", "dev")));
     assertEquals("dev-qits-mirror", EdgeAuth.audienceFor(app("mirror", "dev")));
   }
@@ -756,7 +752,7 @@ class EdgeChallengeTest {
         EdgeSessions.browserHost("projects.dev.qits.wohlben.eu", exact, wildcards),
         "THREE: an env-ful project's application, the deepest name the grammar makes");
     assertTrue(
-        EdgeSessions.browserHost("editor.dev.gizmo.wohlben.eu", exact, wildcards),
+        EdgeSessions.browserHost("githost.dev.gizmo.wohlben.eu", exact, wildcards),
         "any project, without this process being told the project set");
     // FOUR labels is a name the grammar could not have produced, so it is refused even though it
     // is under the domain — the bound is the grammar's depth.

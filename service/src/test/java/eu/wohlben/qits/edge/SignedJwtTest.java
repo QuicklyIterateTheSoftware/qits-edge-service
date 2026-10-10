@@ -127,7 +127,7 @@ class SignedJwtTest {
     // A person's command-line token names only the platform audience. It must open every service.
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of(PLATFORM)));
     assertNull(jwt.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
-    assertNull(jwt.problem(ACCEPTED, accepted("editor"), Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, accepted("githost"), Instant.now(), 30));
   }
 
   @Test

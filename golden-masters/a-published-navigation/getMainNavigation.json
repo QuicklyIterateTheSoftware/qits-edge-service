@@ -61,15 +61,6 @@
         "path": "/workspaces",
         "position": 1,
         "subpath": null
-      },
-      {
-        "app": "qits-workspaces",
-        "label": "Editor",
-        "host": "workspaces",
-        "origin": "https://workspaces.qits.example.com",
-        "path": "/workspaces",
-        "position": 2,
-        "subpath": "editor"
       }
     ],
     "services.details": [],

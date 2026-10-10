@@ -38,16 +38,16 @@ class CertificateNamesTest {
             CertificateNames.of(
                 "wohlben.eu",
                 List.of("prod"),
-                List.of("editor.qits-qits", "editor.gizmo.wohlben.eu")))
+                List.of("status.qits-qits", "status.gizmo.wohlben.eu")))
         .containsExactly(
-            "wohlben.eu", "*.wohlben.eu", "editor.qits-qits.wohlben.eu", "editor.gizmo.wohlben.eu");
+            "wohlben.eu", "*.wohlben.eu", "status.qits-qits.wohlben.eu", "status.gizmo.wohlben.eu");
   }
 
   @Test
   void aRelativeNameAndItsWholeSpellingAreTheSameName() {
-    assertThat(CertificateNames.of("wohlben.eu", List.of("prod"), List.of("editor.acme")))
+    assertThat(CertificateNames.of("wohlben.eu", List.of("prod"), List.of("status.acme")))
         .containsExactlyElementsOf(
-            CertificateNames.of("wohlben.eu", List.of("prod"), List.of("editor.acme.wohlben.eu.")));
+            CertificateNames.of("wohlben.eu", List.of("prod"), List.of("status.acme.wohlben.eu.")));
   }
 
   @Test
@@ -56,24 +56,24 @@ class CertificateNamesTest {
             CertificateNames.of(
                 "wohlben.eu",
                 List.of("prod"),
-                List.of("  Editor.ACME  ", "", "editor.acme.wohlben.eu", "wohlben.eu")))
-        .containsExactly("wohlben.eu", "*.wohlben.eu", "editor.acme.wohlben.eu");
+                List.of("  Status.ACME  ", "", "status.acme.wohlben.eu", "wohlben.eu")))
+        .containsExactly("wohlben.eu", "*.wohlben.eu", "status.acme.wohlben.eu");
   }
 
   @Test
   void readsOneValueHoldingSeveralNames() {
     assertThat(
             CertificateNames.of(
-                "wohlben.eu", List.of("prod"), List.of("editor.acme, editor.gizmo")))
+                "wohlben.eu", List.of("prod"), List.of("status.acme, status.gizmo")))
         .containsExactly(
-            "wohlben.eu", "*.wohlben.eu", "editor.acme.wohlben.eu", "editor.gizmo.wohlben.eu");
+            "wohlben.eu", "*.wohlben.eu", "status.acme.wohlben.eu", "status.gizmo.wohlben.eu");
   }
 
   @Test
   void refusesAnAdditionalNameThatIsNotAName() {
     assertThatIllegalArgumentException()
         .isThrownBy(
-            () -> CertificateNames.of("wohlben.eu", List.of("prod"), List.of("*.editor.acme")));
+            () -> CertificateNames.of("wohlben.eu", List.of("prod"), List.of("*.status.acme")));
   }
 
   @Test
@@ -173,14 +173,14 @@ class CertificateNamesTest {
                     "wohlben.eu",
                     List.of("prod", "dev"),
                     withEnvironments("acme"),
-                    List.of("editor.legacy"))
+                    List.of("docs.legacy"))
                 .names())
         .containsExactlyElementsOf(
             CertificateNames.capped(
                     "wohlben.eu",
                     List.of("prod", "dev"),
                     withEnvironments("acme"),
-                    List.of("editor.legacy"))
+                    List.of("docs.legacy"))
                 .names());
   }
 
@@ -319,10 +319,10 @@ class CertificateNamesTest {
             "wohlben.eu",
             List.of("prod", "dev", "ci"),
             withEnvironments(projects(40)),
-            List.of("editor.legacy", "status.wohlben.eu"));
+            List.of("docs.legacy", "status.wohlben.eu"));
 
     assertThat(derived.names())
-        .contains("wohlben.eu", "*.wohlben.eu", "editor.legacy.wohlben.eu", "status.wohlben.eu");
+        .contains("wohlben.eu", "*.wohlben.eu", "docs.legacy.wohlben.eu", "status.wohlben.eu");
     assertThat(derived.droppedProjects()).isNotEmpty();
   }
 

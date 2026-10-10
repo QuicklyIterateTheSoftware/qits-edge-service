@@ -47,7 +47,7 @@ class EdgeRouterNamesTest {
             .contains("`nosuchapp` is not an application"));
     assertTrue(
         EdgeRouter.unknownAppBody(
-                new HostEnvironments.Route("dev", null, "editor", "acme", Reading.UNKNOWN_APP),
+                new HostEnvironments.Route("dev", null, "nosuchapp", "acme", Reading.UNKNOWN_APP),
                 apps)
             .contains("the project `acme`"));
   }

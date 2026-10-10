@@ -22,10 +22,10 @@ import java.util.List;
  *
  * <p><b>A slot is an ARRAY, and one application may fill several of its entries.</b> The loop below
  * copies every placement of a slot in the order {@link EdgeRoutes#navigation} sorted it — slot,
- * position, label, application — and nothing here is keyed by application, so qits-workspaces'
- * Workspaces and Editor rows come out as two entries of the project node with one origin and two
- * subpaths. A repeated position is an ordinary tie broken by label, whether the two entries belong
- * to one application or to two.
+ * position, label, application — and nothing here is keyed by application, so two rows of one
+ * application under the project node come out as two entries with one origin and two subpaths. A
+ * repeated position is an ordinary tie broken by label, whether the two entries belong to one
+ * application or to two.
  *
  * <p>The document is {@code environment}, {@code origin}, {@code projectOrigin}, {@code slots} and
  * {@code applications}, and nothing else. There is no flat list and no synthesized {@code Home}:
@@ -35,12 +35,12 @@ import java.util.List;
  *
  * <p><b>{@code projectOrigin} is the origin a per-project name is built on</b>: prefix {@code
  * <app>.} onto its authority and that is where that application serves this project, {@code
- * https://editor.dev.acme.example.com}. ONE label — the project label is inside the authority
- * already, because a name is read right to left and every address this edge composes is inside a
- * project. It is equal to {@code origin} and is published anyway, because it is the FIELD that is
- * the contract rather than the value. It exists because the client side derived this name itself
- * twice and shipped two domain-derivation bugs doing it (editor-origin.ts): the server states the
- * authority, and the client's whole job is to put {@code editor.} in front of it.
+ * https://ci.dev.acme.example.com}. ONE label — the project label is inside the authority already,
+ * because a name is read right to left and every address this edge composes is inside a project. It
+ * is equal to {@code origin} and is published anyway, because it is the FIELD that is the contract
+ * rather than the value. It exists because the client side derived this name itself twice and
+ * shipped two domain-derivation bugs doing it (editor-origin.ts): the server states the authority,
+ * and the client's whole job is to put {@code <app>.} in front of it.
  *
  * <p><b>An entry's origin is null on a name that is inside no project</b> — the apex, an address
  * literal, a name outside the domain — because an application address needs a project label and

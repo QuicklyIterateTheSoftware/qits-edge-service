@@ -53,7 +53,7 @@ class EdgeSessionGateTest {
   @io.quarkus.agroal.DataSource("edge")
   io.agroal.api.AgroalDataSource edgeDataSource;
 
-  /** The project whose editor a person is opening when the gate turns them away. */
+  /** The project whose app a person is opening when the gate turns them away. */
   private static final String PROJECT = "acme";
 
   /**
@@ -522,34 +522,32 @@ class EdgeSessionGateTest {
         answer.headers().get("location"));
   }
 
-  // --- the editor, an ordinary app vhost --------------------------------------------------------
+  // --- an ordinary app vhost --------------------------------------------------------------------
 
   @Test
-  void aNavigationOnTheEditorsOwnNameComesBackToTheEditor() {
-    // The editor is ONE shared container for the whole platform now, so its name is
-    // `editor.dev.acme.example.com` — one label in front of the environment, which is what the
-    // single
-    // `*.dev.acme.example.com` entry covers. A person logging in to open a file comes back to the
-    // file.
+  void aNavigationOnAnAppsOwnNameComesBackToThatApp() {
+    // The name is `registry.dev.acme.example.com` — one label in front of the environment, which is
+    // what the single `*.dev.acme.example.com` entry covers. A person logging in to open a page
+    // comes back to the page.
     EdgeClient.Answer answer =
         client()
             .send(
                 HttpMethod.GET,
-                "editor.dev.acme.example.com",
-                "/editor/src/main.ts",
+                "registry.dev.acme.example.com",
+                "/v2/_catalog",
                 null,
                 Map.of("Sec-Fetch-Mode", "navigate", "Accept", "text/html"));
     assertEquals(302, answer.status());
     assertEquals(
         CANONICAL_ORIGIN
-            + "/idp/login?return_host=editor.dev.acme.example.com&return_path=%2Feditor%2Fsrc%2Fmain.ts",
+            + "/idp/login?return_host=registry.dev.acme.example.com&return_path=%2Fv2%2F_catalog",
         answer.headers().get("location"));
-    assertNull(answer.line("upstream"), "it must not have reached the editor");
+    assertNull(answer.line("upstream"), "it must not have reached the app");
   }
 
   @Test
-  void theRetiredFourLabelEditorNameIsNotEvenAName() {
-    // `editor.<project>.<env>.<domain>` was the tier the editor had before the grammar was read
+  void theRetiredFourLabelAppNameIsNotEvenAName() {
+    // `<app>.<project>.<env>.<domain>` was the tier an app had before the grammar was read
     // right to left, and it is not a spelling any more: the project label sits next to the DOMAIN
     // now, so this name's project label is `example` — which is not a project. It is refused before
     // the session gate is reached at all, so a logged-out browser gets a 404 rather than a login it
@@ -558,12 +556,12 @@ class EdgeSessionGateTest {
         client()
             .send(
                 HttpMethod.GET,
-                "editor." + PROJECT + ".dev.example.com",
-                "/editor/src/main.ts",
+                "registry." + PROJECT + ".dev.example.com",
+                "/v2/_catalog",
                 null,
                 Map.of("Sec-Fetch-Mode", "navigate", "Accept", "text/html"));
     assertEquals(404, answer.status());
-    assertNull(answer.line("upstream"), "it must not have reached the editor");
+    assertNull(answer.line("upstream"), "it must not have reached the app");
   }
 
   @Test
@@ -591,7 +589,7 @@ class EdgeSessionGateTest {
   void aNameOutsideTheGrammarStillFallsBackToTheDoor() {
     // The fallback, against the list this boot actually derived. It is asserted here rather than
     // through a socket because a name the grammar could not have produced never reaches the gate:
-    // routing refuses it a step earlier, as theRetiredFourLabelEditorNameIsNotEvenAName shows. So
+    // routing refuses it a step earlier, as theRetiredFourLabelAppNameIsNotEvenAName shows. So
     // what is left is a Host a caller invents, and the property is that none of them is reflected.
     //
     // What such a name falls back to is the CANONICAL ORIGIN's own authority, which is derived and
@@ -618,12 +616,12 @@ class EdgeSessionGateTest {
   }
 
   @Test
-  void aSessionOpensTheEditorsOwnNameWithItsIdentity() {
-    // And the other half: the editor is a service vhost like any other once the cookie is good. The
+  void aSessionOpensAnAppsOwnNameWithItsIdentity() {
+    // And the other half: registry is a service vhost like any other once the cookie is good. The
     // upstream that answers is the NAMED environment's, which is what the second label decided.
     EdgeClient.Answer answer =
-        client().get("editor.dev.acme.example.com", "/editor/src/main.ts", session());
-    assertEquals("editor-dev", answer.line("upstream"));
+        client().get("registry.dev.acme.example.com", "/v2/_catalog", session());
+    assertEquals("registry-dev", answer.line("upstream"));
     assertEquals(StubGateways.SESSION_USER, answer.upstreamHeader("X-Qits-User"));
   }
 

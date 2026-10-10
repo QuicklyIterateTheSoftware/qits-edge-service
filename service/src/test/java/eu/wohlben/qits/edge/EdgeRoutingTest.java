@@ -500,7 +500,8 @@ class EdgeRoutingTest {
   @Test
   void oneApplicationHangsSeveralRowsUnderOneHeading() {
     // qits-workspaces is one application in one container publishing TWO rows under the project
-    // node: the workspace list and the editor. The claim used to be the slot alone, which refused
+    // node: the workspace list and the runner list. The claim used to be the slot alone, which
+    // refused
     // this whole frame — and refused the spec a hop earlier, so the deployment failed as
     // "deployment spec unreadable" while its build stayed green.
     activateWorkspaces();
@@ -511,7 +512,7 @@ class EdgeRoutingTest {
                 .map(JsonObject.class::cast)
                 .toList();
     assertEquals(
-        List.of("Workspaces", "Editor"),
+        List.of("Workspaces", "Runners"),
         project.stream().map(entry -> entry.getString("label")).toList(),
         "two rows, in the order the positions asked for");
     assertEquals(
@@ -525,7 +526,7 @@ class EdgeRoutingTest {
         List.of("http://workspaces.dev.acme.example.com", "http://workspaces.dev.acme.example.com"),
         project.stream().map(entry -> entry.getString("origin")).toList());
     assertNull(project.get(0).getString("subpath"));
-    assertEquals("editor", project.get(1).getString("subpath"));
+    assertEquals("runners", project.get(1).getString("subpath"));
   }
 
   @Test
@@ -548,10 +549,11 @@ class EdgeRoutingTest {
                     "navigation",
                     new io.vertx.core.json.JsonArray()
                         .add(placement("project.detail", "Workspaces", 1))
-                        .add(placement("project.detail", "Editor", 1).put("subpath", "editor")))));
+                        .add(
+                            placement("project.detail", "Runners", 1).put("subpath", "runners")))));
 
     assertEquals(
-        List.of("Editor", "Workspaces"),
+        List.of("Runners", "Workspaces"),
         new JsonObject(client().get("dev.acme.example.com", "/main-navigation").body())
             .getJsonObject("slots").getJsonArray("project.detail").stream()
                 .map(value -> ((JsonObject) value).getString("label"))
@@ -578,8 +580,9 @@ class EdgeRoutingTest {
                 .put(
                     "navigation",
                     new io.vertx.core.json.JsonArray()
-                        .add(placement("project.detail", "Editor", 1))
-                        .add(placement("project.detail", "Editor", 2).put("subpath", "editor")))));
+                        .add(placement("project.detail", "Runners", 1))
+                        .add(
+                            placement("project.detail", "Runners", 2).put("subpath", "runners")))));
 
     assertTrue(routes.navigation("dev").isEmpty());
     assertNull(routes.serviceHost("dev", "workspaces"));
@@ -605,11 +608,11 @@ class EdgeRoutingTest {
                                     upstream("qits.edge.apps.mirror.hosts.dev"))),
                             "workspaces",
                             List.of(
-                                new EdgeRoutes.NavigationEntry("project.detail", "Editor", 1),
+                                new EdgeRoutes.NavigationEntry("project.detail", "Runners", 1),
                                 new EdgeRoutes.NavigationEntry(
-                                    "project.detail", "Editor", 2, "editor")))))
+                                    "project.detail", "Runners", 2, "runners")))))
             .getMessage();
-    assertTrue(message.contains("project.detail.Editor"), message);
+    assertTrue(message.contains("project.detail.Runners"), message);
   }
 
   @Test
@@ -1133,32 +1136,6 @@ class EdgeRoutingTest {
         client().get("registry.dev.acme.example.com", "/v2/", token("dev")).line("upstream"));
   }
 
-  // --- the editor, an ordinary app vhost --------------------------------------------------------
-
-  @Test
-  void theEditorIsReachedOnItsOwnTwoLabelNameLikeEveryOtherApp() {
-    // The editor is ONE shared container for the whole platform, so its address is the ordinary
-    // `editor.<env>.<domain>` — the environment is the SECOND label, and the two upstreams behind
-    // the `{env}-qits-workspaces` host pattern are what make that an assertion about which process
-    // answered rather than about a status code.
-    assertEquals(
-        "editor-dev",
-        client().get("editor.dev.acme.example.com", "/editor", token("dev")).line("upstream"));
-    assertEquals(
-        "editor-prod",
-        client().get("editor.prod.acme.example.com", "/editor", token("prod")).line("upstream"));
-  }
-
-  @Test
-  void theEditorsOwnNameDemandsTheEditorsOwnAudience() {
-    // The audience comes from the editor app entry's own pattern with the environment the NAME
-    // states filled in, so the tier's own token is the only one that opens it.
-    assertEquals(
-        401, client().get("editor.dev.acme.example.com", "/editor", tierToken("prod")).status());
-    assertEquals(
-        401, client().get("editor.prod.acme.example.com", "/editor", tierToken("dev")).status());
-  }
-
   // --- the project tiers -------------------------------------------------------------------------
 
   @Test
@@ -1246,16 +1223,16 @@ class EdgeRoutingTest {
 
   @Test
   void aNameWithNoProjectLabelIsAnOrdinaryFourOhFour() {
-    // The short-form refusal is GONE. `editor.dev.example.com` used to be a name with its project
+    // The short-form refusal is GONE. `registry.dev.example.com` used to be a name with its project
     // label left out and got a sentence of its own about the spelling that works; now it is simply
     // a name whose project label says `dev`, and there is no project called that.
-    EdgeClient.Answer editor = client().get("editor.dev.example.com", "/editor", token("dev"));
-    assertEquals(404, editor.status());
-    assertNull(editor.line("upstream"));
-    assertTrue(editor.body().contains("`dev` is not a project on this platform"), editor.body());
+    EdgeClient.Answer app = client().get("registry.dev.example.com", "/v2/", token("dev"));
+    assertEquals(404, app.status());
+    assertNull(app.line("upstream"));
+    assertTrue(app.body().contains("`dev` is not a project on this platform"), app.body());
 
     // And a name with a project label but too many in front of it is the other 404.
-    EdgeClient.Answer deep = client().get("a.b.c." + PROJECT + ".example.com", "/editor");
+    EdgeClient.Answer deep = client().get("a.b.c." + PROJECT + ".example.com", "/v2/");
     assertEquals(404, deep.status());
     assertTrue(deep.body().contains("more labels than the grammar has"), deep.body());
   }
@@ -1263,7 +1240,7 @@ class EdgeRoutingTest {
   @Test
   void anEnvironmentTheProjectDoesNotHaveIsRefusedByName() {
     EdgeClient.Answer answer =
-        client().get("editor.staging." + PROJECT + ".example.com", "/editor", token("dev"));
+        client().get("registry.staging." + PROJECT + ".example.com", "/v2/", token("dev"));
     assertEquals(404, answer.status());
     assertNull(answer.line("upstream"));
     assertTrue(answer.body().contains("does not have an environment by that name"), answer.body());
@@ -1271,12 +1248,12 @@ class EdgeRoutingTest {
 
   @Test
   void aNavigationOnAProjectsAppTierIsTheNamedEnvironments() {
-    // The document the editor's own shell reads. Getting the environment wrong here is the failure
-    // this tier's authority reading exists to prevent: dev's editor rendering prod's services.
+    // The document an app's own shell reads. Getting the environment wrong here is the failure
+    // this tier's authority reading exists to prevent: dev's app rendering prod's services.
     activateCi();
     JsonObject document =
         new JsonObject(
-            client().get("editor.dev." + PROJECT + ".example.com", "/main-navigation").body());
+            client().get("registry.dev." + PROJECT + ".example.com", "/main-navigation").body());
     assertEquals("dev", document.getString("environment"));
     assertEquals("http://dev.acme.example.com", document.getString("origin"));
     assertEquals("http://dev.acme.example.com", document.getString("projectOrigin"));
@@ -1355,12 +1332,11 @@ class EdgeRoutingTest {
     projectSans.authoritative(false);
     try {
       // The deepest name there is, one slug short of being served at all.
-      EdgeClient.Answer editor = client().get("editor.dev.nosuchproject.example.com", "/editor");
-      assertEquals(503, editor.status());
-      assertEquals("1", editor.headers().get("retry-after"));
-      assertTrue(editor.body().contains("still reading the project log"), editor.body());
-      assertNull(
-          editor.line("upstream"), "nothing reaches an upstream while the answer is unknown");
+      EdgeClient.Answer app = client().get("registry.dev.nosuchproject.example.com", "/v2/");
+      assertEquals(503, app.status());
+      assertEquals("1", app.headers().get("retry-after"));
+      assertTrue(app.body().contains("still reading the project log"), app.body());
+      assertNull(app.line("upstream"), "nothing reaches an upstream while the answer is unknown");
 
       // And the project door, whose label would otherwise read as an application nobody routes.
       assertEquals(503, client().get("dev.nosuchproject.example.com", "/").status());
@@ -1389,9 +1365,9 @@ class EdgeRoutingTest {
       assertEquals(404, client().get("example.com", "/").status());
       assertEquals(404, client().get("dev.acme.example.com", "/anything").status());
       assertEquals(
-          "editor-dev",
+          "registry-dev",
           client()
-              .get("editor.dev." + PROJECT + ".example.com", "/editor", token("dev"))
+              .get("registry.dev." + PROJECT + ".example.com", "/v2/", token("dev"))
               .line("upstream"));
     } finally {
       projectSans.authoritative(true);
@@ -1402,10 +1378,10 @@ class EdgeRoutingTest {
   void onceTheProjectionIsAuthoritativeTheSameNamesAre404Again() {
     // The barrier is a window, not a state: with the log read to its head an unknown slug is a slug
     // that does not exist, and the answer is the 404 that names the spelling which works.
-    EdgeClient.Answer editor = client().get("editor.dev.nosuchproject.example.com", "/editor");
-    assertEquals(404, editor.status());
+    EdgeClient.Answer app = client().get("registry.dev.nosuchproject.example.com", "/v2/");
+    assertEquals(404, app.status());
     assertTrue(
-        editor.body().contains("`nosuchproject` is not a project on this platform"), editor.body());
+        app.body().contains("`nosuchproject` is not a project on this platform"), app.body());
 
     EdgeClient.Answer door = client().get("dev.nosuchproject.example.com", "/");
     assertEquals(404, door.status());
@@ -1952,8 +1928,8 @@ class EdgeRoutingTest {
   }
 
   /**
-   * qits-workspaces as the editor epic publishes it: one application, one container, TWO rows under
-   * the project node — the workspace list at its root and the editor under a subpath.
+   * One application, one container, TWO rows under the project node — the workspace list at its
+   * root and a second view under a subpath.
    */
   private void activateWorkspaces() {
     deployments.onFrame(
@@ -1970,7 +1946,8 @@ class EdgeRoutingTest {
                     "navigation",
                     new io.vertx.core.json.JsonArray()
                         .add(placement("project.detail", "Workspaces", 1))
-                        .add(placement("project.detail", "Editor", 2).put("subpath", "editor")))));
+                        .add(
+                            placement("project.detail", "Runners", 2).put("subpath", "runners")))));
   }
 
   /** The landing service: what makes the environment's own name a door rather than a page. */
@@ -2001,10 +1978,10 @@ class EdgeRoutingTest {
    * the Route with the projection's label as the app. That is the second of the two ways a label
    * reaches the anonymous-read gate, and the one a public SSR landing page depends on.
    *
-   * <p>Its endpoint points at the EDITOR stub deliberately, not mirror's. Every other exempted-read
-   * assertion in this file reads {@code mirror-dev}, so answering {@code editor-dev} here is what
-   * makes a 200 proof that the request reached the PROJECTION's own upstream rather than mirror's
-   * configured route happening to answer.
+   * <p>Its endpoint points at the REGISTRY stub deliberately, not mirror's. Every other
+   * exempted-read assertion in this file reads {@code mirror-dev}, so answering {@code
+   * registry-dev} here is what makes a 200 proof that the request reached the PROJECTION's own
+   * upstream rather than mirror's configured route happening to answer.
    */
   private void activateBrochure() {
     deployments.onFrame(
@@ -2016,7 +1993,9 @@ class EdgeRoutingTest {
                 .put(
                     "endpoints",
                     new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/brochure", upstream("qits.edge.apps.editor.hosts.dev"))))));
+                        .add(
+                            endpoint(
+                                "/brochure", upstream("qits.edge.apps.registry.hosts.dev"))))));
   }
 
   private static JsonObject endpoint(String path, Upstream upstream) {
@@ -2822,12 +2801,12 @@ class EdgeRoutingTest {
     // and configured nowhere, so HostEnvironments answers it as an unknown app; it reaches the
     // exemption at all only because EdgeRouter.target() rebuilds the Route with the projection's
     // label as the app, which is what makes toApp() true. This is the path a public SSR landing
-    // page depends on, and until now nothing exercised it. `editor-dev` rather than `mirror-dev`
+    // page depends on, and until now nothing exercised it. `registry-dev` rather than `mirror-dev`
     // is the load-bearing half of the assertion: it is the projection's OWN upstream answering.
     activateBrochure();
     EdgeClient.Answer answer = client().get("brochure.dev.acme.example.com", "/brochure/");
     assertEquals(200, answer.status());
-    assertEquals("editor-dev", answer.line("upstream"));
+    assertEquals("registry-dev", answer.line("upstream"));
   }
 
   @Test
@@ -2878,7 +2857,7 @@ class EdgeRoutingTest {
                     "X-Qits-Something-Nobody-Invented-Yet", "whatever"));
 
     assertEquals(200, answer.status());
-    assertEquals("editor-dev", answer.line("upstream"));
+    assertEquals("registry-dev", answer.line("upstream"));
     assertNull(answer.upstreamHeader("X-Qits-User"));
     assertNull(answer.upstreamHeader("X-Qits-User-Id"));
     assertNull(answer.upstreamHeader("X-Qits-Roles"));

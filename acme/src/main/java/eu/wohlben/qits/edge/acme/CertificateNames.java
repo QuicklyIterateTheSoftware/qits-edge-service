@@ -45,19 +45,19 @@ import java.util.regex.Pattern;
  * of env-less projects costs {@code 2 + P} names where the old top-level environment tier and the
  * unconditional cross product cost {@code 2 + E + P + P·E}.
  *
- * <p><b>The project tiers retire the extra-SAN-per-project debt.</b> The editor host used to reach
+ * <p><b>The project tiers retire the extra-SAN-per-project debt.</b> A project's host used to reach
  * this certificate only by being written out by hand, one {@code additional} name per project, in a
  * bootstrap key a person had to remember to extend — so a project created on Tuesday had no
  * certificate until somebody edited a deployment. The projects are now fed in from the {@code
  * ProjectCreated}/{@code ProjectDeleted} events qits-projects publishes, and a slug that is on this
  * list is covered at every depth it can be served on by construction.
  *
- * <p><b>The additional names remain a list of NAMES</b> — "also these", not "also the editors".
- * They arrive from the bootstrap as {@code QITS_EDGE_ACME_ADDITIONAL_NAMES}, written whole or
- * relative to the domain, because one line is what a person writes: {@code editor.acme} and {@code
- * editor.acme.wohlben.eu} are the same name when the domain is {@code wohlben.eu}. Every one of
- * them ends up inside the domain, and that is not a courtesy — the edge answers its challenges by
- * writing records in this domain's own zone, so a name outside it is an order that cannot be
+ * <p><b>The additional names remain a list of NAMES</b> — "also these", not "also every project's
+ * host". They arrive from the bootstrap as {@code QITS_EDGE_ACME_ADDITIONAL_NAMES}, written whole
+ * or relative to the domain, because one line is what a person writes: {@code status.acme} and
+ * {@code status.acme.wohlben.eu} are the same name when the domain is {@code wohlben.eu}. Every one
+ * of them ends up inside the domain, and that is not a courtesy — the edge answers its challenges
+ * by writing records in this domain's own zone, so a name outside it is an order that cannot be
  * answered, and one such name fails the WHOLE order.
  *
  * <p><b>Past the ceiling the project tiers are DROPPED, never the order.</b> See {@link

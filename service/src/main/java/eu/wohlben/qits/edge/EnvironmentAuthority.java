@@ -74,8 +74,8 @@ public record EnvironmentAuthority(String scheme, String authority, String proje
    * name that names no project.
    *
    * <p>It is also what an application label is prefixed onto, which is the whole of {@code
-   * projectOrigin}'s contract in the navigation document: {@code editor.} in front of this
-   * authority is the editor's name for this project.
+   * projectOrigin}'s contract in the navigation document: {@code ci.} in front of this authority is
+   * ci's name for this project.
    */
   public String origin() {
     return scheme + "://" + authority;

@@ -20,9 +20,8 @@ application's snapshot in its own PostgreSQL database. A snapshot is three thing
   until a service has been flipped, and that absence is what makes this release inert;
 - **`navigation`** — placements, at most one per `(slot, label)` pair:
   `{"slot":"services.details","label":"CI","position":2}`. The slot vocabulary is closed and lives
-  in `EdgeRoutes.SLOTS`. **One application fills several entries of one slot** — qits-workspaces
-  hangs `Workspaces` and `Editor` under `project.detail` from one container — so the slot alone was
-  never the claim; the same pair twice is one row asked for twice and is refused. A repeated
+  in `EdgeRoutes.SLOTS`. **One application may fill several entries of one slot**, so the slot
+  alone was never the claim; the same pair twice is one row asked for twice and is refused. A repeated
   `position` is not: the document breaks that tie by label, whether the two entries belong to one
   application or to two.
 
@@ -113,7 +112,7 @@ A `Host` name selects an environment, and optionally a project and an applicatio
 | `registry.prod.example.com` | `prod`'s `registry` upstream — `$app.$env.$domain`  |
 | `registry.dev.example.com`  | `dev`'s `registry` upstream — same entry, other tier |
 | `acme.prod.example.com`     | the `acme` **project's door** in `prod` — `$project.$env.$domain` |
-| `editor.acme.prod.example.com` | the editor, for `acme`, in `prod` — `$app.$project.$env.$domain` |
+| `ci.acme.prod.example.com` | ci, for `acme`, in `prod` — `$app.$project.$env.$domain` |
 | `example.com`               | the **default** environment's door — the apex, and the one name with no environment label |
 | `localhost`, `127.0.0.1`, `[::1]` | the **default** door — one label, or an address |
 | no `Host` at all            | the **default** door                                |
@@ -122,7 +121,7 @@ A `Host` name selects an environment, and optionally a project and an applicatio
 | `ci.dev.localhost`, `ci` being published rather than configured | **404** — a machine name reaches configured applications only |
 | `ci.dev.example.com`, published by a deployment | `dev`'s ci service — its SPA at `/` and every route it owns |
 | `mirror.dev.example.com`, `mirror` unconfigured and unpublished | **404** — see below |
-| `registry.example.com`, `acme.example.com`, `editor.acme.example.com`, `staging.example.com` | **404** naming the explicit spelling — see below |
+| `registry.example.com`, `acme.example.com`, `ci.acme.example.com`, `staging.example.com` | **404** naming the explicit spelling — see below |
 
 Only the **first three labels** are read; everything to the right of them is the **stated domain**,
 `qits.edge.domain` (`QITS_DOMAIN`). It is stated rather than derived because it cannot be derived —
@@ -136,7 +135,7 @@ on either tie-break.
 
 **The environment label is not optional.** It used to be, for the default environment: the apex is
 that environment's door, so `ci.example.com` was its ci service. The **project tier** ended that.
-With a project label in the middle, `editor.acme.example.com` and `editor.acme.prod.example.com`
+With a project label in the middle, `ci.acme.example.com` and `ci.acme.prod.example.com`
 would be one place whose middle label is read as a project in one spelling and an environment in the
 other, and `acme.example.com` would be a project door or an application vhost depending on which set
 a label happened to be in. So a name of more than one label that does not state its environment is
@@ -428,7 +427,6 @@ gives every service on qits-net:
 | `registry` | `qits-artifacts` | `dev-qits-artifacts:8080` | `dev-qits-artifacts` |
 | `mirror` | `qits-mirror` | `dev-qits-mirror:8080` | `dev-qits-mirror` |
 | `githost` | `qits-githost` | `dev-qits-githost:8080` | `dev-qits-githost` |
-| `editor` | `qits-workspaces` | `dev-qits-workspaces:8080` | `dev-qits-workspaces` |
 
 These used to be keys — `qits.edge.apps.<app>.host-pattern`, `audience-pattern` and `port` — and
 the live store held six `QITS_EDGE_APPS_*_PATTERN` entries spelling this one rule, one of them a
@@ -739,10 +737,10 @@ certificate whose names are **derived**, in four tiers, because a wildcard cover
 | --- | --- | --- |
 | apex | `wohlben.eu`, `*.wohlben.eu` | `idp.wohlben.eu`, and nothing under it |
 | environment | `*.<env>.<domain>` | `ci.dev.wohlben.eu` |
-| project | `*.<slug>.<domain>` | `editor.acme.wohlben.eu` |
-| project × environment | `*.<slug>.<env>.<domain>` | `editor.acme.dev.wohlben.eu` |
+| project | `*.<slug>.<domain>` | `ci.acme.wohlben.eu` |
+| project × environment | `*.<slug>.<env>.<domain>` | `ci.acme.dev.wohlben.eu` |
 
-The third tier is now a name that **resolves and verifies and is not served**: `editor.acme.wohlben.eu`
+The third tier is now a name that **resolves and verifies and is not served**: `ci.acme.wohlben.eu`
 states no environment, so the routing model above answers it 404 with the explicit spelling. It stays
 on the certificate deliberately — the TLS handshake happens before that answer, and a name whose
 refusal arrives as a certificate error is a browser page nobody can read. It costs one SAN per
@@ -753,7 +751,7 @@ project against the ceiling below.
 (a durable, replay-from-epoch consumer like the routing one, tombstoned so a late create cannot
 resurrect a deleted project) and `EdgeProjects.slugs()` is what the name set is built from. A
 project created on Tuesday is on the certificate on Tuesday — which is what retired the older
-arrangement, where the editor host reached the certificate only if somebody remembered to add it to
+arrangement, where a project's host reached the certificate only if somebody remembered to add it to
 a bootstrap key.
 
 A create **requests** a reconcile rather than performing one: the request is debounced by
@@ -765,10 +763,10 @@ certificate still answers, so the surplus wildcard ages out at the next renewal.
 **`QITS_EDGE_ACME_ADDITIONAL_NAMES` remains, for names no tier describes:**
 
 ```
-QITS_EDGE_ACME_ADDITIONAL_NAMES=editor.acme,editor.gizmo.wohlben.eu
+QITS_EDGE_ACME_ADDITIONAL_NAMES=status.acme,status.gizmo.wohlben.eu
 ```
 
-Whole or relative to the domain; `editor.acme` is `editor.acme.<domain>`. It is a list of **names**
+Whole or relative to the domain; `status.acme` is `status.acme.<domain>`. It is a list of **names**
 and knows nothing about projects. The bootstrap owns the list (`QITS_ACME_EXTRA_SANS`) and checks it
 before the run, because the edge answers its challenges in this domain's own zone and one name
 outside it fails the whole order. Unset orders exactly the derived set; a name added reaches the

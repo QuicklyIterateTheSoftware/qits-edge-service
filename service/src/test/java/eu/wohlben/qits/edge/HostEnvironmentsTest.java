@@ -25,10 +25,10 @@ import org.junit.jupiter.api.Test;
  */
 class HostEnvironmentsTest {
 
-  /** The estate every test here reads against: two environments, three configured app names. */
+  /** The estate every test here reads against: two environments, two configured app names. */
   private static final HostEnvironments EDGE =
       HostEnvironments.of(
-          List.of("prod", "dev"), "prod", List.of("registry", "githost", "editor"), "wohlben.eu");
+          List.of("prod", "dev"), "prod", List.of("registry", "githost"), "wohlben.eu");
 
   /**
    * The projection, exactly as {@code EdgeProjects.projects()} serves it: slug to whether that
@@ -64,7 +64,7 @@ class HostEnvironmentsTest {
     // environment — and that application is served in the default environment, because a project
     // deployed once is deployed once.
     assertEquals(
-        Route.app("prod", "editor", "qits"), EDGE.route("editor.qits.wohlben.eu", PROJECTS));
+        Route.app("prod", "githost", "qits"), EDGE.route("githost.qits.wohlben.eu", PROJECTS));
     assertEquals(
         Route.app("prod", "registry", "qits"), EDGE.route("registry.qits.wohlben.eu", PROJECTS));
     // `projects` is not a configured app name here, so it is the label the deployment projection is
@@ -125,7 +125,7 @@ class HostEnvironmentsTest {
         List.of(
             "nosuchproject.wohlben.eu",
             "dev.nosuchproject.wohlben.eu",
-            "editor.dev.nosuchproject.wohlben.eu")) {
+            "githost.dev.nosuchproject.wohlben.eu")) {
       Route route = EDGE.route(host, PROJECTS);
       assertEquals(Reading.UNKNOWN_PROJECT, route.reading(), host);
       assertEquals("nosuchproject", route.project(), host);
@@ -139,7 +139,7 @@ class HostEnvironmentsTest {
     // The old grammar's spellings, every one of them. There is no short-form refusal any more: a
     // name missing its project label is a name with a label missing, and the label that IS next to
     // the domain is simply not a project.
-    for (String host : List.of("dev.wohlben.eu", "registry.dev.wohlben.eu", "editor.wohlben.eu")) {
+    for (String host : List.of("dev.wohlben.eu", "registry.dev.wohlben.eu", "githost.wohlben.eu")) {
       assertEquals(Reading.UNKNOWN_PROJECT, EDGE.route(host, PROJECTS).reading(), host);
     }
     assertEquals("dev", EDGE.route("registry.dev.wohlben.eu", PROJECTS).project());
@@ -160,7 +160,7 @@ class HostEnvironmentsTest {
         EDGE.route("registry.staging.someproject.wohlben.eu", PROJECTS));
     // And an env-less project has NO environment tier at all, so nothing fits at that depth.
     assertEquals(
-        Route.unreadable("prod", "qits"), EDGE.route("editor.prod.qits.wohlben.eu", PROJECTS));
+        Route.unreadable("prod", "qits"), EDGE.route("githost.prod.qits.wohlben.eu", PROJECTS));
   }
 
   @Test
@@ -240,8 +240,8 @@ class HostEnvironmentsTest {
   @Test
   void aHostHeaderArrivesInAnyCaseWithAnyPortAndAnyRootDot() {
     assertEquals(
-        Route.app("dev", "editor", "someproject"),
-        EDGE.route("  EDITOR.Dev.SomeProject.Wohlben.EU.:8080  ", PROJECTS));
+        Route.app("dev", "githost", "someproject"),
+        EDGE.route("  GITHOST.Dev.SomeProject.Wohlben.EU.:8080  ", PROJECTS));
     assertEquals(
         Route.projectDoor("prod", "someproject"),
         EDGE.route("SOMEPROJECT.wohlben.eu:443.", PROJECTS));
@@ -288,7 +288,7 @@ class HostEnvironmentsTest {
     // anything else — which is exactly what the catch-up barrier holds back.
     assertEquals(Route.apex("prod"), EDGE.route("wohlben.eu"));
     assertEquals(Reading.UNKNOWN_PROJECT, EDGE.route("qits.wohlben.eu").reading());
-    assertEquals(Reading.UNKNOWN_PROJECT, EDGE.route("editor.qits.wohlben.eu").reading());
+    assertEquals(Reading.UNKNOWN_PROJECT, EDGE.route("githost.qits.wohlben.eu").reading());
   }
 
   // --- what configuration refuses ----------------------------------------------------------------
@@ -478,10 +478,7 @@ class HostEnvironmentsTest {
    */
   private static final HostEnvironments MACHINE =
       HostEnvironments.of(
-          List.of("prod", "dev"),
-          "prod",
-          List.of("registry", "mirror", "githost", "editor"),
-          "wohlben.eu");
+          List.of("prod", "dev"), "prod", List.of("registry", "mirror", "githost"), "wohlben.eu");
 
   @Test
   void theFourMachineVhostsTheBootstrapRendersReachTheirApplications() {

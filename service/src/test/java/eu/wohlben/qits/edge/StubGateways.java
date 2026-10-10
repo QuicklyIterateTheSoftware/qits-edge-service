@@ -243,15 +243,14 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
   }
 
   /**
-   * One environment's four platform audiences — registry, mirror, githost, editor — each the
-   * application's own {@code <env>-qits-<application>}, as {@link PlatformApps} derives them.
+   * One environment's three platform audiences — registry, mirror, githost — each the application's
+   * own {@code <env>-qits-<application>}, as {@link PlatformApps} derives them.
    */
   static List<String> platformAudiences(String environment) {
     return List.of(
         environment + "-qits-artifacts",
         environment + "-qits-mirror",
-        environment + "-qits-githost",
-        environment + "-qits-workspaces");
+        environment + "-qits-githost");
   }
 
   /** How long {@code /stream} waits between its two chunks — long enough to time from a client. */
@@ -310,18 +309,15 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     for (String environment : List.of("prod", "dev")) {
       config.put(
           "qits.test.environment-upstreams." + environment, "127.0.0.1:" + listen(environment));
-      for (String app : List.of("registry", "mirror", "editor")) {
+      for (String app : List.of("registry", "mirror")) {
         config.put(
             "qits.edge.apps." + app + ".hosts." + environment,
             "127.0.0.1:" + listen(app + "-" + environment));
       }
     }
-    // No address for the three apps beyond the overrides above: where each one goes otherwise is
+    // No address for the two apps beyond the overrides above: where each one goes otherwise is
     // code (PlatformApps), and every environment here overrides it, so a request that reached the
-    // derived alias would be a resolution bug rather than a test that happened to pass. The third
-    // app is the editor, one shared container for the whole platform on an ordinary app vhost:
-    // `editor.<env>.<domain>`. Its two upstreams are what makes "the named environment, not the
-    // default" an assertion about which process answered rather than about a status code.
+    // derived alias would be a resolution bug rather than a test that happened to pass.
     //
     // No audience either: a platform vhost demands its application's own `<env>-qits-<application>`
     // or the platform audience, in code. `registry` fronts qits-artifacts, which is why the stub
