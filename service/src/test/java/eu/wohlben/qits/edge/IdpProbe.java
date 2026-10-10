@@ -13,27 +13,57 @@ import java.util.concurrent.TimeUnit;
  */
 public final class IdpProbe implements AutoCloseable {
 
-  /** The edge's own idp client, as the deployer would inject it. Not a secret: a test value. */
-  public static final String CLIENT_ID = "dev-qits-edge";
-
-  public static final String CLIENT_SECRET = "edge-secret";
-
   private final Vertx vertx = Vertx.vertx();
   private final Idp idp = new Idp();
   private final AuthConfig auth = authConfig();
+  private final String clientId;
+  private final String clientSecret;
 
-  public IdpProbe(String dialUrl) {
+  /**
+   * @param dialUrl the idp dial address, {@code .../idp}
+   * @param domain the stated domain the accepted issuer is derived from
+   * @param edgeAuthorization the edge's own client as a {@code Basic} header, as the deployer would
+   *     inject it; null where the call does not use it
+   */
+  public IdpProbe(String dialUrl, String domain, String edgeAuthorization) {
     idp.configuredDial = dialUrl;
+    idp.edge = edgeConfig(domain);
+    String[] client = client(edgeAuthorization);
+    clientId = client[0];
+    clientSecret = client[1];
   }
 
-  /** {@code GET <dial>/jwks}: the key the edge would verify with. */
-  public RSAPublicKey key(String kid) throws Exception {
+  /** The dial address, trimmed as the edge trims it. */
+  public String dial() {
+    return idp.dialBase();
+  }
+
+  /** {@code GET <dial>/.well-known/openid-configuration}: the {@code jwks_uri} the edge follows. */
+  public String discoverJwksUri() throws Exception {
+    return keys()
+        .discoverJwksUri()
+        .toCompletionStage()
+        .toCompletableFuture()
+        .get(10, TimeUnit.SECONDS);
+  }
+
+  /**
+   * {@code GET <jwksUri>}, as discovery named it: the key the edge would verify with. A mock server
+   * answers discovery with the recorded address, so the key set's address is stated here.
+   */
+  public RSAPublicKey key(String jwksUri, String kid) throws Exception {
+    IdpKeys keys = keys();
+    keys.jwksUri = jwksUri;
+    return keys.find(kid).toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+  }
+
+  private IdpKeys keys() {
     IdpKeys keys = new IdpKeys();
     keys.vertx = vertx;
     keys.config = auth;
     keys.idp = idp;
     keys.open();
-    return keys.find(kid).toCompletionStage().toCompletableFuture().get(10, TimeUnit.SECONDS);
+    return keys;
   }
 
   /** {@code POST <dial>/token}, relaying a caller's Basic header: status and body as read. */
@@ -104,7 +134,32 @@ public final class IdpProbe implements AutoCloseable {
                 });
   }
 
-  private static IdpConfig idpConfig() {
+  private static String[] client(String basic) {
+    if (basic == null) {
+      return new String[] {null, null};
+    }
+    String decoded =
+        new String(
+            java.util.Base64.getDecoder().decode(basic.substring("Basic ".length())),
+            java.nio.charset.StandardCharsets.UTF_8);
+    int colon = decoded.indexOf(':');
+    return new String[] {decoded.substring(0, colon), decoded.substring(colon + 1)};
+  }
+
+  private static EdgeConfig edgeConfig(String domain) {
+    return (EdgeConfig)
+        Proxy.newProxyInstance(
+            EdgeConfig.class.getClassLoader(),
+            new Class<?>[] {EdgeConfig.class},
+            (proxy, method, args) -> {
+              if (method.getName().equals("domain")) {
+                return domain;
+              }
+              throw new UnsupportedOperationException("IdpProbe states no " + method.getName());
+            });
+  }
+
+  private IdpConfig idpConfig() {
     return new IdpConfig() {
       @Override
       public String dialUrl() {
@@ -113,12 +168,12 @@ public final class IdpProbe implements AutoCloseable {
 
       @Override
       public Optional<String> clientId() {
-        return Optional.of(CLIENT_ID);
+        return Optional.ofNullable(clientId);
       }
 
       @Override
       public Optional<String> clientSecret() {
-        return Optional.of(CLIENT_SECRET);
+        return Optional.ofNullable(clientSecret);
       }
     };
   }

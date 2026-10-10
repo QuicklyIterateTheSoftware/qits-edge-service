@@ -61,10 +61,12 @@
         <!-- pact-jvm's JUnit 5 provider, for contracts/ConsumerPactVerificationTest: the version every
              provider on the estate verifies with, so a consumer's pact is read the same way. -->
         <pact.version>4.6.21</pact.version>
-        <!-- qits-events' recorded answers (golden-masters/), test scope: consumer/EventsContract
-             builds the edge's pact against qits-events from them (ticket qits-1149). Moves like
-             every internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
-        <qits.events-golden-masters.version>2026.1002.210125</qits.events-golden-masters.version>
+        <!-- qits-idp's recorded answers (golden-masters/), test scope: consumer/IdpContract builds
+             the edge's pact against qits-idp from them (ticket qits-1149). Moves like every
+             internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
+        <qits.idp-golden-masters.version>2026.1010.134259</qits.idp-golden-masters.version>
+        <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
+        <qits.pact-consumer.version>2026.1010.140259</qits.pact-consumer.version>
 
         <!-- INTEGRATION TESTS ARE OFF BY DEFAULT, and this repository now has both halves of that
              sentence: a failsafe plugin bound below, and ForwardAuthBootstrapIT for it to run.
@@ -280,18 +282,18 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <!-- consumer/: the edge's own consumer pacts (ticket qits-1149). Plain JUnit 5, written
-                 to pacts/<consumer>_<provider>.json at the repository root. -->
-            <groupId>au.com.dius.pact.consumer</groupId>
-            <artifactId>junit5</artifactId>
-            <version>${pact.version}</version>
+            <!-- consumer/: the edge's own consumer pacts (ticket qits-1149), written to
+                 pacts/<consumer>_<provider>.json at the repository root. Brings pact-jvm's consumer. -->
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-pact-consumer</artifactId>
+            <version>${qits.pact-consumer.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <!-- Recordings a test reads, never code. -->
             <groupId>eu.wohlben.qits</groupId>
-            <artifactId>qits-events-golden-masters</artifactId>
-            <version>${qits.events-golden-masters.version}</version>
+            <artifactId>qits-idp-golden-masters</artifactId>
+            <version>${qits.idp-golden-masters.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
