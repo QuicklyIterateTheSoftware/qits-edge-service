@@ -16,9 +16,10 @@ import java.util.List;
  * key or a properties default (qits-730): idp derives the same string from the same domain, so the
  * two cannot be configured apart.
  *
- * <p>{@code qits.edge.idp.dial-url} is the address this process actually connects to for keys,
+ * <p>{@code qits.edge.idp.dial-url} is the address this process actually connects to for discovery,
  * tokens and introspection; every path under it is derived here rather than configured, because the
- * paths belong to idp rather than to a deployment.
+ * paths belong to idp rather than to a deployment. The key set is the exception: its address is the
+ * {@code jwks_uri} of the discovery document.
  *
  * <p><b>WHY THEY ARE TWO, and it is not tidiness.</b> The issuer is stamped into every token in
  * flight and compared for equality by every consumer, so it cannot move with a deployment; the
@@ -63,9 +64,13 @@ public class Idp {
     return trimmed(configuredDial);
   }
 
-  /** {@code <dial>/jwks} — the published signing keys. */
-  public String jwksUri() {
-    return dialBase() + "/jwks";
+  /**
+   * {@code <dial>/.well-known/openid-configuration} — idp's discovery document. The edge reads the
+   * signing keys from the {@code jwks_uri} it names ({@link IdpKeys}), as every quarkus-oidc tenant
+   * on the estate does, rather than composing a key path of its own.
+   */
+  public String discoveryUri() {
+    return dialBase() + "/.well-known/openid-configuration";
   }
 
   /** {@code <dial>/token} — RFC 6749 {@code client_credentials}, form encoded. */

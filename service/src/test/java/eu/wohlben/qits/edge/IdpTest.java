@@ -54,7 +54,8 @@ class IdpTest {
   void everyEndpointIsBuiltFromTheDialAddress() {
     Idp idp = idp("http://dev-qits-idp:8080/idp");
 
-    assertEquals("http://dev-qits-idp:8080/idp/jwks", idp.jwksUri());
+    assertEquals(
+        "http://dev-qits-idp:8080/idp/.well-known/openid-configuration", idp.discoveryUri());
     assertEquals("http://dev-qits-idp:8080/idp/token", idp.tokenEndpoint());
     assertEquals(
         "http://dev-qits-idp:8080/idp/api/sessions/introspect", idp.introspectionEndpoint());
@@ -65,8 +66,8 @@ class IdpTest {
   @Test
   void theDialAddressIsTrimmedOfTrailingSlashesBeforeAnythingIsComposedOntoIt() {
     assertEquals(
-        "http://dev-qits-idp:8080/idp/jwks",
-        idp(" http://dev-qits-idp:8080/idp// ").jwksUri(),
+        "http://dev-qits-idp:8080/idp/.well-known/openid-configuration",
+        idp(" http://dev-qits-idp:8080/idp// ").discoveryUri(),
         "a doubled slash is exactly the 404 a key fetch fails on");
   }
 }

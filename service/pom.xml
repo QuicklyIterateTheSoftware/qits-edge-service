@@ -7,13 +7,13 @@
     <parent>
         <groupId>eu.wohlben</groupId>
         <artifactId>qits-platform-edge-parent</artifactId>
-        <version>2026.1008.195918</version>
+        <version>2026.1010.160354</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <groupId>eu.wohlben</groupId>
     <artifactId>qits-platform-edge</artifactId>
-    <version>2026.1008.195918</version>
+    <version>2026.1010.160354</version>
     <packaging>quarkus</packaging>
 
     <name>qits-platform-edge</name>
@@ -30,7 +30,7 @@
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <!-- Keep in step with the platform's quarkus.platform.version (qits-gateway's is the one to
              match; it is the closest sibling and the other half of every request that passes here). -->
-        <quarkus.platform.version>3.34.6</quarkus.platform.version>
+        <quarkus.platform.version>3.40.1</quarkus.platform.version>
 
         <compiler-plugin.version>3.15.0</compiler-plugin.version>
         <surefire-plugin.version>3.5.4</surefire-plugin.version>
@@ -60,7 +60,13 @@
         <qits.service-mock.version>2026.1002.70617</qits.service-mock.version>
         <!-- pact-jvm's JUnit 5 provider, for contracts/ConsumerPactVerificationTest: the version every
              provider on the estate verifies with, so a consumer's pact is read the same way. -->
-        <pact.version>4.6.21</pact.version>
+        <pact.version>4.7.5</pact.version>
+        <!-- qits-idp's recorded answers (golden-masters/), test scope: consumer/IdpContract builds
+             the edge's pact against qits-idp from them (ticket qits-1149). Moves like every
+             internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
+        <qits.idp-golden-masters.version>2026.1010.134259</qits.idp-golden-masters.version>
+        <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
+        <qits.pact-consumer.version>2026.1010.141817</qits.pact-consumer.version>
 
         <!-- INTEGRATION TESTS ARE OFF BY DEFAULT, and this repository now has both halves of that
              sentence: a failsafe plugin bound below, and ForwardAuthBootstrapIT for it to run.
@@ -85,7 +91,7 @@
         <skipITs>true</skipITs>
         <qits.maven.repository.url>https://registry.qits.wohlben.eu/artifacts/maven/maven</qits.maven.repository.url>
         <zonky.embedded-postgres.version>2.2.2</zonky.embedded-postgres.version>
-        <zonky.postgres-binaries.version>18.4.0</zonky.postgres-binaries.version>
+        <zonky.postgres-binaries.version>18.6.0</zonky.postgres-binaries.version>
     </properties>
 
     <dependencyManagement>
@@ -273,6 +279,21 @@
             <groupId>au.com.dius.pact.provider</groupId>
             <artifactId>junit5</artifactId>
             <version>${pact.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- consumer/: the edge's own consumer pacts (ticket qits-1149), written to
+                 pacts/<consumer>_<provider>.json at the repository root. Brings pact-jvm's consumer. -->
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-pact-consumer</artifactId>
+            <version>${qits.pact-consumer.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- Recordings a test reads, never code. -->
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-idp-golden-masters</artifactId>
+            <version>${qits.idp-golden-masters.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

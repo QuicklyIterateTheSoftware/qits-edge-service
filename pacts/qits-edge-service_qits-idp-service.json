@@ -1,0 +1,823 @@
+{
+  "consumer": {
+    "name": "qits-edge-service"
+  },
+  "interactions": [
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-idp-service",
+            "operationId": "issueToken"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "operation",
+            "operationId": "EdgeAuth.checkBasic"
+          }
+        }
+      },
+      "description": "EdgeAuth.checkBasic: issueToken",
+      "key": "739a7d0d",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a service client with the system role",
+          "params": {
+            "authorization": "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA==",
+            "callerClientId": "test-broad",
+            "clientSecret": "test-broad-secret"
+          }
+        }
+      ],
+      "request": {
+        "body": {
+          "content": "grant_type=client_credentials",
+          "contentType": "application/x-www-form-urlencoded",
+          "contentTypeHint": "DEFAULT",
+          "encoded": false
+        },
+        "generators": {
+          "header": {
+            "Authorization": {
+              "dataType": "RAW",
+              "expression": "${authorization}",
+              "type": "ProviderState"
+            }
+          }
+        },
+        "headers": {
+          "Authorization": [
+            "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA=="
+          ],
+          "Content-Type": [
+            "application/x-www-form-urlencoded"
+          ]
+        },
+        "method": "POST",
+        "path": "/idp/token"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "access_token": "opaque"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.access_token": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-idp-service",
+            "operationId": "introspectToken"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "operation",
+            "operationId": "EdgeAuth.checkToken"
+          }
+        }
+      },
+      "description": "EdgeAuth.checkToken: introspectToken",
+      "key": "5c1c3738",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a commissioned token",
+          "params": {
+            "authorization": "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA==",
+            "callerClientId": "test-broad",
+            "token": "qits_tok_0000000000000000000000000000000000000000001",
+            "tokenId": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "token": "qits_tok_0000000000000000000000000000000000000000001"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.token": {
+              "dataType": "STRING",
+              "expression": "${token}",
+              "type": "ProviderState"
+            }
+          },
+          "header": {
+            "Authorization": {
+              "dataType": "RAW",
+              "expression": "${authorization}",
+              "type": "ProviderState"
+            }
+          }
+        },
+        "headers": {
+          "Authorization": [
+            "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA=="
+          ],
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.token": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/idp/api/tokens/introspect"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "accessToken": "opaque",
+            "expiresIn": 300
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.accessToken": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.expiresIn": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "number"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-idp-service",
+            "operationId": "introspectToken"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "operation",
+            "operationId": "EdgeAuth.token"
+          }
+        }
+      },
+      "description": "EdgeAuth.token: introspectToken",
+      "key": "a5c4a2a6",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a commissioned token",
+          "params": {
+            "authorization": "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA==",
+            "callerClientId": "test-broad",
+            "token": "qits_tok_0000000000000000000000000000000000000000001",
+            "tokenId": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "token": "qits_tok_0000000000000000000000000000000000000000001"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.token": {
+              "dataType": "STRING",
+              "expression": "${token}",
+              "type": "ProviderState"
+            }
+          },
+          "header": {
+            "Authorization": {
+              "dataType": "RAW",
+              "expression": "${authorization}",
+              "type": "ProviderState"
+            }
+          }
+        },
+        "headers": {
+          "Authorization": [
+            "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA=="
+          ],
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.token": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/idp/api/tokens/introspect"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "accessToken": "opaque",
+            "expiresIn": 300
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.accessToken": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.expiresIn": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "number"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-idp-service",
+            "operationId": "issueToken"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "operation",
+            "operationId": "EdgeAuth.token"
+          }
+        }
+      },
+      "description": "EdgeAuth.token: issueToken",
+      "key": "21c03718",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a service client with the system role",
+          "params": {
+            "authorization": "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA==",
+            "callerClientId": "test-broad",
+            "clientSecret": "test-broad-secret"
+          }
+        }
+      ],
+      "request": {
+        "body": {
+          "content": "grant_type=client_credentials",
+          "contentType": "application/x-www-form-urlencoded",
+          "contentTypeHint": "DEFAULT",
+          "encoded": false
+        },
+        "generators": {
+          "header": {
+            "Authorization": {
+              "dataType": "RAW",
+              "expression": "${authorization}",
+              "type": "ProviderState"
+            }
+          }
+        },
+        "headers": {
+          "Authorization": [
+            "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA=="
+          ],
+          "Content-Type": [
+            "application/x-www-form-urlencoded"
+          ]
+        },
+        "method": "POST",
+        "path": "/idp/token"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "access_token": "opaque",
+            "expires_in": 3600
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.access_token": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.expires_in": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "number"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-idp-service",
+            "operationId": "introspectSession"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "operation",
+            "operationId": "EdgeSessions.introspect"
+          }
+        }
+      },
+      "description": "EdgeSessions.introspect: introspectSession",
+      "key": "2fdad24f",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a signed-in person",
+          "params": {
+            "authorization": "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA==",
+            "callerClientId": "test-broad",
+            "sessionToken": "0000000000000000000000000000000000000000001",
+            "userId": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "token": "0000000000000000000000000000000000000000001"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.token": {
+              "dataType": "STRING",
+              "expression": "${sessionToken}",
+              "type": "ProviderState"
+            }
+          },
+          "header": {
+            "Authorization": {
+              "dataType": "RAW",
+              "expression": "${authorization}",
+              "type": "ProviderState"
+            }
+          }
+        },
+        "headers": {
+          "Authorization": [
+            "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA=="
+          ],
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.token": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/idp/api/sessions/introspect"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "expiresAt": "2026-01-01T00:00:00Z",
+            "roles": [
+              "qits:admin"
+            ],
+            "userId": "00000000-0000-4000-8000-000000000001",
+            "username": "contract-00000000-0000-4000-8000-000000000001"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.expiresAt": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,9})?)?(Z|[+-]\\d{2}:?\\d{2})$"
+                }
+              ]
+            },
+            "$.roles": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "max": 1,
+                  "min": 1
+                }
+              ]
+            },
+            "$.roles[*]": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.userId": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                }
+              ]
+            },
+            "$.username": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-idp-service",
+            "operationId": "getJwks"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "operation",
+            "operationId": "the first authenticated request"
+          }
+        }
+      },
+      "description": "the first authenticated request: getJwks",
+      "key": "f8c536d9",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a published signing key",
+          "params": {
+            "kid": "contract-signing-key"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/idp/jwks"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "keys": [
+              {
+                "alg": "RS256",
+                "e": "AQAB",
+                "kid": "contract-signing-key",
+                "kty": "RSA",
+                "n": "w22O_ObglnNG60PveaNoDYurV2UhwvgMnL91tE4wBuWFY1yaEujIejjq2Qy-zvOuwYm2QKvHU-KhQ4nXWGJ8I-lXRaCPlmoFYXFXelBMp7abSkerNqBf_Bpc_Zj_cW7r4e69gDkK-3cChOTpsUhXzyuNanKh-h840YqhAPld9lz2Akr4T5hTMlgjjOagWaX_BkIMPmudiMQ8Uv5ppR2pETcAUi2D35L2OwVMBzqjQyykBcIIZgHM9qNUSQmJy-NjdSM4MJfjguxR23Yn4Dpp5HknGbhTOQ-Z90_neU8UVOKhhzDl_tUbpT9Q9ihqJmRmXsIySx2hXECmChLIoOqMlw",
+                "use": "sig"
+              }
+            ]
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.keys": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 1
+                }
+              ]
+            },
+            "$.keys[*].alg": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.keys[*].e": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.keys[*].kid": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.keys[*].kty": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.keys[*].n": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.keys[*].use": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-idp-service",
+            "operationId": "getOpenIdConfiguration"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "operation",
+            "operationId": "the first authenticated request"
+          }
+        }
+      },
+      "description": "the first authenticated request: getOpenIdConfiguration",
+      "key": "45e2117",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a published signing key",
+          "params": {
+            "kid": "contract-signing-key"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/idp/.well-known/openid-configuration"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "issuer": "https://idp.qits.localhost",
+            "jwks_uri": "http://dev-qits-idp:8080/idp/jwks",
+            "token_endpoint": "http://dev-qits-idp:8080/idp/token"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.jwks_uri": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.token_endpoint": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    }
+  ],
+  "metadata": {
+    "pactSpecification": {
+      "version": "4.0"
+    },
+    "plugins": []
+  },
+  "provider": {
+    "name": "qits-idp-service"
+  }
+}
