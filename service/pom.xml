@@ -61,6 +61,10 @@
         <!-- pact-jvm's JUnit 5 provider, for contracts/ConsumerPactVerificationTest: the version every
              provider on the estate verifies with, so a consumer's pact is read the same way. -->
         <pact.version>4.6.21</pact.version>
+        <!-- qits-events' recorded answers (golden-masters/), test scope: consumer/EventsContract
+             builds the edge's pact against qits-events from them (ticket qits-1149). Moves like
+             every internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
+        <qits.events-golden-masters.version>2026.1002.210125</qits.events-golden-masters.version>
 
         <!-- INTEGRATION TESTS ARE OFF BY DEFAULT, and this repository now has both halves of that
              sentence: a failsafe plugin bound below, and ForwardAuthBootstrapIT for it to run.
@@ -273,6 +277,21 @@
             <groupId>au.com.dius.pact.provider</groupId>
             <artifactId>junit5</artifactId>
             <version>${pact.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- consumer/: the edge's own consumer pacts (ticket qits-1149). Plain JUnit 5, written
+                 to pacts/<consumer>_<provider>.json at the repository root. -->
+            <groupId>au.com.dius.pact.consumer</groupId>
+            <artifactId>junit5</artifactId>
+            <version>${pact.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- Recordings a test reads, never code. -->
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-events-golden-masters</artifactId>
+            <version>${qits.events-golden-masters.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
