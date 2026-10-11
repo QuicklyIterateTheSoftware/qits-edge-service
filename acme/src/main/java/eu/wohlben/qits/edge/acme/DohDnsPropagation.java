@@ -2,6 +2,7 @@ package eu.wohlben.qits.edge.acme;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import eu.wohlben.qits.http.RawHttpClient;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -13,6 +14,9 @@ import java.time.Instant;
 import java.util.List;
 
 /** Requires two independent public recursive resolvers to observe the challenge value. */
+@RawHttpClient(
+    reason =
+        "cloudflare-dns.com and dns.google are public DNS-over-HTTPS resolvers, not qits services: no trace or caller header belongs on them")
 public final class DohDnsPropagation implements DnsPropagation {
 
   private static final List<URI> RESOLVERS =

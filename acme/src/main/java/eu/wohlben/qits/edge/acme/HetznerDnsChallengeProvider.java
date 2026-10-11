@@ -2,6 +2,7 @@ package eu.wohlben.qits.edge.acme;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import eu.wohlben.qits.http.RawHttpClient;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -13,6 +14,9 @@ import java.util.List;
 import java.util.Map;
 
 /** DNS-01 mutations through Hetzner Cloud's RRSet API. */
+@RawHttpClient(
+    reason =
+        "api.hetzner.cloud is the DNS provider API, not a qits service: no trace or caller header belongs on it")
 public final class HetznerDnsChallengeProvider implements DnsChallengeProvider {
 
   private static final URI DEFAULT_API = URI.create("https://api.hetzner.cloud/v1/");
