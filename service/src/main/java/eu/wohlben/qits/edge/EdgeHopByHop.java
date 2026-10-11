@@ -32,9 +32,9 @@ import java.util.List;
  * HTTP/1.1 answer, which are this process' to write and not an upstream's to leak.
  *
  * <p><b>Framing is the server's own.</b> Dropping the upstream's {@code Transfer-Encoding} changes
- * nothing about how a streamed answer is carried: the proxy sets the inbound response chunked itself
- * whenever the upstream gave no length on HTTP/1.1, and HTTP/2 frames its DATA with no header at
- * all. {@code EdgeRoutingTest.aChunkedResponseIsNotBuffered} is the regression for that.
+ * nothing about how a streamed answer is carried: the proxy sets the inbound response chunked
+ * itself whenever the upstream gave no length on HTTP/1.1, and HTTP/2 frames its DATA with no
+ * header at all. {@code EdgeRoutingTest.aChunkedResponseIsNotBuffered} is the regression for that.
  *
  * <p><b>The request direction</b> already loses the fixed list inside {@code vertx-http-proxy}
  * ({@code Connection}, {@code Keep-Alive}, {@code Proxy-Authenticate}, {@code Proxy-Authorization},

@@ -118,7 +118,7 @@ final class EdgeClient implements AutoCloseable {
   }
 
   /** The {@code to} of every edge this tap observes — this service, as the diagram names it. */
-  private static final String SERVICE = "qits-platform-edge";
+  private static final String SERVICE = "qits-edge";
 
   private final Vertx vertx = Vertx.vertx();
   private final HttpClient client;

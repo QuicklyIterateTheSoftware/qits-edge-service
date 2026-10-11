@@ -35,7 +35,7 @@ import org.junit.jupiter.api.BeforeAll;
  * three services and the identity provider are running and answering throughout this story — the
  * one before it and the one after it both get 200s out of them — so an empty arrow set is a
  * statement about this process's decisions rather than about a fixture that was switched off.
- * {@code assertNoEdgesFrom(qits-platform-edge)} says the same thing once, in the strongest form the
+ * {@code assertNoEdgesFrom(qits-edge)} says the same thing once, in the strongest form the
  * framework has: <i>nothing left this process at all</i>.
  *
  * <p><b>Four kinds of caller meet the wall, because a wall that answers everybody the same way is

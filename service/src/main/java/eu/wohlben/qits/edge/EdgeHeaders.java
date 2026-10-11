@@ -40,9 +40,10 @@ import java.util.List;
  * be conditional on there being a validated session to replace the value with: a machine credential
  * and a deployment-opened read carry no session and must still not be allowed to forge an identity.
  * A session's own identity is written back after the strip and only then; a request without one has
- * the namespace emptied and nothing asserted, its identity being whatever its token proves. The
- * gateway one hop in still does its own, and has to: a request may reach it from qits-net without
- * passing this process at all.
+ * the namespace emptied and no person asserted, its identity being whatever its token proves. The
+ * calling application, {@link #CALLER}, is written back the same way whenever the page the request
+ * came from is one of the platform's own, session or not. The gateway one hop in still does its
+ * own, and has to: a request may reach it from qits-net without passing this process at all.
  *
  * <p><b>Nothing else is touched.</b> No header outside the reserved prefix is stripped, no path is
  * rewritten, no body is read. {@code Authorization} and every custom header pass through as they
@@ -81,6 +82,22 @@ final class EdgeHeaders implements ProxyInterceptor {
   static final String ROLES = RESERVED_PREFIX + "Roles";
 
   /**
+   * The APPLICATION a request comes from — its deployed identity, the same value as its OTel {@code
+   * service.name}: {@code qits-landing}, {@code qits-ci}. A receiving service records it as the
+   * span attribute {@code qits.caller}, so a trace says who asked as well as who answered.
+   *
+   * <p>A service stamps it itself on its own outbound calls. A BROWSER cannot, and must not be able
+   * to: the strip removes whatever a client sent under this name like every other reserved one, and
+   * what the edge writes back is derived from the page the request came from — its {@code Origin},
+   * or the origin of its {@code Referer} where it sent none — and only when that page is on one of
+   * this platform's own names and one application serves it. See {@code EdgeRouter.caller}. It is
+   * not a credential: an {@code Origin} is a browser's statement, and a non-browser client can
+   * write one, so nothing may authorise on it. It is attribution, and asserting it here is what
+   * keeps a client from attributing its traffic to somebody else through the header itself.
+   */
+  static final String CALLER = RESERVED_PREFIX + "Caller";
+
+  /**
    * Whether a header name belongs to the reserved namespace. Case-insensitive: header names are,
    * and a client sending {@code x-qits-user} must be treated exactly like one sending {@code
    * X-Qits-User}.
@@ -108,10 +125,15 @@ final class EdgeHeaders implements ProxyInterceptor {
    * way a forged {@code X-Qits-User} reached the gateway through the front door before this
    * existed.
    *
+   * <p>The calling application is asserted here for the same reason and independently of the
+   * session: an anonymous read from a platform page has a caller and no person.
+   *
    * @param session the validated session whose identity is asserted, or null to strip and assert
    *     nothing — an anonymous request, or a machine credential, whose identity is in its token
+   * @param caller the application the request's page belongs to, asserted as {@link #CALLER}, or
+   *     null to assert none — a machine's request, a foreign page, a name no application serves
    */
-  static void applyIdentity(MultiMap headers, EdgeSessions.Session session) {
+  static void applyIdentity(MultiMap headers, EdgeSessions.Session session, String caller) {
     // Snapshot the names first: removing from the map while iterating its own name view would
     // otherwise skip entries.
     for (String name : List.copyOf(headers.names())) {
@@ -119,13 +141,53 @@ final class EdgeHeaders implements ProxyInterceptor {
         headers.remove(name);
       }
     }
+    // Only now, with the namespace provably empty, is it safe to write into it.
+    if (caller != null) {
+      headers.set(CALLER, caller);
+    }
     if (session == null) {
       return;
     }
-    // Only now, with the namespace provably empty, is it safe to write into it.
     headers.set(USER, session.username());
     headers.set(USER_ID, session.userId());
     headers.set(ROLES, session.roles());
+  }
+
+  /**
+   * The origin of the page a request comes from: its {@code Origin} header as sent, or — only when
+   * there is none — the {@code scheme://authority} of its {@code Referer}.
+   *
+   * <p><b>The fallback exists because a browser does not always send {@code Origin}</b>: a
+   * same-origin GET or HEAD carries none, and that is most of what a page fetches from its own
+   * service. Its {@code Referer} names the page, and the page's origin is all that is read off it —
+   * path, query and fragment are dropped, and a URL carrying user-info is not one a browser sends
+   * and is refused. A present {@code Origin} is final, {@code null} included: that is a browser
+   * deliberately hiding the page, and reading the {@code Referer} instead would be second-guessing
+   * it.
+   *
+   * <p>Nothing here decides whether the origin is a trusted one — that is {@code
+   * EdgeSessions.admitsOrigin}, and then whether an application serves its name.
+   *
+   * @return the origin to attribute the request to, or null when the request names no page
+   */
+  static String callerOrigin(String origin, String referer) {
+    if (origin != null && !origin.isBlank()) {
+      return origin.strip();
+    }
+    if (referer == null || referer.isBlank()) {
+      return null;
+    }
+    try {
+      java.net.URI page = new java.net.URI(referer.strip());
+      if (page.getScheme() == null
+          || page.getRawAuthority() == null
+          || page.getRawUserInfo() != null) {
+        return null;
+      }
+      return page.getScheme().toLowerCase(java.util.Locale.ROOT) + "://" + page.getRawAuthority();
+    } catch (java.net.URISyntaxException unreadable) {
+      return null;
+    }
   }
 
   /**

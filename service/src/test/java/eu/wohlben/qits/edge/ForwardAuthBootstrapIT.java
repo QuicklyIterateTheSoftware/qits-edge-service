@@ -154,7 +154,7 @@ public class ForwardAuthBootstrapIT {
     StoryUpstream upstream = StoryUpstream.attach(StoryTarget.PROJECTS);
 
     story.note(
-        "qits-platform-edge starts as the platform's only published port, with the browser gate on,"
+        "qits-edge starts as the platform's only published port, with the browser gate on,"
             + " in front of four services and beside the identity provider it introspects at");
     given().get(StoryTarget.READY).then().statusCode(200).body("status", equalTo("UP"));
 

@@ -1,5 +1,6 @@
 package eu.wohlben.qits.edge;
 
+import io.opentelemetry.api.trace.Span;
 import io.quarkus.vertx.http.runtime.RouteConstants;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -20,10 +21,14 @@ import io.vertx.httpproxy.OriginRequestProvider;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
+import java.net.URI;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.BiFunction;
+import java.util.function.Predicate;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -87,6 +92,13 @@ public class EdgeRouter {
   public static final int ROUTE_ORDER = RouteConstants.ROUTE_ORDER_AFTER_DEFAULT;
 
   private static final Logger LOG = Logger.getLogger(EdgeRouter.class);
+
+  /**
+   * The span attribute the calling application is recorded under — the edge's own server span
+   * carries the same {@code qits.caller} every receiving service records off {@link
+   * EdgeHeaders#CALLER}.
+   */
+  static final String CALLER_ATTRIBUTE = "qits.caller";
 
   @Inject Vertx vertx;
 
@@ -181,6 +193,21 @@ public class EdgeRouter {
 
     String environment() {
       return route.environment();
+    }
+
+    /**
+     * The application this name reaches — its deployed identity, the name {@code deployments.yml}
+     * deploys it as — or null for a door and for a configured label nothing fronts. A published
+     * service names itself; a platform vhost that published nothing is the application {@link
+     * PlatformApps} says its label fronts.
+     */
+    String application() {
+      if (host != null) {
+        return host.application();
+      }
+      return route.toApp() && PlatformApps.contains(route.app())
+          ? PlatformApps.application(route.app())
+          : null;
     }
   }
 
@@ -540,13 +567,25 @@ public class EdgeRouter {
    * @return null when the name is app-shaped and nobody claims it, which is the 404
    */
   private Target target(HostEnvironments.Route named) {
+    return target(named, routes::serviceHost);
+  }
+
+  /**
+   * {@link #target(HostEnvironments.Route)} against any projection, so the caller attribution can
+   * be asserted on the very join a request is routed by without a boot.
+   *
+   * @param published environment and label to the service publishing that name — {@link
+   *     EdgeRoutes#serviceHost}
+   */
+  private static Target target(
+      HostEnvironments.Route named, BiFunction<String, String, EdgeRoutes.ServiceHost> published) {
     if (named.toApp()) {
-      return new Target(named, routes.serviceHost(named.environment(), named.app()));
+      return new Target(named, published.apply(named.environment(), named.app()));
     }
     if (named.unknownApp() != null) {
-      EdgeRoutes.ServiceHost published =
-          routes.serviceHost(named.environment(), named.unknownApp());
-      return published == null
+      EdgeRoutes.ServiceHost publishedHost =
+          published.apply(named.environment(), named.unknownApp());
+      return publishedHost == null
           ? null
           : new Target(
               new HostEnvironments.Route(
@@ -555,13 +594,82 @@ public class EdgeRouter {
                   null,
                   named.project(),
                   HostEnvironments.Reading.APP),
-              published);
+              publishedHost);
     }
     // A door, and a door is never joined on: the grammar gives a published service name an APP
     // position of its own, so nothing a deployment publishes can occupy a project's or an
     // environment's name. That join existed because a slug and a published name used to be the same
     // single label in front of an environment, which the project tier retired.
     return new Target(named, null);
+  }
+
+  /**
+   * The application whose page this request comes from, asserted as {@link EdgeHeaders#CALLER} — or
+   * null, and nothing is asserted.
+   *
+   * <p><b>The page is the request's {@code Origin}, else its {@code Referer}'s origin</b> — see
+   * {@link EdgeHeaders#callerOrigin}. It must be one the platform admits, {@link
+   * EdgeSessions#admitsOrigin}, the anchor CORS and the login return are held to: a page under the
+   * stated domain, on the scheme and port the canonical origin carries. A foreign page and a
+   * loopback {@code ng serve} are nobody's.
+   *
+   * <p><b>Its name is then read exactly as a request to that name would be routed</b>: the same
+   * {@link HostEnvironments#route} reading against the same project and landing sets, and the same
+   * projection join, {@link #target}. That is what makes the answer the application that SERVED the
+   * page: {@code ci.dev.acme.<domain>} is whoever published {@code ci} in dev, and an env-less
+   * project's own name is whoever claimed its landing. A name that routes to no application — a
+   * door, an unknown label, a project nobody knows — attributes the request to nobody rather than
+   * guessing. The page's own service calling itself is attributed too: {@code qits-ci} calling
+   * {@code qits-ci} is still the truth.
+   */
+  String caller(HttpServerRequest request) {
+    return caller(
+        EdgeHeaders.callerOrigin(
+            request.getHeader(HttpHeaders.ORIGIN), request.getHeader(HttpHeaders.REFERER)),
+        sessions::admitsOrigin,
+        hostEnvironments,
+        projects.projects(),
+        routes.landingEnvironments(),
+        routes::serviceHost);
+  }
+
+  /**
+   * {@link #caller(HttpServerRequest)} with every input passed in, so it is asserted without a
+   * boot.
+   *
+   * @param origin the page's origin, {@link EdgeHeaders#callerOrigin}; null attributes nothing
+   * @param admitted whether that origin is the platform's own — {@link EdgeSessions#admitsOrigin}
+   * @param published environment and label to the service publishing that name — {@link
+   *     EdgeRoutes#serviceHost}
+   */
+  static String caller(
+      String origin,
+      Predicate<String> admitted,
+      HostEnvironments names,
+      Map<String, Boolean> projects,
+      Set<String> landingEnvironments,
+      BiFunction<String, String, EdgeRoutes.ServiceHost> published) {
+    if (origin == null || !admitted.test(origin)) {
+      return null;
+    }
+    String host;
+    try {
+      host = URI.create(origin).getHost();
+    } catch (IllegalArgumentException unreadable) {
+      return null;
+    }
+    if (host == null) {
+      return null;
+    }
+    HostEnvironments.Route named = names.route(host, projects, landingEnvironments);
+    if (named.reading() != HostEnvironments.Reading.APP
+        && named.reading() != HostEnvironments.Reading.UNKNOWN_APP) {
+      // Only an application position names an application. A machine name's label is refused
+      // here as it is by the router, before any join: it is an alias, never a page's address.
+      return null;
+    }
+    Target target = target(named, published);
+    return target == null ? null : target.application();
   }
 
   /**
@@ -1008,7 +1116,18 @@ public class EdgeRouter {
     // cannot be conditional on there being a session to replace it with. On the ordinary path the
     // proxy copies these headers upstream; on an upgrade it forwards this same map, so one call
     // covers a path the interceptor chain never sees.
-    EdgeHeaders.applyIdentity(request.headers(), session);
+    // The calling application is asserted in the same call, after the same strip — a client's own
+    // X-Qits-Caller is gone either way, and only the edge's reading of the page replaces it.
+    String caller = caller(request);
+    EdgeHeaders.applyIdentity(request.headers(), session, caller);
+    if (caller != null) {
+      // On the edge's own SERVER span, read off the request's own context: at this point the
+      // current one may be another request's — see RequestSpans.
+      Span span = RequestSpans.of(request);
+      if (span != null) {
+        span.setAttribute(CALLER_ATTRIBUTE, caller);
+      }
+    }
     if (session == null) {
       // A parent-domain browser session reaches every sibling name by browser design. This request
       // is not using one — it is a machine's, or a read the deployment opened — so the cookie is

@@ -2,11 +2,8 @@ package eu.wohlben.qits.edge;
 
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
-import io.quarkus.opentelemetry.runtime.QuarkusContextStorage;
-import io.vertx.core.Context;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpServerRequest;
-import io.vertx.core.http.impl.HttpServerRequestInternal;
 import io.vertx.core.net.SocketAddress;
 import java.util.Locale;
 
@@ -102,9 +99,8 @@ record UpstreamLease(
    * elsewhere — a cache entry shared between requests — resumes on that future's context. There
    * {@code Span.current()} answers some other request's span, and a wrong trace id is worse than
    * none: it sends whoever reads it to an unrelated exchange. The request's own context cannot be
-   * wrong that way. Reaching it takes two pieces of internal API, Vert.x's {@code
-   * HttpServerRequestInternal.context()} and Quarkus' {@code QuarkusContextStorage.getOtelContext},
-   * both kept to this method.
+   * wrong that way. Reaching it takes two pieces of internal API, both kept to {@link
+   * RequestSpans}.
    *
    * <p><b>2. {@code Span.current()}</b>, for a request that is not a Vert.x-internal one or a
    * Quarkus whose storage moved — valid only when its span context is.
@@ -132,22 +128,8 @@ record UpstreamLease(
   }
 
   private static String attachedTraceId(HttpServerRequest request) {
-    try {
-      if (!(request instanceof HttpServerRequestInternal internal)) {
-        return null;
-      }
-      Context context = internal.context();
-      io.opentelemetry.context.Context otel =
-          context == null ? null : QuarkusContextStorage.getOtelContext(context);
-      if (otel == null) {
-        return null;
-      }
-      SpanContext span = Span.fromContext(otel).getSpanContext();
-      return span.isValid() ? span.getTraceId() : null;
-    } catch (RuntimeException | LinkageError moved) {
-      // Internal API that a Vert.x or Quarkus upgrade may move; Span.current() is the fallback.
-      return null;
-    }
+    Span attached = RequestSpans.of(request);
+    return attached == null ? null : attached.getSpanContext().getTraceId();
   }
 
   /**

@@ -9,8 +9,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * <b>One launched qits-platform-edge for the whole story catalogue</b>, and every seam a story
- * moves, declared once.
+ * <b>One launched qits-edge for the whole story catalogue</b>, and every seam a story moves,
+ * declared once.
  *
  * <p>A {@code @TestProfile} is what failsafe launches a process for, so two profiles would be two
  * front doors — two boots, two databases, two session caches, two routing projections. Every story

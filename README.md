@@ -88,7 +88,7 @@ Historical mentions of it below are exactly that; nothing on the platform runs o
 
 ```
                           ┌────────────────────────────────────────┐
-  client ──:8080──▶       │ qits-platform-edge  (the only          │
+  client ──:8080──▶       │ qits-edge  (the only                   │
   Host: registry.dev.…    │ published port on the host, and the    │
                           │ only proxy tier)                       │
                           │   Host name → service · idp · /q       │
@@ -672,6 +672,17 @@ dropped first, whatever the outcome: the reserved prefix is what a hop *asserts*
 With the session gate off, and for a configured application with no published host, this is the gate
 exactly as it stood.
 
+**`X-Qits-Caller` names the application whose page a request comes from** (qits-1198), on every
+proxied request and independent of the four branches above. A service stamps it on its own outbound
+calls; a browser cannot, so the edge asserts it after the same strip. The page is the request's
+`Origin`, else the origin of its `Referer` (a same-origin GET sends no `Origin`); it must be one CORS
+admits under the stated domain, and its name is then read exactly as a request to it would be routed
+— `ci.dev.acme.<domain>` is whoever published `ci` in dev, an env-less project's own name is its
+landing, `registry.…` is the application `PlatformApps` says it fronts. A foreign page, a door, an
+unknown label or no page at all asserts nothing. The value is the deployed identity, the same as the
+caller's OTel `service.name` (`qits-landing`, `qits-ci`), and the edge records it on its own server
+span as `qits.caller` too. It is attribution, not a credential: nothing may authorise on it.
+
 The cookie is removed from every request that did **not** use it, which is what keeps a
 parent-domain session out of registry, mirror and git-host traffic. Unrelated cookies and all
 machine credentials pass through unchanged.
@@ -926,7 +937,7 @@ session, a person's cookie NOT arriving on a machine vhost, which of two service
 identical request, and a request that arrived and was then dropped mid-answer.
 
 **And what only a negative assertion can say** is the sharpest claim of all. `SessionlessWallIT`
-ends with `assertNoEdgesFrom(qits-platform-edge)` — *nothing left this process* — with all four far
+ends with `assertNoEdgesFrom(qits-edge)` — *nothing left this process* — with all four far
 sides up and answering 200s in the stories either side of it. `assertEdgeCount` on every story is
 what catches a refused request quietly starting to be forwarded.
 

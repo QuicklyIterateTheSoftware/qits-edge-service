@@ -288,6 +288,7 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
           "X-Qits-User",
           "X-Qits-User-Id",
           "X-Qits-Roles",
+          "X-Qits-Caller",
           "Cookie",
           // What a socket's credential became on the way through — the JWT a token stands for,
           // never the token.

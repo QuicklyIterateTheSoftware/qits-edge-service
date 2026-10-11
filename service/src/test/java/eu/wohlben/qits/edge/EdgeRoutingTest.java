@@ -978,6 +978,70 @@ class EdgeRoutingTest {
     }
   }
 
+  // --- X-Qits-Caller, which the edge asserts for a page on the platform's own names
+  // ---------------
+
+  @Test
+  void aPlatformPagesRequestReachesTheServiceWithItsCallerAssertedOverAForgedOne() {
+    // A qits-projects page calling qits-ci. The client's own X-Qits-Caller is stripped with the
+    // rest of the reserved prefix, and the edge's reading of the Origin is what arrives.
+    activateCi();
+    activateProjects();
+    EdgeClient.Answer answer =
+        client()
+            .get(
+                "ci.dev.acme.example.com",
+                "/ci/api/runs",
+                withToken(
+                    Map.of(
+                        "Origin",
+                        "https://projects.dev.acme.example.com",
+                        EdgeHeaders.CALLER,
+                        "qits-idp")));
+    assertEquals(200, answer.status());
+    assertEquals("qits-projects", answer.upstreamHeader(EdgeHeaders.CALLER));
+  }
+
+  @Test
+  void withoutAnOriginTheReferersPageIsTheCallerAndAServiceCallingItselfIsStillOne() {
+    activateCi();
+    EdgeClient.Answer answer =
+        client()
+            .get(
+                "ci.dev.acme.example.com",
+                "/ci/api/runs",
+                withToken(Map.of("Referer", "https://ci.dev.acme.example.com/ci/runs/42?tab=log")));
+    assertEquals("qits-ci", answer.upstreamHeader(EdgeHeaders.CALLER));
+  }
+
+  @Test
+  void aForeignOrUnservedPageAssertsNoCallerAndAForgedOneStaysStripped() {
+    activateCi();
+    for (String origin :
+        List.of(
+            "https://evil.example",
+            "https://nosuchapp.dev.acme.example.com",
+            "https://acme.example.com",
+            "null")) {
+      EdgeClient.Answer answer =
+          client()
+              .get(
+                  "ci.dev.acme.example.com",
+                  "/ci/api/runs",
+                  withToken(Map.of("Origin", origin, EdgeHeaders.CALLER, "qits-idp")));
+      assertEquals(200, answer.status(), origin);
+      assertNull(answer.upstreamHeader(EdgeHeaders.CALLER), origin);
+    }
+    // And no page at all: a machine's request names none.
+    assertNull(
+        client()
+            .get(
+                "ci.dev.acme.example.com",
+                "/ci/api/runs",
+                withToken(Map.of(EdgeHeaders.CALLER, "qits-idp")))
+            .upstreamHeader(EdgeHeaders.CALLER));
+  }
+
   @Test
   void anAdmittedPreflightIsAnsweredBeforeTheGate() {
     // No credential at all — a browser sends none on a preflight — on a host that refuses every

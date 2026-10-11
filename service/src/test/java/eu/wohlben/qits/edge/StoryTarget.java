@@ -25,7 +25,7 @@ public final class StoryTarget {
   private StoryTarget() {}
 
   /** How every diagram in this catalogue names the launched process, on both sides of an edge. */
-  public static final String SERVICE = "qits-platform-edge";
+  public static final String SERVICE = "qits-edge";
 
   /** The category every story in this catalogue emits under. */
   public static final String CATEGORY = "edge";
