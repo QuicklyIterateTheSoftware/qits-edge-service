@@ -6,7 +6,7 @@
     <parent>
         <groupId>eu.wohlben</groupId>
         <artifactId>qits-platform-edge-parent</artifactId>
-        <version>2026.1011.215831</version>
+        <version>2026.1012.62941</version>
     </parent>
     <artifactId>qits-platform-edge-acme</artifactId>
     <name>qits-platform-edge ACME</name>
