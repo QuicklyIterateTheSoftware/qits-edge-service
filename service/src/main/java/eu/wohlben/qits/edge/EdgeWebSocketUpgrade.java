@@ -51,6 +51,12 @@ import org.jboss.logging.Logger;
  * a plain request does; and a refused credential is answered 401 before any upstream connection is
  * acquired.
  *
+ * <p><b>One subprotocol is the edge's own.</b> {@code qits.bearer} — a loopback page's bearer, see
+ * {@link EdgeWebSocketBearer} — is dropped from the offer forwarded upstream, and the browser is
+ * answered with it whenever the upstream selected none of the offered values. The token that
+ * followed it is gone from the offer before this class runs: the router moved it into {@code
+ * Authorization}.
+ *
  * <p><b>A socket is acquired from the STREAM pool</b> — {@link EdgeRouter} hands this class that
  * client and its {@link UpstreamPools} — because a terminal holds its connection for as long as
  * somebody is typing into it. Its lease is ended by the channel closing and by nothing else: a
@@ -121,6 +127,9 @@ final class EdgeWebSocketUpgrade {
       }
       // The inbound Connection header may carry other tokens; upstream needs exactly the upgrade.
       handshake.headers().set(HttpHeaders.CONNECTION, HttpHeaders.UPGRADE);
+      // qits.bearer is the edge's own subprotocol, answered by the edge — see upgraded(). The token
+      // that followed it was moved into Authorization at the gate.
+      EdgeWebSocketBearer.forwardedOffer(handshake.headers());
       handshake
           .connect()
           .onFailure(
@@ -154,6 +163,13 @@ final class EdgeWebSocketUpgrade {
       HttpServerResponse accepted = request.response();
       accepted.setStatusCode(101);
       accepted.headers().addAll(response.headers());
+      String protocol =
+          EdgeWebSocketBearer.answer(
+              EdgeWebSocketBearer.offered(request.headers()),
+              response.getHeader(EdgeWebSocketBearer.PROTOCOL));
+      if (protocol != null) {
+        accepted.headers().set(EdgeWebSocketBearer.PROTOCOL, protocol);
+      }
       // Drain the handshake's own end-of-request before the connection changes hands. Safe on a
       // request Quarkus already read: resume never throws on a consumed request, only the body
       // handlers this class does not use do.

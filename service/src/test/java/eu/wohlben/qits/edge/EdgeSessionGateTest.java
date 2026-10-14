@@ -377,6 +377,242 @@ class EdgeSessionGateTest {
     return Map.of("Origin", DEV_SERVER, "Sec-Fetch-Mode", "cors", "Sec-Fetch-Site", "cross-site");
   }
 
+  // --- a loopback page's socket, its bearer in the subprotocol offer (qits-1246) -----------------
+
+  /**
+   * A browser WebSocket cannot send Authorization and the loopback page has no cookie, so the token
+   * rides the one header a page controls on a handshake: {@code new WebSocket(url, ['qits.bearer',
+   * token])}. It arrives upstream as an ordinary Bearer, the offer arrives without it, and the
+   * browser is answered with the marker it offered.
+   */
+  @Test
+  void aLoopbackPagesSocketCarriesItsBearerInTheSubprotocolAndItArrivesAsAuthorization() {
+    String jwt = TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE));
+    int before = StubGateways.introspections();
+    List<java.util.logging.LogRecord> logged = new java.util.ArrayList<>();
+    java.util.logging.Handler capture = capture(logged);
+    java.util.logging.Logger root = java.util.logging.Logger.getLogger("");
+    root.addHandler(capture);
+    EdgeClient.Opened opened;
+    try {
+      opened =
+          client()
+              .handshake(
+                  "ci.dev.acme.example.com",
+                  "/terminal",
+                  Map.of("Origin", DEV_SERVER, "Cookie", cookie(StubGateways.SESSION)),
+                  List.of(EdgeWebSocketBearer.MARKER, jwt));
+    } finally {
+      root.removeHandler(capture);
+    }
+    String seen = opened.frame();
+    assertTrue(seen.lines().anyMatch("upstream=mirror-dev"::equals), seen);
+    assertTrue(seen.lines().anyMatch(("authorization=Bearer " + jwt)::equals), seen);
+    assertTrue(
+        seen.lines().anyMatch("sec-websocket-protocol=-"::equals),
+        "neither the marker nor the token is offered upstream: " + seen);
+    assertEquals(EdgeWebSocketBearer.MARKER, opened.subprotocol());
+    // The machine path: no session is read, so no identity is asserted and the cookie stays home.
+    assertEquals(before, StubGateways.introspections());
+    assertTrue(seen.lines().anyMatch("x-qits-user=-"::equals), seen);
+    assertTrue(seen.lines().anyMatch("cookie=theme=dark"::equals), seen);
+    assertNoRecordCarries(logged, jwt);
+  }
+
+  @Test
+  void anotherOfferedSubprotocolIsForwardedAndTheUpstreamsOwnSelectionIsRelayed() {
+    // The marker and the token are the edge's; anything else the page offered is the service's.
+    // When the service selects one, the browser is answered with THAT — it offered it — and when
+    // the
+    // service selects none, with the marker (the previous test).
+    String token = StubGateways.TOKEN;
+    EdgeClient.Opened opened =
+        client()
+            .handshake(
+                "ci.dev.acme.example.com",
+                "/terminal",
+                Map.of("Origin", "http://127.0.0.1:4200"),
+                List.of(EdgeWebSocketBearer.MARKER, token, StubGateways.UPSTREAM_SUBPROTOCOL));
+    String seen = opened.frame();
+    assertTrue(
+        seen.lines()
+            .anyMatch(("sec-websocket-protocol=" + StubGateways.UPSTREAM_SUBPROTOCOL)::equals),
+        seen);
+    assertEquals(StubGateways.UPSTREAM_SUBPROTOCOL, opened.subprotocol());
+    // An opaque token takes the token path like any Bearer: what arrives is the JWT it stands for.
+    String authorization =
+        seen.lines()
+            .filter(l -> l.startsWith("authorization="))
+            .map(l -> l.substring("authorization=".length()))
+            .findFirst()
+            .orElseThrow();
+    assertTrue(authorization.startsWith("Bearer ey"), authorization);
+    assertTrue(!seen.contains(token), "the token itself never goes out: " + seen);
+  }
+
+  @Test
+  void aBadBearerInTheSubprotocolIsRefusedBeforeAnyUpstream() {
+    List<java.util.logging.LogRecord> logged = new java.util.ArrayList<>();
+    java.util.logging.Handler capture = capture(logged);
+    java.util.logging.Logger root = java.util.logging.Logger.getLogger("");
+    root.addHandler(capture);
+    String misaddressed = TestTokens.valid(issuer(), List.of("somebody-else"));
+    try {
+      for (String token :
+          List.of(
+              misaddressed,
+              TestTokens.mint(
+                  TestTokens.IMPOSTOR,
+                  TestTokens.KID,
+                  "RS256",
+                  TestTokens.claims(
+                      issuer(),
+                      List.of(StubGateways.PLATFORM_AUDIENCE),
+                      java.time.Instant.now().plusSeconds(300))),
+              "not-a-jwt",
+              StubGateways.UNKNOWN_TOKEN)) {
+        EdgeClient.Answer answer =
+            client()
+                .send(
+                    HttpMethod.GET,
+                    "ci.dev.acme.example.com",
+                    "/terminal",
+                    null,
+                    bearerHandshake(DEV_SERVER, EdgeWebSocketBearer.MARKER + ", " + token));
+        assertEquals(401, answer.status(), token + ": " + answer.body());
+        assertNull(answer.line("upstream"), "no upstream: " + token);
+        assertEquals(List.of(), answer.headerValues("Sec-WebSocket-Protocol"));
+      }
+    } finally {
+      root.removeHandler(capture);
+    }
+    assertNoRecordCarries(logged, misaddressed);
+  }
+
+  @Test
+  void aBadBearerInTheSubprotocolIsRefusedEvenWhereReadsAreOpen() {
+    // mirror's GETs pass with no credential at all; a socket that OFFERED one is still held to it.
+    EdgeClient.Answer answer =
+        client()
+            .send(
+                HttpMethod.GET,
+                "mirror.dev.acme.example.com",
+                "/terminal",
+                null,
+                bearerHandshake(DEV_SERVER, EdgeWebSocketBearer.MARKER + ", not-a-jwt"));
+    assertEquals(401, answer.status(), answer.body());
+    assertNull(answer.line("upstream"));
+  }
+
+  @Test
+  void theMarkerWithNoTokenAfterItIsRefused() {
+    for (String offer :
+        List.of(
+            EdgeWebSocketBearer.MARKER,
+            StubGateways.UPSTREAM_SUBPROTOCOL + ", " + EdgeWebSocketBearer.MARKER)) {
+      EdgeClient.Answer answer =
+          client()
+              .send(
+                  HttpMethod.GET,
+                  "ci.dev.acme.example.com",
+                  "/terminal",
+                  null,
+                  bearerHandshake(DEV_SERVER, offer));
+      assertEquals(401, answer.status(), offer + ": " + answer.body());
+      assertNull(answer.line("upstream"), offer);
+    }
+  }
+
+  @Test
+  void theSubprotocolBearerIsRefusedFromAnyPageNotOnTheLoopback() {
+    // A page under the domain has the cookie and uses it; a foreign page and a caller naming no
+    // page are not what this door was opened for. 403 even with a perfectly good token.
+    String jwt = TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE));
+    for (String origin :
+        java.util.Arrays.asList(
+            "https://projects.dev.acme.example.com",
+            "http://evil.example:4200",
+            "http://localhost.evil.example",
+            null)) {
+      Map<String, String> headers =
+          new java.util.HashMap<>(bearerHandshake(origin, EdgeWebSocketBearer.MARKER + ", " + jwt));
+      headers.put("Cookie", cookie(StubGateways.SESSION));
+      EdgeClient.Answer answer =
+          client().send(HttpMethod.GET, "ci.dev.acme.example.com", "/terminal", null, headers);
+      assertEquals(403, answer.status(), origin + ": " + answer.body());
+      assertNull(answer.line("upstream"), origin);
+      assertTrue(!answer.body().contains(jwt), "the refusal never echoes the token");
+    }
+  }
+
+  @Test
+  void aPageUnderTheDomainStillOpensItsSocketWithTheCookie() {
+    // Unchanged: no marker offered, so the session is read and asserted as before.
+    String seen =
+        client()
+            .handshake(
+                "ci.dev.acme.example.com",
+                "/terminal",
+                Map.of(
+                    "Origin",
+                    "https://projects.dev.acme.example.com",
+                    "Cookie",
+                    cookie(StubGateways.SESSION)));
+    assertTrue(seen.lines().anyMatch(("x-qits-user=" + StubGateways.SESSION_USER)::equals), seen);
+    assertTrue(seen.lines().anyMatch("sec-websocket-protocol=-"::equals), seen);
+  }
+
+  /** A complete handshake sent raw, so a refusal's own status can be read. */
+  private static Map<String, String> bearerHandshake(String origin, String offer) {
+    Map<String, String> headers = new java.util.HashMap<>();
+    headers.put("Upgrade", "websocket");
+    headers.put("Connection", "Upgrade");
+    headers.put("Sec-WebSocket-Key", "AAAAAAAAAAAAAAAAAAAAAA==");
+    headers.put("Sec-WebSocket-Version", "13");
+    headers.put("Sec-WebSocket-Protocol", offer);
+    headers.put("Sec-Fetch-Mode", "websocket");
+    if (origin != null) {
+      headers.put("Origin", origin);
+    }
+    return headers;
+  }
+
+  /** Every record logged anywhere in the process while it is installed on the root logger. */
+  private static java.util.logging.Handler capture(List<java.util.logging.LogRecord> into) {
+    java.util.logging.Handler handler =
+        new java.util.logging.Handler() {
+          @Override
+          public void publish(java.util.logging.LogRecord record) {
+            synchronized (into) {
+              into.add(record);
+            }
+          }
+
+          @Override
+          public void flush() {}
+
+          @Override
+          public void close() {}
+        };
+    handler.setLevel(java.util.logging.Level.ALL);
+    return handler;
+  }
+
+  private static void assertNoRecordCarries(
+      List<java.util.logging.LogRecord> logged, String secret) {
+    synchronized (logged) {
+      for (java.util.logging.LogRecord record : logged) {
+        String rendered =
+            record.getMessage()
+                + " "
+                + java.util.Arrays.toString(record.getParameters())
+                + " "
+                + record.getThrown();
+        assertTrue(!rendered.contains(secret), "a log record carries the token: " + rendered);
+      }
+    }
+  }
+
   @Test
   void theDoorGatesNothingBecauseItServesNothing() {
     // Not even the login page: the door has no path to refuse, so it 404s instead of redirecting —

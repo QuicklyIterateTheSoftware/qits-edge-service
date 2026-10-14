@@ -365,11 +365,29 @@ final class EdgeClient implements AutoCloseable {
    * the refusal has a real status and draws as the plain 401 it was.
    */
   String handshake(String host, String uri, Map<String, String> headers) {
+    return handshake(host, uri, headers, List.of()).frame();
+  }
+
+  /** What a handshake offering subprotocols came back with. */
+  record Opened(String frame, String subprotocol) {}
+
+  /**
+   * {@link #handshake(String, String, Map)}, offering {@code subprotocols} — which the JDK client
+   * only lets a caller set through its own builder method, never as a header — and reporting the
+   * one the answer selected ({@code ""} for none). The JDK client itself fails a handshake whose
+   * answer selects a subprotocol it did not offer.
+   */
+  Opened handshake(
+      String host, String uri, Map<String, String> headers, List<String> subprotocols) {
     String caller = NetworkCapture.actor();
     CompletableFuture<String> first = new CompletableFuture<>();
     java.net.http.WebSocket.Builder builder =
         java.net.http.HttpClient.newHttpClient().newWebSocketBuilder().header("Host", host);
     headers.forEach(builder::header);
+    if (!subprotocols.isEmpty()) {
+      builder.subprotocols(
+          subprotocols.get(0), subprotocols.subList(1, subprotocols.size()).toArray(String[]::new));
+    }
     java.net.http.WebSocket socket;
     try {
       socket =
@@ -399,7 +417,7 @@ final class EdgeClient implements AutoCloseable {
     try {
       String frame = await(first);
       NetworkCapture.observe(NetworkEdge.EVENT, SERVICE, caller, FRAME);
-      return frame;
+      return new Opened(frame, socket.getSubprotocol());
     } finally {
       socket.abort();
     }

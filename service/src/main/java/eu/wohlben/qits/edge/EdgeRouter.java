@@ -541,7 +541,48 @@ public class EdgeRouter {
       return;
     }
 
+    if (isWebSocketUpgrade(request) && EdgeWebSocketBearer.offersBearer(request.headers())) {
+      // A loopback page's socket, carrying its bearer in the subprotocol offer because a browser
+      // WebSocket cannot send Authorization. See EdgeWebSocketBearer for the contract.
+      if (!bearerSubprotocol(request)) {
+        return;
+      }
+    }
+
     serviceGate(request, target);
+  }
+
+  /**
+   * Admit a handshake that offers {@link EdgeWebSocketBearer#MARKER}, or refuse it: {@code 403}
+   * unless its page is on the loopback, {@code 401} when no token follows the marker. Admitted, the
+   * token has moved into {@code Authorization} and the ordinary gate judges it.
+   *
+   * <p>Neither refusal names the token, and neither does any line this process logs: the offer is
+   * never logged, and after this method it no longer holds the token at all.
+   *
+   * @return true when the handshake goes on to the gate, false when it has been answered
+   */
+  private boolean bearerSubprotocol(HttpServerRequest request) {
+    if (!EdgeCors.isLoopback(request.getHeader(HttpHeaders.ORIGIN))) {
+      LOG.infof(
+          "refused a WebSocket bearer subprotocol from a page that is not on the loopback: %s on %s",
+          request.path(), authority(request));
+      request
+          .response()
+          .setStatusCode(403)
+          .putHeader(HttpHeaders.CONTENT_TYPE, "text/plain; charset=utf-8")
+          .end(
+              "The "
+                  + EdgeWebSocketBearer.MARKER
+                  + " subprotocol is accepted from a loopback page only; a page under the platform"
+                  + " domain uses its session.\n");
+      return false;
+    }
+    if (!EdgeWebSocketBearer.moveToAuthorization(request.headers())) {
+      auth.challenge(request, "no bearer token after " + EdgeWebSocketBearer.MARKER);
+      return false;
+    }
+    return true;
   }
 
   private void projectsCatchingUp(HttpServerRequest request) {
@@ -997,7 +1038,12 @@ public class EdgeRouter {
    * the whole of a service vhost's decision, and it is unchanged.
    */
   private void machine(HttpServerRequest request, Target target) {
-    if (auth.open(target.route(), request)) {
+    // A credential carried in the WebSocket subprotocol is always checked, even where reads are
+    // open: a page that offered one asked to be judged by it, and a junk token must not open a
+    // socket merely because the name would have admitted no credential at all.
+    boolean offeredBearer =
+        isWebSocketUpgrade(request) && EdgeWebSocketBearer.offersBearer(request.headers());
+    if (!offeredBearer && auth.open(target.route(), request)) {
       proxy(request, target, null);
       return;
     }

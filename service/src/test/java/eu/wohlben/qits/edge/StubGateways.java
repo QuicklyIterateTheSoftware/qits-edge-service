@@ -292,7 +292,15 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
           "Cookie",
           // What a socket's credential became on the way through — the JWT a token stands for,
           // never the token.
-          "Authorization");
+          "Authorization",
+          // The subprotocol offer as it arrived: never the edge's qits.bearer, never a token.
+          "Sec-WebSocket-Protocol");
+
+  /**
+   * The one subprotocol the stub upstream speaks, so a test can prove the edge relays an upstream's
+   * own selection rather than overwriting it with {@code qits.bearer}.
+   */
+  static final String UPSTREAM_SUBPROTOCOL = "qits.test.tty";
 
   private Vertx vertx;
   private final Map<String, HttpServer> servers = new HashMap<>();
@@ -563,7 +571,9 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
   private int listen(String environment) {
     HttpServer server =
         vertx
-            .createHttpServer()
+            .createHttpServer(
+                new io.vertx.core.http.HttpServerOptions()
+                    .setWebSocketSubProtocols(List.of(UPSTREAM_SUBPROTOCOL)))
             .requestHandler(request -> answer(environment, request))
             .webSocketHandler(
                 socket -> {

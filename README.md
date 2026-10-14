@@ -362,6 +362,38 @@ machine token are both answered `404` like any other request.
   reports the resolved environment → upstream map as health data and stays DOWN until the
   deployment projection has reached qits-events' confirmed head.
 
+### A loopback page's socket: the bearer rides the subprotocol offer
+
+Under `ng serve` the SPA is on `http://localhost:<port>` and calls the platform with
+`Authorization: Bearer <token>` (see `EdgeCors`). A browser `WebSocket` cannot send that header, and
+the loopback page holds no session cookie, so its terminal and chat sockets carry the token in the
+one header a page does control on a handshake (`EdgeWebSocketBearer`, qits-1246):
+
+```js
+new WebSocket(url, ['qits.bearer', token]);   // other subprotocols may follow, e.g. [..., 'tty']
+```
+
+- **The contract.** The offer names `qits.bearer`, and the entry immediately after it is the token —
+  a JWT or a `qits_tok_` value. Both are RFC 7230 `token`s (base64url plus dots, no comma or space),
+  so the browser accepts them as subprotocol names. The URL never carries it.
+- **Loopback pages only.** The handshake's `Origin` must be what `EdgeCors.isLoopback` admits —
+  exactly `http://localhost[:port]` or `http://127.0.0.1[:port]`. Any other page offering
+  `qits.bearer`, a page under the platform domain included, and a handshake with no `Origin`, is
+  answered `403` with a valid token or without one: a page under the domain uses its cookie.
+- **Judged like any bearer.** The token is moved out of the offer into `Authorization: Bearer`, and
+  from there it is the ordinary machine path — the same check, the same audience, an opaque token
+  forwarded as its JWT, the session cookie stripped and no identity asserted. It is checked even on a
+  name whose reads are open. A marker with nothing after it, or a token that fails, is a `401`
+  before any upstream connection is taken.
+- **Neither the marker nor the token goes upstream.** The service sees `Authorization: Bearer
+  <jwt>` and an offer holding only the other subprotocols (no `Sec-WebSocket-Protocol` at all when
+  there were none). The browser is answered `Sec-WebSocket-Protocol: qits.bearer` — or the upstream's
+  own selection when it picked one of the other offered values. A browser fails a handshake whose
+  answer selects nothing after it offered something, so the edge never leaves it empty.
+- **No log line carries it.** The edge logs no request header anywhere, and after the gate the
+  offer no longer holds the token at all. `EdgeSessionGateTest` asserts both halves from a handler on
+  the root logger.
+
 ### The one known gap: `Host` on a WebSocket handshake
 
 The upgrade path rebuilds the handshake with the client's own `Host` dropped — deliberately kept
