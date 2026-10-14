@@ -27,7 +27,7 @@
         <google-java-format.version>1.28.0</google-java-format.version>
         <qits.eventstream.version>2026.825.74539</qits.eventstream.version>
         <!-- qits-http-core: only its @RawHttpClient, on the acme module's two clients to external hosts. -->
-        <qits.http-core.version>2026.1011.185745</qits.http-core.version>
+        <qits.http-core.version>2026.1013.64811</qits.http-core.version>
         <qits.maven.repository.url>https://registry.qits.wohlben.eu/artifacts/maven/maven</qits.maven.repository.url>
         <zonky.embedded-postgres.version>2.2.2</zonky.embedded-postgres.version>
         <zonky.postgres-binaries.version>18.6.0</zonky.postgres-binaries.version>

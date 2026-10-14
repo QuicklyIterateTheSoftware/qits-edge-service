@@ -64,7 +64,7 @@
         <!-- qits-idp's recorded answers (golden-masters/), test scope: consumer/IdpContract builds
              the edge's pact against qits-idp from them (ticket qits-1149). Moves like every
              internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
-        <qits.idp-golden-masters.version>2026.1010.134259</qits.idp-golden-masters.version>
+        <qits.idp-golden-masters.version>2026.1012.180836</qits.idp-golden-masters.version>
         <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
         <qits.pact-consumer.version>2026.1010.141817</qits.pact-consumer.version>
 
