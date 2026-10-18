@@ -25,7 +25,7 @@
         <surefire-plugin.version>3.5.4</surefire-plugin.version>
         <spotless-plugin.version>2.44.5</spotless-plugin.version>
         <google-java-format.version>1.28.0</google-java-format.version>
-        <qits.eventstream.version>2026.825.74539</qits.eventstream.version>
+        <qits.eventstream.version>2026.1018.151251</qits.eventstream.version>
         <!-- qits-http-core: only its @RawHttpClient, on the acme module's two clients to external hosts. -->
         <qits.http-core.version>2026.1013.64811</qits.http-core.version>
         <qits.maven.repository.url>https://registry.qits.wohlben.eu/artifacts/maven/maven</qits.maven.repository.url>
