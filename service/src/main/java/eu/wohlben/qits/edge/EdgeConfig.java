@@ -104,6 +104,19 @@ public interface EdgeConfig {
     }
   }
 
+  /** What the process does once the HTTP drain is over (qits-1170). */
+  Shutdown shutdown();
+
+  interface Shutdown {
+
+    /**
+     * How long {@link ShutdownLinger} keeps the process alive after the drain, so the kernel can
+     * send what the last responses queued. Zero exits at once.
+     */
+    @WithDefault("PT10S")
+    Duration linger();
+  }
+
   /** One platform app label's overrides. */
   interface App {
 
