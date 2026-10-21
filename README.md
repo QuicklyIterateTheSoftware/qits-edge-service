@@ -419,6 +419,14 @@ ingress balancer, so nothing new reaches it. What happens to the old task after 
   and closes every stream-pool connection — proxied SSE and spliced WebSockets — then sweeps again
   each second. Their clients reconnect, to the new task. Without this the drain could never end
   early: those streams never finish by themselves.
+- **Every exchange that ends is uncounted** (`DrainCount`). Quarkus' drain counts a request finished
+  only when its response's end, close or exception handler runs, and two endings run none: a
+  response the proxy resets because its upstream broke mid-body (HTTP/1.1 marks it closed before
+  the connection goes, so the close finds nothing to tell), and a WebSocket spliced with
+  `toNetSocket()`. Each used to stay counted until the process exited, so after a day of uptime the
+  drain always ran to its timeout — the live redeploy of 2026-10-21 closed its 13 streams and still
+  waited the full 9m30s. `DrainCount` settles both: as a proxy interceptor when a response send
+  fails, and from the splice when the inbound socket closes.
 - **Transfers finish.** Ordinary requests drain for up to `quarkus.shutdown.timeout=9m30s`, inside
   the `stop_grace_period: 10m` that `.config/qits/deployments.yml` hands the deployer. Keep the two
   in step: a timeout at or over the grace is SIGKILL mid-transfer.

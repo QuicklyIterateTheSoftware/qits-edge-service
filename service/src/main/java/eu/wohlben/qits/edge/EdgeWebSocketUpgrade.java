@@ -179,25 +179,37 @@ final class EdgeWebSocketUpgrade {
           .onFailure(
               failure -> {
                 close(handshake);
+                DrainCount.settle(request);
                 LOG.errorf(
                     failure,
                     "could not take over the client connection for a socket to %s",
                     upstream);
               })
-          .onSuccess(inbound -> splice(inbound, response.netSocket()));
+          .onSuccess(inbound -> splice(request, inbound, response.netSocket()));
     } catch (RuntimeException failure) {
       close(handshake);
       throw failure;
     }
   }
 
-  /** Both directions, and a close on either side closes the other. */
-  private static void splice(NetSocket inbound, NetSocket outbound) {
+  /**
+   * Both directions, and a close on either side closes the other.
+   *
+   * <p>The inbound close is also where the handshake's exchange ends for Quarkus' HTTP drain: past
+   * {@code toNetSocket()} no response handler of it ever runs again, so without {@link
+   * DrainCount#settle} every socket ever spliced stays counted in flight until the process exits —
+   * and a redeploy waits out its whole shutdown timeout for them (qits-1170).
+   */
+  private static void splice(HttpServerRequest request, NetSocket inbound, NetSocket outbound) {
     inbound.handler(outbound::write);
     outbound.handler(inbound::write);
     inbound.exceptionHandler(failure -> outbound.close());
     outbound.exceptionHandler(failure -> inbound.close());
-    inbound.closeHandler(v -> outbound.close());
+    inbound.closeHandler(
+        v -> {
+          outbound.close();
+          DrainCount.settle(request);
+        });
     outbound.closeHandler(v -> inbound.close());
   }
 

@@ -361,14 +361,33 @@ public class EdgeRouter {
   }
 
   private HttpProxy reverseProxy(Upstream upstream, Pool pool) {
-    return HttpProxy.reverseProxy(pool.client())
-        .origin(origin(upstream, pool, pool.client()))
+    return reverseProxy(
+        pool.client(),
+        upstream,
+        origin(upstream, pool, pool.client()),
+        origin(upstream, pool, pool.fresh()));
+  }
+
+  /**
+   * One upstream's proxy and its interceptor chain, given where its connections come from: {@code
+   * origin} for every request, {@code fresh} for {@link UpstreamRetry}'s second attempt. Static so
+   * a test proxies through exactly the chain the edge does.
+   */
+  static HttpProxy reverseProxy(
+      HttpClient client,
+      Upstream upstream,
+      OriginRequestProvider origin,
+      OriginRequestProvider fresh) {
+    return HttpProxy.reverseProxy(client)
+        .origin(origin)
+        // First, so its response hook sits directly on the send it watches — see DrainCount.
+        .addInterceptor(new DrainCount())
         .addInterceptor(new EdgeHeaders())
         .addInterceptor(new EdgeCacheControl())
         .addInterceptor(new EdgeHopByHop())
         .addInterceptor(new EdgeRequestFraming())
         // Last, so the request it may send a second time carries everything the others wrote.
-        .addInterceptor(new UpstreamRetry(upstream, origin(upstream, pool, pool.fresh())));
+        .addInterceptor(new UpstreamRetry(upstream, fresh));
   }
 
   /**
@@ -431,6 +450,10 @@ public class EdgeRouter {
    *
    * <p>A stream can still open after this — a client that had a keep-alive connection to this task
    * — so the sweep repeats every {@link #DRAIN_SWEEP_MS} until the process is gone.
+   *
+   * <p>Closing a stream ends it for its client, but on its own it does not end it for the drain: a
+   * reset proxied response and a spliced socket both finish without the handler Quarkus counts by.
+   * {@link DrainCount} is what takes them off the count.
    */
   void draining(@Observes ShutdownDelayInitiatedEvent event) {
     if (stream == null) {
