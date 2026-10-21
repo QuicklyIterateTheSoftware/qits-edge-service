@@ -64,7 +64,7 @@
         <!-- qits-idp's recorded answers (golden-masters/), test scope: consumer/IdpContract builds
              the edge's pact against qits-idp from them (ticket qits-1149). Moves like every
              internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
-        <qits.idp-golden-masters.version>2026.1019.100619</qits.idp-golden-masters.version>
+        <qits.idp-golden-masters.version>2026.1021.194347</qits.idp-golden-masters.version>
         <!-- THE CONSUMER PACTS ConsumerPactVerificationTest verifies (ticket qits-1284): fourteen
              frontends, each through @qits/ui-components' main-navigation call, each publishing
              eu.wohlben.qits:qits-<frontend>-pacts-qits-edge-service carrying
