@@ -407,6 +407,26 @@ further in — but if that ever changes, this is where to look.
 `Host` is not — so it stays a known gap rather than quietly becoming a surprise. A story that
 pinned only the half that works is how it would stop being documented.
 
+## Redeploys — what a replaced edge finishes
+
+Every download on the platform passes through this process, so a redeploy of it is a redeploy of
+every transfer in flight (qits-1170). The update is start-first: the successor passes
+`/q/health/ready`, and only then does swarm send the predecessor SIGTERM and take it out of the
+ingress balancer, so nothing new reaches it. What happens to the old task after that:
+
+- **Streams end at once.** `EdgeRouter.draining` runs in Quarkus' pre-shutdown pass
+  (`ShutdownDelayInitiatedEvent`, enabled by `quarkus.shutdown.delay-enabled=true` with no delay)
+  and closes every stream-pool connection — proxied SSE and spliced WebSockets — then sweeps again
+  each second. Their clients reconnect, to the new task. Without this the drain could never end
+  early: those streams never finish by themselves.
+- **Transfers finish.** Ordinary requests drain for up to `quarkus.shutdown.timeout=9m30s`, inside
+  the `stop_grace_period: 10m` that `.config/qits/deployments.yml` hands the deployer. Keep the two
+  in step: a timeout at or over the grace is SIGKILL mid-transfer.
+- **An upstream being replaced is retried once.** A bodyless GET or HEAD whose upstream connection
+  broke before any response head — a pooled connection the draining upstream closed, a refused or
+  timed-out connect — is sent once more on a fresh connection (`UpstreamRetry`), then answered 502
+  as before. Never a request with a body, never a response that has started.
+
 ## Configuration
 
 Every key is overridable by environment variable, so a deployment declares the whole surface without
