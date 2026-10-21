@@ -92,8 +92,10 @@ public class UpstreamOutageIT {
       A person reloads a page while her service is being replaced. The request reaches the
       container — its own recording proves that, and the recording is written before the connection
       goes away, because a recording written afterwards would miss exactly this exchange — and then
-      there is nothing on the wire. She is answered anyway: a 502, promptly, which her browser can
-      show and her SPA can retry.
+      there is nothing on the wire. The edge asks once more, on a fresh connection, because a GET
+      that never got an answer is safe to send twice and a replaced container's successor is
+      usually already up behind the same name. Here the stand-in drops that one too, so she is
+      answered anyway: a 502, promptly, which her browser can show and her SPA can retry.
 
       A moment later the container is back, and the same name with the same cookie serves the same
       path. That beat is what gives the other two their meaning: a door that answered 502 to
@@ -157,9 +159,10 @@ public class UpstreamOutageIT {
     story
         .note(
             "the request reached the container and the connection went away with no status on the"
-                + " wire — and she is answered a 502 anyway. Both ends of that are on the diagram:"
-                + " one arrow in, one arrow out labelled `dropped`, and no status where a status"
-                + " would be")
+                + " wire, twice, because the edge retries a bodyless GET once on a fresh"
+                + " connection — and she is answered a 502 anyway. Both ends of that are on the"
+                + " diagram: one arrow in, the arrows out labelled `dropped`, and no status where a"
+                + " status would be")
         .as("a-service-that-goes-away-mid-request-is-still-answered");
 
     // --- (2) it comes back. The beat that makes the other two mean something.
@@ -173,9 +176,11 @@ public class UpstreamOutageIT {
     assertEquals(200, afterwards.status(), "the outage must cost the route nothing");
     assertTrue(afterwards.body().contains(StoryTarget.PROJECTS), afterwards.body());
     assertEquals(
-        2,
+        3,
         projects.requestsTo(StoryTarget.OUTAGE_PATH),
-        "the same path, twice: once into the dark and once into a service that was back");
+        "the same path, three times: into the dark, once more on a fresh connection (qits-1170:"
+            + " a bodyless GET that died before its answer is retried once, see UpstreamRetry),"
+            + " and once into a service that was back");
     story
         .note(
             "the same name, the same cookie and the same path a moment later: 200. A front door"
