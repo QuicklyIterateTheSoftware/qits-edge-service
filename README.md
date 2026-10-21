@@ -422,6 +422,10 @@ ingress balancer, so nothing new reaches it. What happens to the old task after 
 - **Transfers finish.** Ordinary requests drain for up to `quarkus.shutdown.timeout=9m30s`, inside
   the `stop_grace_period: 10m` that `.config/qits/deployments.yml` hands the deployer. Keep the two
   in step: a timeout at or over the grace is SIGKILL mid-transfer.
+- **Then it lingers.** After the drain the process waits `qits.edge.shutdown.linger=10s` before
+  exiting (`ShutdownLinger`): a response Quarkus calls complete may still sit in the kernel's send
+  buffer, and exiting at once lets swarm tear down the network namespace under it — a 201 MB jar
+  lost its last 639 KB that way. The budget is 9m30s + 10s, still under the 10m grace.
 - **An upstream being replaced is retried once.** A bodyless GET or HEAD whose upstream connection
   broke before any response head — a pooled connection the draining upstream closed, a refused or
   timed-out connect — is sent once more on a fresh connection (`UpstreamRetry`), then answered 502
@@ -440,6 +444,7 @@ a file.
 | `qits.edge.apps.<app>.hosts.<env>` | `QITS_EDGE_APPS_<APP>_HOSTS_<ENV>` | — | A local process's or a suite's override of one **platform** label in one environment, `host` or `host:port`. It cannot add a label; a live deployment sets none |
 | `qits.edge.projection.catchup.required` | `QITS_EDGE_PROJECTION_CATCHUP_REQUIRED` | `true` | Requires a complete deployment-history rebuild before the edge is ready; turn off only in an intentionally offline test/dev setup |
 | `qits.edge.projection.catchup.retry` | `QITS_EDGE_PROJECTION_CATCHUP_RETRY` | `PT1S` | Delay before retrying an incomplete, failed, or unavailable deployment-history read |
+| `qits.edge.shutdown.linger` | `QITS_EDGE_SHUTDOWN_LINGER` | `10s` | How long the process stays alive after the HTTP drain so the kernel can send what the last responses queued; with `quarkus.shutdown.timeout` it must stay under the 10m stop grace (qits-1170) |
 | `qits.edge.idp.dial-url` | `QITS_RESOURCE_IDP_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-idp:8080/idp` | The address the edge dials. `/jwks`, `/token` and the two introspection paths are derived from it, never configured. It is never the issuer: the accepted `iss` is `https://idp.qits.<qits.edge.domain>` alone, derived in code and not configurable (qits-730). `QITS_IDP_DIAL_URL` is not read any more (qits-540) |
 | `qits.edge.auth.enforce-on-apps` | `QITS_EDGE_AUTH_ENFORCE_ON_APPS` | `true` | Service vhosts require a valid idp token |
 | `qits.edge.auth.anonymous-read-apps` | `QITS_EDGE_AUTH_ANONYMOUS_READ_APPS` | — | App labels whose `GET` and `HEAD` are open; every other method on them still needs a token |
