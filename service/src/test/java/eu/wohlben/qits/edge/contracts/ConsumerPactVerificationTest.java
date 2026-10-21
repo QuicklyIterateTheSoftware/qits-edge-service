@@ -8,7 +8,6 @@ import au.com.dius.pact.core.model.ProviderState;
 import au.com.dius.pact.provider.junit5.HttpTestTarget;
 import au.com.dius.pact.provider.junit5.PactVerificationContext;
 import au.com.dius.pact.provider.junit5.PactVerificationInvocationContextProvider;
-import au.com.dius.pact.provider.junitsupport.IgnoreNoPactsToVerify;
 import au.com.dius.pact.provider.junitsupport.Provider;
 import au.com.dius.pact.provider.junitsupport.State;
 import au.com.dius.pact.provider.junitsupport.loader.PactSource;
@@ -35,9 +34,17 @@ import org.junit.jupiter.api.extension.ExtendWith;
  * that jar as a test dependency, and qits-maintenance bumps the pin when the consumer releases a
  * changed pact. {@link ClasspathPactLoader} finds them all.
  *
- * <p><b>No consumer pins a pact yet</b>, so {@code @IgnoreNoPactsToVerify} lets an empty classpath
- * pass and the loader logs that nothing was verified. When the first consumer's pact jar is pinned,
- * drop the annotation and set {@link ClasspathPactLoader#REQUIRED} to true.
+ * <p><b>Fourteen consumers pin a pact</b> (qits-1284), every one of them a frontend asking through
+ * {@code @qits/ui-components}' main navigation: qits-ci-frontend, qits-projects-frontend,
+ * qits-docs-frontend, qits-events-frontend, qits-githost-frontend, qits-maintenance-frontend,
+ * qits-artifacts-frontend, qits-configuration-frontend, qits-deployments-frontend,
+ * qits-mirror-frontend, qits-observability-frontend, qits-orchestrator-frontend,
+ * qits-system-frontend and qits-idp-frontend (each {@code
+ * eu.wohlben.qits:<consumer>-pacts-qits-edge-service}, holding {@code
+ * pacts/<consumer>_qits-ui-components-jslib_qits-edge-service.json}), all test-scoped in {@code
+ * service/pom.xml}. Each asks {@code getMainNavigation} in the state {@code a published
+ * navigation}, the one the golden master is recorded in. {@link ClasspathPactLoader#REQUIRED} is
+ * true, so a classpath that lost them fails rather than verifying nothing.
  *
  * <p><b>The edge routes on {@code Host}</b>, which a consumer's pact does not carry: the consumer
  * asks its own origin. So each request gets the {@code Host} its provider state names, and {@code
@@ -56,7 +63,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 @WithTestResource(StubGateways.class)
 @Provider(ConsumerPactVerificationTest.PROVIDER)
 @PactSource(ClasspathPactLoader.class)
-@IgnoreNoPactsToVerify
 class ConsumerPactVerificationTest {
 
   /** The provider's name in a pact: the repository name, not the application name. */
@@ -74,9 +80,6 @@ class ConsumerPactVerificationTest {
 
   @BeforeEach
   void target(PactVerificationContext context, Pact pact, Interaction interaction) {
-    if (context == null) {
-      return; // no pact to verify: @IgnoreNoPactsToVerify's single empty run
-    }
     String consumer = pact.getConsumer().getName();
     for (ProviderState state : interaction.getProviderStates()) {
       if (!states.names().contains(state.getName())) {

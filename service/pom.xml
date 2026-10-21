@@ -65,6 +65,26 @@
              the edge's pact against qits-idp from them (ticket qits-1149). Moves like every
              internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
         <qits.idp-golden-masters.version>2026.1019.100619</qits.idp-golden-masters.version>
+        <!-- THE CONSUMER PACTS ConsumerPactVerificationTest verifies (ticket qits-1284): fourteen
+             frontends, each through @qits/ui-components' main-navigation call, each publishing
+             eu.wohlben.qits:qits-<frontend>-pacts-qits-edge-service carrying
+             `pacts/qits-<frontend>_qits-ui-components-jslib_qits-edge-service.json`. Test scope at
+             the declaration site; a pin in <properties> like every other qits jar, so
+             qits-maintenance bumps it when the consumer releases a changed pact. -->
+        <qits.ci-frontend-pacts-qits-edge-service.version>2026.1021.191659</qits.ci-frontend-pacts-qits-edge-service.version>
+        <qits.projects-frontend-pacts-qits-edge-service.version>2026.1021.193038</qits.projects-frontend-pacts-qits-edge-service.version>
+        <qits.docs-frontend-pacts-qits-edge-service.version>2026.1021.193215</qits.docs-frontend-pacts-qits-edge-service.version>
+        <qits.events-frontend-pacts-qits-edge-service.version>2026.1021.193347</qits.events-frontend-pacts-qits-edge-service.version>
+        <qits.githost-frontend-pacts-qits-edge-service.version>2026.1021.193358</qits.githost-frontend-pacts-qits-edge-service.version>
+        <qits.maintenance-frontend-pacts-qits-edge-service.version>2026.1021.193655</qits.maintenance-frontend-pacts-qits-edge-service.version>
+        <qits.artifacts-frontend-pacts-qits-edge-service.version>2026.1021.193823</qits.artifacts-frontend-pacts-qits-edge-service.version>
+        <qits.configuration-frontend-pacts-qits-edge-service.version>2026.1021.193835</qits.configuration-frontend-pacts-qits-edge-service.version>
+        <qits.deployments-frontend-pacts-qits-edge-service.version>2026.1021.193850</qits.deployments-frontend-pacts-qits-edge-service.version>
+        <qits.mirror-frontend-pacts-qits-edge-service.version>2026.1021.194056</qits.mirror-frontend-pacts-qits-edge-service.version>
+        <qits.observability-frontend-pacts-qits-edge-service.version>2026.1021.194102</qits.observability-frontend-pacts-qits-edge-service.version>
+        <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1021.194108</qits.orchestrator-frontend-pacts-qits-edge-service.version>
+        <qits.system-frontend-pacts-qits-edge-service.version>2026.1021.194304</qits.system-frontend-pacts-qits-edge-service.version>
+        <qits.idp-frontend-pacts-qits-edge-service.version>2026.1021.193643</qits.idp-frontend-pacts-qits-edge-service.version>
         <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
         <qits.pact-consumer.version>2026.1019.82625</qits.pact-consumer.version>
 
@@ -300,6 +320,94 @@
             <groupId>eu.wohlben.qits</groupId>
             <artifactId>qits-eventstream-contracts</artifactId>
             <version>${qits.eventstream.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- The consumer pacts ConsumerPactVerificationTest verifies: each jar carries one
+                 `pacts/<consumer>_qits-ui-components-jslib_qits-edge-service.json`, and the test
+                 reads them off the classpath. The pinned jar IS the source of the pact; nothing is
+                 copied into this tree. -->
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-ci-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.ci-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-projects-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.projects-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-docs-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.docs-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-events-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.events-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-githost-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.githost-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-maintenance-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.maintenance-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-artifacts-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.artifacts-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-configuration-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.configuration-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-deployments-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.deployments-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-mirror-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.mirror-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-observability-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.observability-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-orchestrator-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.orchestrator-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-system-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.system-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-idp-frontend-pacts-qits-edge-service</artifactId>
+            <version>${qits.idp-frontend-pacts-qits-edge-service.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
