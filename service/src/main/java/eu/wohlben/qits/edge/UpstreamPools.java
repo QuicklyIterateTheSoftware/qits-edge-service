@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
@@ -136,6 +137,13 @@ final class UpstreamPools {
 
   /** One entry per leased connection, keyed by {@link #key} — see the class comment. */
   private final Map<Object, Held> held = new ConcurrentHashMap<>();
+
+  /**
+   * Every connection this pool holds open, idle or leased, until its channel closes: what {@link
+   * #closeAll} closes. Only the edge's own close handler removes an entry, so a connection is here
+   * exactly as long as it is counted in {@code open}.
+   */
+  private final Set<HttpConnection> connections = ConcurrentHashMap.newKeySet();
 
   /** When the previous {@link #check} ran; only {@code check} touches it. */
   private long lastCheckNanos;
@@ -297,6 +305,7 @@ final class UpstreamPools {
       return;
     }
     opened(origin);
+    connections.add(connection);
     try {
       // The channel, not the connection — see the class comment. A listener added to a future
       // already done runs at once, so a socket that closed in between is still uncounted.
@@ -306,6 +315,7 @@ final class UpstreamPools {
               closed -> {
                 closed(origin);
                 held.remove(key);
+                connections.remove(connection);
               });
     } catch (RuntimeException unreachable) {
       // The internal cast no longer holds (UpstreamKeepAlive has said so, once). The connection's
@@ -315,8 +325,39 @@ final class UpstreamPools {
           closed -> {
             closed(origin);
             held.remove(connection);
+            connections.remove(connection);
           });
     }
+  }
+
+  /**
+   * Close every connection this pool holds open, idle or carrying an exchange — the edge's drain
+   * for the {@link #STREAM} pool, see {@link EdgeRouter#draining}. A proxied SSE response whose
+   * upstream closes mid-body is reset toward its client, and a spliced WebSocket closes its other
+   * half, so each stream ends at once and its client reconnects — to the new task, because swarm
+   * took this one out of the ingress balancer when it sent the SIGTERM.
+   *
+   * <p>The channel is closed rather than the {@link HttpConnection}: a tunnel's connection has
+   * handed its channel to a socket, and the channel is the one thing that closes in every state.
+   * Never throws, one connection's failure is not every other's.
+   *
+   * @return how many connections were asked to close
+   */
+  int closeAll() {
+    int closing = 0;
+    for (HttpConnection connection : connections) {
+      try {
+        try {
+          UpstreamChannel.of(connection).close();
+        } catch (ClassCastException unreachable) {
+          connection.close();
+        }
+        closing++;
+      } catch (RuntimeException failure) {
+        LOG.errorf(failure, "could not close a %s connection to %s", pool, connection);
+      }
+    }
+    return closing;
   }
 
   /**

@@ -1,6 +1,7 @@
 package eu.wohlben.qits.edge;
 
 import io.opentelemetry.api.trace.Span;
+import io.quarkus.runtime.ShutdownDelayInitiatedEvent;
 import io.quarkus.vertx.http.runtime.RouteConstants;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -159,8 +160,12 @@ public class EdgeRouter {
    * to qits-projects held every slot of it and each ordinary request to qits-projects queued for
    * its thirty seconds and failed. A stream now competes only with other streams, and an exhausted
    * stream pool refuses the next stream rather than the next page load.
+   *
+   * @param fresh the same options with keep-alive off, counted into the same {@code pools}: where
+   *     {@link UpstreamRetry}'s second attempt dials, because a connection from {@code client}
+   *     could be the next stale one to the same drained task (qits-1170)
    */
-  private record Pool(HttpClient client, UpstreamPools pools) {}
+  private record Pool(HttpClient client, HttpClient fresh, UpstreamPools pools) {}
 
   /**
    * The two proxies for one upstream, one per {@link Pool}. Built together so a request can be
@@ -341,7 +346,10 @@ public class EdgeRouter {
     UpstreamPools pools =
         new UpstreamPools(
             name, options.getMaxPoolSize(), upstream -> owner(upstream).describe(upstream));
-    return new Pool(proxyClient(vertx, options, pools::connected), pools);
+    return new Pool(
+        proxyClient(vertx, options, pools::connected),
+        proxyClient(vertx, proxyClientOptions(5_000).setKeepAlive(false), pools::connected),
+        pools);
   }
 
   private void registerApp(String key, Upstream upstream) {
@@ -354,11 +362,13 @@ public class EdgeRouter {
 
   private HttpProxy reverseProxy(Upstream upstream, Pool pool) {
     return HttpProxy.reverseProxy(pool.client())
-        .origin(origin(upstream, pool))
+        .origin(origin(upstream, pool, pool.client()))
         .addInterceptor(new EdgeHeaders())
         .addInterceptor(new EdgeCacheControl())
         .addInterceptor(new EdgeHopByHop())
-        .addInterceptor(new EdgeRequestFraming());
+        .addInterceptor(new EdgeRequestFraming())
+        // Last, so the request it may send a second time carries everything the others wrote.
+        .addInterceptor(new UpstreamRetry(upstream, origin(upstream, pool, pool.fresh())));
   }
 
   /**
@@ -372,11 +382,11 @@ public class EdgeRouter {
    * grant listener is registered before the future is handed back, so it runs before the proxy's
    * own and the lease exists before a byte is sent.
    */
-  private OriginRequestProvider origin(Upstream upstream, Pool pool) {
+  private OriginRequestProvider origin(Upstream upstream, Pool pool, HttpClient client) {
     return context -> {
       UpstreamLease lease = UpstreamLease.of(context.request().proxiedRequest());
       long since = pool.pools().acquiring();
-      return pool.client()
+      return client
           .request(originRequestOptions(upstream))
           .onSuccess(request -> pool.pools().granted(upstream, since, request, lease, false))
           .onFailure(
@@ -392,6 +402,52 @@ public class EdgeRouter {
   /** Both proxy clients' per-origin counts and leases, for {@code /upstream-pools}. */
   List<UpstreamPools> pools() {
     return List.of(ordinary.pools(), stream.pools());
+  }
+
+  /** How often a draining edge closes the streams that opened since it last looked. */
+  static final long DRAIN_SWEEP_MS = 1_000;
+
+  /**
+   * <b>Graceful shutdown has begun: end every long-lived stream now</b>, so the drain waits only
+   * for the ordinary transfers it exists for (qits-1170).
+   *
+   * <p>On SIGTERM Quarkus stops admitting work and waits up to {@code quarkus.shutdown.timeout} for
+   * every in-flight request to end. An SSE channel or a terminal socket never ends by itself, and
+   * the edge always holds dozens, so before this every drain ran to its timeout and cut whatever
+   * was still moving with it — a 201 MB jar, a docker layer. Closing the {@link
+   * UpstreamPools#STREAM stream} pool's connections ends each of them at once (see {@link
+   * UpstreamPools#closeAll}); the clients reconnect, and swarm, which took this task out of the
+   * ingress balancer at the SIGTERM, sends them to the new one. The edge serves no stream of its
+   * own: every one it holds is proxied, and every proxied one — an SSE GET and a WebSocket alike,
+   * see {@link #isStream} — is in that pool.
+   *
+   * <p><b>Why this event and not {@code ShutdownEvent}.</b> Quarkus runs its shutdown listeners in
+   * two passes: every {@code preShutdown} first — the HTTP layer's stops admitting, and ArC's fires
+   * {@link ShutdownDelayInitiatedEvent} — then every {@code shutdown}, which is where the HTTP
+   * drain waits. {@code ShutdownEvent} comes after both, which is to say after the drain this
+   * exists to shorten. ArC registers its listener only with {@code
+   * quarkus.shutdown.delay-enabled=true}, a build-time key set in application.properties for that
+   * reason; no {@code quarkus.shutdown.delay} is configured, so nothing actually waits.
+   *
+   * <p>A stream can still open after this — a client that had a keep-alive connection to this task
+   * — so the sweep repeats every {@link #DRAIN_SWEEP_MS} until the process is gone.
+   */
+  void draining(@Observes ShutdownDelayInitiatedEvent event) {
+    if (stream == null) {
+      return;
+    }
+    LOG.infof(
+        "shutting down: closed %d stream connection(s) so the drain waits only for ordinary"
+            + " transfers",
+        stream.pools().closeAll());
+    vertx.setPeriodic(
+        DRAIN_SWEEP_MS,
+        ignored -> {
+          int closed = stream.pools().closeAll();
+          if (closed > 0) {
+            LOG.infof("shutting down: closed %d stream connection(s) opened since", closed);
+          }
+        });
   }
 
   /**

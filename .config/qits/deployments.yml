@@ -87,3 +87,14 @@ health_path: /q/health/ready
 # What ingress does NOT change is exposure: swarm's publish syntax has no host-IP field in either
 # mode, so this still binds 0.0.0.0. Scoping is a host firewall's job, not this file's.
 publish_mode: ingress
+
+# TEN MINUTES BETWEEN SIGTERM AND SIGKILL, where the deployer's default is thirty seconds (qits-1170).
+# The old task has to be allowed to finish what it is carrying: a CI download of a 201 MB jar or a
+# docker layer through this edge used to be cut by the redeploy that replaced it. Swarm takes the
+# task out of the ingress balancer at SIGTERM, so it receives no new connections while it drains —
+# the grace only lets the transfers already in flight complete. It does not hold the edge up for ten
+# minutes: on SIGTERM the edge closes its SSE and WebSocket streams at once (their clients reconnect
+# to the new task) and exits as soon as the ordinary transfers end. Its own drain bound,
+# `quarkus.shutdown.timeout` in application.properties, is 9m30s — just under this, so the process
+# always exits on its own before swarm would kill it. Change the two together.
+stop_grace_period: 10m
