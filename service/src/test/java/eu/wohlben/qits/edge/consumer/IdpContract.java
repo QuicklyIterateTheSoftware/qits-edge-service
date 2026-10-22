@@ -26,6 +26,10 @@ import java.util.List;
  * </ul>
  *
  * <p>Every row reads a status first: anything but 200 is a refusal, and its body is not read.
+ *
+ * <p><b>The one refusal pinned here</b> (ticket qits-950, part B2): a commissioned token that was
+ * deleted answers {@code introspectToken} with a 404, both on the vhost door and the docker realm.
+ * idp's verification of this pact then forbids ever answering a deleted token with 200.
  */
 final class IdpContract {
 
@@ -37,6 +41,8 @@ final class IdpContract {
   static final String A_SERVICE_CLIENT = "a service client with the system role";
   static final String A_SIGNED_IN_PERSON = "a signed-in person";
   static final String A_COMMISSIONED_TOKEN = "a commissioned token";
+  static final String A_COMMISSIONED_TOKEN_THAT_WAS_DELETED =
+      "a commissioned token that was deleted";
 
   /** The edge fetches keys lazily: the first token it checks makes both calls. */
   private static final Trigger FIRST_AUTHENTICATED_REQUEST =
@@ -79,6 +85,26 @@ final class IdpContract {
           .header("Authorization", "{authorization}")
           .consumes("accessToken", "expiresIn");
 
+  /**
+   * The refusal (qits-950, part B2): a token that WAS commissioned and then deleted answers 404,
+   * {@code {"error":"not_found","error_description":"no live token for that value"}} — and the edge
+   * reads only the status on a refusal (see the class note above), so neither row consumes a body
+   * field.
+   */
+  static final GoldenInteraction TOKEN_REFUSED_FOR_VHOST =
+      GoldenInteraction.of(
+              Trigger.operation("EdgeAuth.checkToken"),
+              A_COMMISSIONED_TOKEN_THAT_WAS_DELETED,
+              "introspectToken")
+          .header("Authorization", "{authorization}");
+
+  static final GoldenInteraction TOKEN_REFUSED_FOR_REALM =
+      GoldenInteraction.of(
+              Trigger.operation("EdgeAuth.token"),
+              A_COMMISSIONED_TOKEN_THAT_WAS_DELETED,
+              "introspectToken")
+          .header("Authorization", "{authorization}");
+
   static final ConsumerPact PACT =
       ConsumerPact.of(
           CONSUMER,
@@ -89,7 +115,9 @@ final class IdpContract {
           GRANT_FOR_REALM,
           SESSION,
           TOKEN_FOR_VHOST,
-          TOKEN_FOR_REALM);
+          TOKEN_FOR_REALM,
+          TOKEN_REFUSED_FOR_VHOST,
+          TOKEN_REFUSED_FOR_REALM);
 
   private IdpContract() {}
 

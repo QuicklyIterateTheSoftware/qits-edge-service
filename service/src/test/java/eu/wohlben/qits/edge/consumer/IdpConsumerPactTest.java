@@ -88,6 +88,29 @@ class IdpConsumerPactTest {
     run(IdpContract.TOKEN_FOR_REALM, IdpConsumerPactTest::readsTheToken);
   }
 
+  /**
+   * The refusal (ticket qits-950, part B2): idp's 404 for a deleted token is not merely read by the
+   * client — it is what makes the edge's own real credential check refuse the caller, with a 401 of
+   * its own. {@link IdpProbe#vhostStatusForToken} drives {@code EdgeAuth.checkCredential} and
+   * {@code EdgeAuth.challenge} exactly as {@code EdgeRouter} does.
+   */
+  @Test
+  void aDeletedTokenOnAVhostIsRefusedWith401() {
+    run(
+        IdpContract.TOKEN_REFUSED_FOR_VHOST,
+        (probe, recorded, params) ->
+            assertEquals(401, probe.vhostStatusForToken(params.get("token"))));
+  }
+
+  /** The same refusal, on the docker realm's {@code EdgeAuth.token} — its own existing 401. */
+  @Test
+  void theRegistryRealmRefusesADeletedTokenWith401() {
+    run(
+        IdpContract.TOKEN_REFUSED_FOR_REALM,
+        (probe, recorded, params) ->
+            assertEquals(401, probe.realmStatusForToken(params.get("token"))));
+  }
+
   @Test
   void theCommittedPactIsWhatTheRowsWrite() throws Exception {
     IdpContract.PACT.assertEveryInteractionCarriesBothReferences();

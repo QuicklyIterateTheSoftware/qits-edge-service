@@ -231,6 +231,86 @@
           "qits-trigger": {
             "app": "qits-edge-service",
             "kind": "operation",
+            "operationId": "EdgeAuth.checkToken"
+          }
+        }
+      },
+      "description": "EdgeAuth.checkToken: introspectToken",
+      "key": "23e9c513",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a commissioned token that was deleted",
+          "params": {
+            "authorization": "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA==",
+            "callerClientId": "test-broad",
+            "token": "qits_tok_0000000000000000000000000000000000000000001",
+            "tokenId": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "token": "qits_tok_0000000000000000000000000000000000000000001"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.token": {
+              "dataType": "STRING",
+              "expression": "${token}",
+              "type": "ProviderState"
+            }
+          },
+          "header": {
+            "Authorization": {
+              "dataType": "RAW",
+              "expression": "${authorization}",
+              "type": "ProviderState"
+            }
+          }
+        },
+        "headers": {
+          "Authorization": [
+            "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA=="
+          ],
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.token": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/idp/api/tokens/introspect"
+      },
+      "response": {
+        "status": 404
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-idp-service",
+            "operationId": "introspectToken"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "operation",
             "operationId": "EdgeAuth.token"
           }
         }
@@ -342,6 +422,86 @@
           }
         },
         "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-idp-service",
+            "operationId": "introspectToken"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "operation",
+            "operationId": "EdgeAuth.token"
+          }
+        }
+      },
+      "description": "EdgeAuth.token: introspectToken",
+      "key": "6d923081",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a commissioned token that was deleted",
+          "params": {
+            "authorization": "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA==",
+            "callerClientId": "test-broad",
+            "token": "qits_tok_0000000000000000000000000000000000000000001",
+            "tokenId": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "token": "qits_tok_0000000000000000000000000000000000000000001"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "body": {
+            "$.token": {
+              "dataType": "STRING",
+              "expression": "${token}",
+              "type": "ProviderState"
+            }
+          },
+          "header": {
+            "Authorization": {
+              "dataType": "RAW",
+              "expression": "${authorization}",
+              "type": "ProviderState"
+            }
+          }
+        },
+        "headers": {
+          "Authorization": [
+            "Basic dGVzdC1icm9hZDp0ZXN0LWJyb2FkLXNlY3JldA=="
+          ],
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.token": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/idp/api/tokens/introspect"
+      },
+      "response": {
+        "status": 404
       },
       "type": "Synchronous/HTTP"
     },
