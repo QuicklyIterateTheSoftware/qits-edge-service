@@ -48,7 +48,8 @@ public class ShutdownLinger {
       return;
     }
     LOG.infof(
-        "shutting down: lingering %s so the kernel can flush what the last responses sent", linger);
+        "shutting down: lingering %dms so the kernel can flush what the last responses sent",
+        linger.toMillis());
     try {
       Thread.sleep(linger.toMillis());
     } catch (InterruptedException e) {
