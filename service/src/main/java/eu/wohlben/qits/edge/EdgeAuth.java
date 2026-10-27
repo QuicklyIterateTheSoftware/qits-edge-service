@@ -152,7 +152,7 @@ public class EdgeAuth {
    * How close to its own expiry a cached token stops being worth forwarding, in milliseconds. A
    * token handed upstream is validated there, a moment later and against that process' clock, so a
    * cache entry is retired while what it holds still has a working life in front of it. Sixty
-   * seconds is the margin {@code AgentCredential} uses elsewhere on this estate.
+   * seconds covers that hop and any clock skew between the two processes with room to spare.
    */
   static final long TOKEN_MARGIN_MS = 60_000;
 

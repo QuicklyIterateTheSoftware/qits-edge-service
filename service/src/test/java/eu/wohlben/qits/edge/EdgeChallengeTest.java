@@ -402,8 +402,9 @@ class EdgeChallengeTest {
   }
 
   @Test
-  void theRemintMarginIsTheEstatesOwn() {
-    // The same sixty seconds AgentCredential treats a token as spent at, elsewhere on the estate.
+  void theRemintMarginIsSixtySeconds() {
+    // Sixty seconds before its expiry a cached token is treated as spent, so what is forwarded
+    // still has a working life upstream.
     assertEquals(60_000, EdgeAuth.TOKEN_MARGIN_MS);
   }
 
