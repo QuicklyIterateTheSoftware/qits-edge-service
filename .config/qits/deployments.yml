@@ -106,5 +106,8 @@ stop_grace_period: 10m
 # A different name would be an empty volume, and an edge on an empty one has no certificate to serve
 # and orders a new one against Let's Encrypt's weekly limit. The deployer drops the config mount of
 # the same target, and a live service already mounting it is updated in place, not recreated.
-# The ports and aliases stay in deployment config for now.
+# The host ports and the extra wire aliases are declared below (qits-765); `${QITS_ENVIRONMENT}` is
+# the deployment's environment, so in dev they are registry.dev.localhost and so on.
 volumes: private:letsencrypt:/work/.letsencrypt
+publishes: 8080:8080, 443:8443
+aliases: registry.${QITS_ENVIRONMENT}.localhost, mirror.${QITS_ENVIRONMENT}.localhost, githost.${QITS_ENVIRONMENT}.localhost, githost.${QITS_ENVIRONMENT}.internal
