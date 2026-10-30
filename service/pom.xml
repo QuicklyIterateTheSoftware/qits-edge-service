@@ -58,6 +58,11 @@
              (a Vert.x recorder in the test JVM). See that class for the four reasons, one per
              story. Released out of libs/qits-integrations-quarkus. -->
         <qits.service-mock.version>2026.1002.70617</qits.service-mock.version>
+        <!-- The platform's shared rules (test scope only), qits-1754: ProviderStateCoverageTest
+             checks that every state golden-masters/index.json records has its @State callback on
+             ConsumerPactVerificationTest. Released out of libs/qits-integrations-quarkus, like
+             qits-userflows and qits-service-mock above. -->
+        <qits.arch-rules.version>2026.1030.30851</qits.arch-rules.version>
         <!-- pact-jvm's JUnit 5 provider, for contracts/ConsumerPactVerificationTest: the version every
              provider on the estate verifies with, so a consumer's pact is read the same way. -->
         <pact.version>4.7.5</pact.version>
@@ -415,6 +420,13 @@
             <groupId>eu.wohlben.qits</groupId>
             <artifactId>qits-idp-golden-masters</artifactId>
             <version>${qits.idp-golden-masters.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- ProviderStateCoverageTest (qits-1754): the platform's shared rules. -->
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-arch-rules</artifactId>
+            <version>${qits.arch-rules.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
