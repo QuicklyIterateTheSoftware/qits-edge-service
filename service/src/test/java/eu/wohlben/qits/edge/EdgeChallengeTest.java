@@ -636,6 +636,27 @@ class EdgeChallengeTest {
         "and the deployer's idp:client resource states it outright");
   }
 
+  /**
+   * THE PACKAGED EDGE NEEDS NO EDGE VARIABLES TO SERVE ITS DEPLOYMENT (qits-1391). A deployment
+   * used to hand it {@code QITS_EDGE_ENVIRONMENTS}, {@code QITS_EDGE_DEFAULT_ENVIRONMENT} and
+   * {@code QITS_EDGE_SESSIONS_ENABLED}; with only the deployer's own {@code QITS_ENVIRONMENT} the
+   * shipped file must land on the same values — the environment it was deployed into, and the
+   * browser gate on. Read without a profile, which is the packaged process's view of the file.
+   */
+  @Test
+  void theShippedFileServesTheDeployedEnvironmentWithTheGateOn() throws Exception {
+    var live = applicationProperties(Map.of("QITS_ENVIRONMENT", "dev")).build();
+    assertEquals("dev", live.getValue("qits.edge.environments", String.class));
+    assertEquals("dev", live.getValue("qits.edge.default-environment", String.class));
+    assertTrue(live.getValue("qits.edge.sessions.enabled", Boolean.class));
+
+    var local = applicationProperties(Map.of()).build();
+    assertEquals(
+        "prod",
+        local.getValue("qits.edge.default-environment", String.class),
+        "a process with no QITS_ENVIRONMENT keeps the old default");
+  }
+
   private static String dialUrl(Map<String, String> env) throws Exception {
     return applicationProperties(env)
         .build()

@@ -98,3 +98,13 @@ publish_mode: ingress
 # `quarkus.shutdown.timeout` in application.properties, is 9m30s — just under this, so the process
 # always exits on its own before swarm would kill it. Change the two together.
 stop_grace_period: 10m
+
+# THE CERTIFICATE VOLUME, declared here rather than in deployment config (qits-1391): the ACME
+# account, every issued generation and the `current` link the TLS PEM paths point into. A private
+# volume is named `<application>-<name>`, so under `application: qits-edge` this is exactly
+# `qits-edge-letsencrypt` — the volume the bootstrap seeded and the live edge already mounts here.
+# A different name would be an empty volume, and an edge on an empty one has no certificate to serve
+# and orders a new one against Let's Encrypt's weekly limit. The deployer drops the config mount of
+# the same target, and a live service already mounting it is updated in place, not recreated.
+# The ports and aliases stay in deployment config for now.
+volumes: private:letsencrypt:/work/.letsencrypt
