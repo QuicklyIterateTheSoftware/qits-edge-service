@@ -107,7 +107,8 @@ stop_grace_period: 10m
 # and orders a new one against Let's Encrypt's weekly limit. The deployer drops the config mount of
 # the same target, and a live service already mounting it is updated in place, not recreated.
 # The host ports and the extra wire aliases are declared below (qits-765); `${QITS_ENVIRONMENT}` is
-# the deployment's environment, so in dev they are registry.dev.localhost and so on.
+# the deployment's environment, so in dev they are registry.dev.localhost and so on; `${QITS_PORT}`
+# is the install's host HTTP port, which the deployer holds (default 8080).
 volumes: private:letsencrypt:/work/.letsencrypt
-publishes: 8080:8080, 443:8443
+publishes: ${QITS_PORT}:8080, 443:8443
 aliases: registry.${QITS_ENVIRONMENT}.localhost, mirror.${QITS_ENVIRONMENT}.localhost, githost.${QITS_ENVIRONMENT}.localhost, githost.${QITS_ENVIRONMENT}.internal
