@@ -497,8 +497,8 @@ These used to be keys — `qits.edge.apps.<app>.host-pattern`, `audience-pattern
 the live store held six `QITS_EDGE_APPS_*_PATTERN` entries spelling this one rule, one of them a
 tier that no longer exists (`{env}-qits-platform-mirror`). None of it is a fact about an
 installation, so none of it is configurable. The six entries are left inert until the configuration
-GC collects them: `.config/qits/configuration.yml` stopped declaring them in the release after the
-one that first did.
+GC collects them: the application declared none of them from the release after the one that first
+did.
 
 `qits.edge.apps.<app>.hosts.<env>` is what is left: a fixed address for one platform label in one
 environment, for a developer running one service on `localhost:8000` and for this repository's own
