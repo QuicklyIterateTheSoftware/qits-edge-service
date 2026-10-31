@@ -34,15 +34,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
  * that jar as a test dependency, and qits-maintenance bumps the pin when the consumer releases a
  * changed pact. {@link ClasspathPactLoader} finds them all.
  *
- * <p><b>Fourteen consumers pin a pact</b> (qits-1284), every one of them a frontend asking through
+ * <p><b>Thirteen consumers pin a pact</b> (qits-1284), every one of them a frontend asking through
  * {@code @qits/ui-components}' main navigation: qits-ci-frontend, qits-projects-frontend,
  * qits-docs-frontend, qits-events-frontend, qits-githost-frontend, qits-maintenance-frontend,
- * qits-artifacts-frontend, qits-configuration-frontend, qits-deployments-frontend,
- * qits-mirror-frontend, qits-observability-frontend, qits-orchestrator-frontend,
- * qits-system-frontend and qits-idp-frontend (each {@code
- * eu.wohlben.qits:<consumer>-pacts-qits-edge-service}, holding {@code
- * pacts/<consumer>_qits-ui-components-jslib_qits-edge-service.json}), all test-scoped in {@code
- * service/pom.xml}. Each asks {@code getMainNavigation} in the state {@code a published
+ * qits-artifacts-frontend, qits-deployments-frontend, qits-mirror-frontend,
+ * qits-observability-frontend, qits-orchestrator-frontend, qits-system-frontend and
+ * qits-idp-frontend (each {@code eu.wohlben.qits:<consumer>-pacts-qits-edge-service}, holding
+ * {@code pacts/<consumer>_qits-ui-components-jslib_qits-edge-service.json}), all test-scoped in
+ * {@code service/pom.xml}. Each asks {@code getMainNavigation} in the state {@code a published
  * navigation}, the one the golden master is recorded in. {@link ClasspathPactLoader#REQUIRED} is
  * true, so a classpath that lost them fails rather than verifying nothing.
  *
