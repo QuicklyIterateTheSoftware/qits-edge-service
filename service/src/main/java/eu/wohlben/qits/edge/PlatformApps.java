@@ -20,11 +20,8 @@ import java.util.Set;
  * as. The wire alias is derived from it the same way qits-deployments derives it: {@code registry}
  * fronts {@code qits-artifacts}, so {@code registry.dev} reaches {@code dev-qits-artifacts:8080}.
  *
- * <p><b>The audience comes from the same identity.</b> A vhost requires its application's own
- * resource audience, {@code <env>-<application>}, or the platform audience {@link
- * #PLATFORM_AUDIENCE}. The token's roles are the permission. The env-prefixed audience keeps the
- * tiers apart: a token minted for dev's githost does not open prod's. {@link #PLATFORM_AUDIENCE}
- * opens every vhost in every tier. That is the open calling model, and it is the platform's choice.
+ * <p><b>The audience is not per application.</b> Every gated vhost, in every environment, accepts
+ * exactly {@link #PLATFORM_AUDIENCE}; the token's roles are the permission.
  *
  * <p>A label that is not here reaches a service only through the deployment projection: the service
  * publishes the name it answers to. Projected services are what every other host is.
@@ -32,8 +29,8 @@ import java.util.Set;
 final class PlatformApps {
 
   /**
-   * The one audience that opens every gated vhost, whatever its tier. The same literal every
-   * qits-idp client is commissioned for and every service accepts; no placeholder, on purpose.
+   * The one audience every gated vhost accepts, in every environment. The same literal idp mints
+   * and every service accepts; no placeholder, on purpose.
    */
   static final String PLATFORM_AUDIENCE = "qits-platform";
 
@@ -76,10 +73,5 @@ final class PlatformApps {
   /** Where a platform label goes in one environment, by the platform's own addressing. */
   static Upstream upstream(String label, String environment) {
     return new Upstream(alias(label, environment), PORT);
-  }
-
-  /** The resource audience a platform label's vhost requires: its application's wire alias. */
-  static String audience(String label, String environment) {
-    return alias(label, environment);
   }
 }

@@ -53,9 +53,9 @@ public interface AuthConfig {
    */
   Optional<List<String>> anonymousReadApps();
 
-  // NO AUDIENCE KEYS. The audience a vhost demands, and the platform audience that opens every one,
-  // are the platform's calling model rather than an installation fact, so they are code: see
-  // PlatformApps and EdgeAuth.audienceFor. `qits.edge.auth.audience-pattern` and
+  // NO AUDIENCE KEYS. Every gated vhost accepts the one platform audience, `qits-platform`, and
+  // that is the platform's calling model rather than an installation fact, so it is code: see
+  // PlatformApps.PLATFORM_AUDIENCE. `qits.edge.auth.audience-pattern` and
   // `qits.edge.auth.platform-audience` were keys until qits-528, each defaulting to the literal
   // `qits-platform`, and no deployment set either.
 

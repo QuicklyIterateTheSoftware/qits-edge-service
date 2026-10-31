@@ -46,8 +46,7 @@ import org.jboss.logging.Logger;
  * <p><b>Only a caller the edge would let through to a service is answered.</b> The document names
  * every upstream on the estate and how loaded it is, which is not a thing to hand an anonymous
  * caller. A valid machine credential — checked by {@link EdgeAuth#checkCredential} exactly as on a
- * service vhost, demanding the platform audience because the answer is estate-wide rather than one
- * service's — or, with the browser gate on, a live {@code qits-session} cookie introspected by
+ * service vhost — or, with the browser gate on, a live {@code qits-session} cookie introspected by
  * {@link EdgeSessions}. Anything else is a 401; an idp that cannot vouch for an opaque token is the
  * same 503 the service gate answers, because a check that cannot be made is not a verdict.
  */
@@ -104,10 +103,7 @@ public class UpstreamPoolsRoute {
    */
   private Future<Boolean> admitted(HttpServerRequest request) {
     if (EdgeAuth.carriesCredential(request)) {
-      // The apex reading demands the platform audience alone; see the class comment.
-      return auth.checkCredential(
-              HostEnvironments.Route.apex(edgeRouter.defaultEnvironment()), request)
-          .map(rejection -> rejection == null);
+      return auth.checkCredential(request).map(rejection -> rejection == null);
     }
     String cookie = sessions.enabled() ? sessions.cookie(request) : null;
     if (cookie == null) {

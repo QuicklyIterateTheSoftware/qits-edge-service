@@ -353,7 +353,7 @@ class EdgeSessionGateTest {
 
   @Test
   void aForeignOriginIsStillRefusedTheBearerCall() {
-    Map<String, String> headers = new java.util.HashMap<>(token("dev"));
+    Map<String, String> headers = new java.util.HashMap<>(token());
     headers.put("Origin", "http://evil.example:4200");
     headers.put("Sec-Fetch-Mode", "cors");
     EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", "/ci/api/runs", headers);
@@ -618,8 +618,7 @@ class EdgeSessionGateTest {
     // Not even the login page: the door has no path to refuse, so it 404s instead of redirecting —
     // with a session, with a machine token, and with neither.
     publishIdpHost();
-    for (Map<String, String> credential :
-        List.of(Map.<String, String>of(), session(), token("dev"))) {
+    for (Map<String, String> credential : List.of(Map.<String, String>of(), session(), token())) {
       for (String path : List.of("/idp/login", "/ci/api/runs", "/v2/", "/git/x")) {
         EdgeClient.Answer answer =
             client().send(HttpMethod.GET, "dev.acme.example.com", path, null, credential);
@@ -1046,7 +1045,7 @@ class EdgeSessionGateTest {
                 "registry.dev.acme.example.com",
                 "/v2/",
                 null,
-                withToken("dev", "X-Qits-User", "whoever"));
+                withToken("X-Qits-User", "whoever"));
     assertEquals("registry-dev", answer.line("upstream"));
     assertNull(
         answer.upstreamHeader("X-Qits-User"),
@@ -1063,7 +1062,7 @@ class EdgeSessionGateTest {
   void aMachineVhostStillStripsTheBrowserCookieAndKeepsTheOthers() {
     // The parent-domain session reaches every sibling name by browser design. A request that
     // identifies itself with a token is not using it, so the registry never sees it.
-    Map<String, String> headers = new java.util.HashMap<>(token("dev"));
+    Map<String, String> headers = new java.util.HashMap<>(token());
     headers.put("Cookie", "theme=dark; qits-session=" + StubGateways.SESSION + "; locale=en");
     EdgeClient.Answer answer = client().get("registry.dev.acme.example.com", "/v2/", headers);
     assertEquals("registry-dev", answer.line("upstream"));
@@ -1236,17 +1235,16 @@ class EdgeSessionGateTest {
     return Map.of("Cookie", cookie(value), name, header);
   }
 
-  private static Map<String, String> withToken(
-      String environment, String name, String headerValue) {
-    Map<String, String> headers = new java.util.HashMap<>(token(environment));
+  private static Map<String, String> withToken(String name, String headerValue) {
+    Map<String, String> headers = new java.util.HashMap<>(token());
     headers.put(name, headerValue);
     return headers;
   }
 
-  private static Map<String, String> token(String environment) {
+  private static Map<String, String> token() {
     return Map.of(
         "Authorization",
-        "Bearer " + TestTokens.valid(issuer(), List.of(StubGateways.audience(environment))));
+        "Bearer " + TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE)));
   }
 
   private static Map<String, String> basic(String id, String secret) {

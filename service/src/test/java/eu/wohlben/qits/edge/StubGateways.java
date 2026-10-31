@@ -48,15 +48,15 @@ import java.util.concurrent.TimeUnit;
  * revocation is obeyed within the cache's own window rather than at the end of it. {@link
  * #introspections()} counts the calls, so a cache hit is provable by the call that did not happen.
  *
- * <p><b>Three clients, because a credential has three answers.</b> One is commissioned for both
- * environments' registries, one is commissioned for something else entirely — the client that is
- * genuine and still opens nothing here — and one is a black hole the stub accepts and never
- * answers, which is the shape a redeploying idp takes and the only way to prove that the edge
- * answers anyway. {@link #idpDown} and {@link #idpUp} add the fourth shape, a refused connection.
- * One more client, {@link #PLATFORM_ID}, holds only the platform audience, which opens every vhost.
- * And {@link #BRIEF_ID} is the fifth shape: commissioned exactly as the first, but issued a token
- * with barely any life left — the credential whose acceptance the edge may not cache, because what
- * a cache entry holds is the token it would forward.
+ * <p><b>Three clients, because a credential has three answers.</b> One is commissioned for the
+ * platform audience, one is commissioned for something else entirely — the client that is genuine
+ * and still opens nothing here — and one is a black hole the stub accepts and never answers, which
+ * is the shape a redeploying idp takes and the only way to prove that the edge answers anyway.
+ * {@link #idpDown} and {@link #idpUp} add the fourth shape, a refused connection. One more client,
+ * {@link #PLATFORM_ID}, is commissioned exactly as the first. And {@link #BRIEF_ID} is the fifth
+ * shape: commissioned exactly as the first, but issued a token with barely any life left — the
+ * credential whose acceptance the edge may not cache, because what a cache entry holds is the token
+ * it would forward.
  *
  * <p><b>And one opaque token, {@link #TOKEN}</b>, which {@code /idp/api/tokens/introspect} stands
  * for a JWT this stub mints on the spot — and which can be {@link #revokeToken revoked} mid-suite.
@@ -65,7 +65,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class StubGateways implements QuarkusTestResourceLifecycleManager {
 
-  /** The client the registry vhosts are for: idp mints it both environments' audiences. */
+  /** The client the registry vhosts are for: idp mints it the platform audience. */
   static final String CLIENT_ID = "a-client";
 
   static final String CLIENT_SECRET = "a-secret";
@@ -76,12 +76,12 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
   static final String OTHER_SECRET = "other-secret";
 
   /**
-   * The platform audience, {@link PlatformApps#PLATFORM_AUDIENCE}. It opens every gated vhost on
-   * every tier.
+   * The platform audience, {@link PlatformApps#PLATFORM_AUDIENCE}: the one audience every gated
+   * vhost accepts, in every environment.
    */
   static final String PLATFORM_AUDIENCE = "qits-platform";
 
-  /** A client commissioned for the platform audience alone. */
+  /** Another client commissioned for the platform audience, as {@link #CLIENT_ID} is. */
   static final String PLATFORM_ID = "platform-client";
 
   static final String PLATFORM_SECRET = "platform-secret";
@@ -231,28 +231,6 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     }
   }
 
-  /**
-   * The audiences the stub idp puts in every token: a client's WHOLE allowed list, which is what a
-   * grant naming no audience gets back — and what the live platform's idp does, one value per
-   * environment. The edge demands one of them per request, resolved from the vhost's own
-   * environment, so a token carrying both is the case that has to keep working while a token
-   * carrying one must not cross tiers.
-   */
-  static String audience(String environment) {
-    return environment + "-qits-artifacts";
-  }
-
-  /**
-   * One environment's three platform audiences — registry, mirror, githost — each the application's
-   * own {@code <env>-qits-<application>}, as {@link PlatformApps} derives them.
-   */
-  static List<String> platformAudiences(String environment) {
-    return List.of(
-        environment + "-qits-artifacts",
-        environment + "-qits-mirror",
-        environment + "-qits-githost");
-  }
-
   /** How long {@code /stream} waits between its two chunks — long enough to time from a client. */
   static final long STREAM_GAP_MILLIS = 400;
 
@@ -328,9 +306,7 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     // code (PlatformApps), and every environment here overrides it, so a request that reached the
     // derived alias would be a resolution bug rather than a test that happened to pass.
     //
-    // No audience either: a platform vhost demands its application's own `<env>-qits-<application>`
-    // or the platform audience, in code. `registry` fronts qits-artifacts, which is why the stub
-    // idp's tier-scoped tokens carry `audience(env)` = `<env>-qits-artifacts`.
+    // No audience either: every gated vhost accepts `qits-platform`, in code.
 
     // ONE of the two CONFIGURED apps, which is the point: the exemption is per app label, so the
     // suite has a vhost whose reads are open and a vhost that is not, side by side.
@@ -484,7 +460,7 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
       return;
     }
     String issuer = ISSUER;
-    List<String> audiences = List.of(audience("dev"), audience("prod"), PLATFORM_AUDIENCE);
+    List<String> audiences = List.of(PLATFORM_AUDIENCE);
     io.vertx.core.json.JsonObject claims =
         TestTokens.claims(issuer, audiences, java.time.Instant.now().plusSeconds(TOKEN_JWT_SECONDS))
             .put("sub", TOKEN_SUBJECT)
@@ -545,10 +521,10 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
    */
   private static List<String> audiencesFor(String authorization) {
     if (basic(CLIENT_ID, CLIENT_SECRET).equals(authorization)) {
-      return List.of(audience("dev"), audience("prod"));
+      return List.of(PLATFORM_AUDIENCE);
     }
     if (basic(BRIEF_ID, BRIEF_SECRET).equals(authorization)) {
-      return List.of(audience("dev"), audience("prod"));
+      return List.of(PLATFORM_AUDIENCE);
     }
     if (basic(OTHER_ID, OTHER_SECRET).equals(authorization)) {
       return List.of("somebody-else");

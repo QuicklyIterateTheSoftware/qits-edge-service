@@ -1130,7 +1130,7 @@ public class EdgeRouter {
       refuseService(request, target);
       return;
     }
-    Future<String> checked = auth.checkCredential(target.route(), request);
+    Future<String> checked = auth.checkCredential(request);
     if (!checked.isComplete()) {
       request.pause();
     }

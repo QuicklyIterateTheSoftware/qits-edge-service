@@ -125,7 +125,7 @@ public final class IdpProbe implements AutoCloseable {
     HttpServerRequest request =
         fakeRequest("Bearer " + token, status, new java.util.concurrent.CountDownLatch(1));
     String rejection =
-        real.checkCredential(new HostEnvironments.Route("dev", "registry", null), request)
+        real.checkCredential(request)
             .toCompletionStage()
             .toCompletableFuture()
             .get(10, TimeUnit.SECONDS);

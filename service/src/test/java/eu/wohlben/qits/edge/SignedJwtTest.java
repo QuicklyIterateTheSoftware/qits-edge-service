@@ -114,39 +114,26 @@ class SignedJwtTest {
 
   // --- the platform audience ---------------------------------------------------------------------
 
-  private static final String PLATFORM = "qits-platform";
-
-  /** What EdgeAuth accepts on this platform app label's vhost, in dev. */
-  private static List<String> accepted(String app) {
-    return EdgeAuth.acceptedAudiences(
-        EdgeAuth.audienceFor(new HostEnvironments.Route("dev", app, null)));
-  }
+  private static final String PLATFORM = PlatformApps.PLATFORM_AUDIENCE;
 
   @Test
-  void aPlatformTokenPassesOnEveryVhost() {
+  void aPlatformTokenPasses() {
     // A person's command-line token names only the platform audience. It must open every service.
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of(PLATFORM)));
-    assertNull(jwt.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
-    assertNull(jwt.problem(ACCEPTED, accepted("githost"), Instant.now(), 30));
+    assertNull(jwt.problem(ACCEPTED, PLATFORM, Instant.now(), 30));
   }
 
   @Test
-  void aTokenForTheVhostsOwnAudienceStillPasses() {
+  void anApplicationsWireAliasIsNotAnAudienceAndTheRefusalNamesThePlatform() {
+    // `dev-qits-artifacts` is where registry.dev routes, not an audience it accepts.
     SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of("dev-qits-artifacts")));
-    assertNull(jwt.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
-  }
-
-  @Test
-  void aTokenForNeitherAudienceIsRefusedAndTheRefusalNamesBoth() {
-    SignedJwt jwt = SignedJwt.parse(TestTokens.valid(ISSUER, List.of("prod-qits-artifacts")));
     assertEquals(
-        "the token is not for dev-qits-artifacts or qits-platform",
-        jwt.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
+        "the token is not for qits-platform", jwt.problem(ACCEPTED, PLATFORM, Instant.now(), 30));
   }
 
   @Test
   void aPlatformTokenStillNeedsEveryOtherCheck() {
-    // The platform audience replaces the audience check only. Issuer and expiry still apply.
+    // The platform audience satisfies the audience check only. Issuer and expiry still apply.
     SignedJwt expired =
         SignedJwt.parse(
             TestTokens.mint(
@@ -154,11 +141,10 @@ class SignedJwtTest {
                 TestTokens.KID,
                 "RS256",
                 TestTokens.claims(ISSUER, List.of(PLATFORM), Instant.now().minusSeconds(3600))));
-    assertEquals(
-        "the token expired", expired.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
+    assertEquals("the token expired", expired.problem(ACCEPTED, PLATFORM, Instant.now(), 30));
     SignedJwt foreign =
         SignedJwt.parse(TestTokens.valid("http://elsewhere/idp", List.of(PLATFORM)));
-    assertNotNull(foreign.problem(ACCEPTED, accepted("registry"), Instant.now(), 30));
+    assertNotNull(foreign.problem(ACCEPTED, PLATFORM, Instant.now(), 30));
   }
 
   @Test

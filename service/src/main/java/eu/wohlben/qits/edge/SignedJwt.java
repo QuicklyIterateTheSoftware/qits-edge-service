@@ -9,7 +9,6 @@ import java.security.Signature;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Collection;
-import java.util.List;
 
 /**
  * One compact JWS, split into the parts a validator needs, plus the checks it makes. Framework-free
@@ -87,37 +86,11 @@ public record SignedJwt(
    */
   public String problem(
       Collection<String> issuers, String audience, Instant now, long clockSkewSeconds) {
-    return problem(issuers, List.of(audience), now, clockSkewSeconds);
-  }
-
-  /**
-   * The same checks, where any one of several audiences is enough: the vhost's own, or the platform
-   * audience ({@link PlatformApps#PLATFORM_AUDIENCE}).
-   *
-   * @param accepted the audiences that open this vhost; the token must name at least one
-   */
-  public String problem(
-      Collection<String> issuers, List<String> accepted, Instant now, long clockSkewSeconds) {
     String problem = problem(issuers, now, clockSkewSeconds);
     if (problem != null) {
       return problem;
     }
-    return namesAny(audiences(), accepted) ? null : "the token is not for " + either(accepted);
-  }
-
-  /** Whether these {@code aud} values name at least one accepted audience. */
-  static boolean namesAny(JsonArray audiences, List<String> accepted) {
-    for (String audience : accepted) {
-      if (audiences.contains(audience)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /** The accepted audiences for a refusal message: "a" or "a or b". */
-  static String either(List<String> accepted) {
-    return String.join(" or ", accepted);
+    return audiences().contains(audience) ? null : "the token is not for " + audience;
   }
 
   /**
@@ -125,9 +98,8 @@ public record SignedJwt(
    * anybody asks what it is for.
    *
    * <p>Split out because a credential validated at the edge is cached, and what is cached is the
-   * token's OWN soundness plus the audiences it named; the demanded audience is a per-request
-   * question, resolved from the vhost, and answering it from the cached list is what keeps one
-   * cached validation from crossing tiers.
+   * token's OWN soundness plus the audiences it named; the audience check is then made against that
+   * cached list on every request.
    *
    * @param issuers the {@code iss} values an accepted token may carry, each compared exactly
    * @param now the moment to judge {@code exp} against

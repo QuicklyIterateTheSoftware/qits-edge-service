@@ -38,8 +38,8 @@ import java.util.stream.Stream;
  *
  * <p><b>{@code QITS_DEPLOYED_PACTS_DIR}</b>, when set and non-blank, is walked recursively for
  * every file whose name ends with {@code _<provider>.json} too — the same suffix match the
- * classpath scan uses — and each one is added as its own source, keyed by its file URL, loaded
- * and verified alongside the classpath ones. The layout is {@code
+ * classpath scan uses — and each one is added as its own source, keyed by its file URL, loaded and
+ * verified alongside the classpath ones. The layout is {@code
  * <dir>/<consumer-repo>/<pactVersion>/<consumer>_<provider>.json}. The release gate sets it after
  * {@code qits artifacts fetch deployed-pacts}, so a verification run against it covers every
  * deployed and rollback consumer version, not merely the one pinned in the pom. The directory must

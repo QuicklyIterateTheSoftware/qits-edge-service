@@ -114,54 +114,26 @@ class EdgeChallengeTest {
         EdgeRouter.appUpstream("mirror", "dev", config.apps()));
   }
 
-  @Test
-  void aPlatformVhostDemandsItsApplicationsOwnAudienceInTheNamedTier() {
-    // idp's resource audiences are env-prefixed, so a token for dev's githost does not open prod's.
-    assertEquals("dev-qits-githost", EdgeAuth.audienceFor(app("githost", "dev")));
-    assertEquals("prod-qits-githost", EdgeAuth.audienceFor(app("githost", "prod")));
-    assertEquals("dev-qits-artifacts", EdgeAuth.audienceFor(app("registry", "dev")));
-    assertEquals("dev-qits-mirror", EdgeAuth.audienceFor(app("mirror", "dev")));
-  }
-
-  @Test
-  void everyOtherNameDemandsThePlatformAudienceAlone() {
-    // A projected service host and an environment door: roles alone, the open calling model.
-    assertEquals("qits-platform", EdgeAuth.audienceFor(app("ci", "dev")));
-    assertEquals("qits-platform", EdgeAuth.audienceFor(HostEnvironments.Route.apex("prod")));
-  }
-
   // --- the platform audience ---------------------------------------------------------------------
 
   @Test
-  void thePlatformAudienceIsAcceptedNextToTheVhostsOwn() {
-    assertEquals(
-        List.of("dev-qits-githost", "qits-platform"),
-        EdgeAuth.acceptedAudiences("dev-qits-githost"));
-    assertEquals(
-        List.of("qits-platform"),
-        EdgeAuth.acceptedAudiences("qits-platform"),
-        "an audience that is both is named once");
-  }
-
-  @Test
-  void thePlatformAudienceHasNoTier() {
-    // Roles, not tiers, are the permission. A placeholder here would make it a tier again.
+  void thePlatformAudienceHasNoEnvironment() {
+    // Roles are the permission. A placeholder here would make the audience per environment again.
     assertEquals("qits-platform", PlatformApps.PLATFORM_AUDIENCE);
   }
 
   @Test
-  void aBasicCredentialFollowsTheSameAudienceRule() {
-    // The Basic path judges the minted token's audiences, cached or fresh, with the same rule.
-    List<String> accepted = EdgeAuth.acceptedAudiences("dev-qits-artifacts");
-    assertNull(EdgeAuth.refusalFor(new JsonArray(List.of("qits-platform")), accepted));
-    assertNull(EdgeAuth.refusalFor(new JsonArray(List.of("dev-qits-artifacts")), accepted));
+  void aBasicCredentialIsJudgedByThePlatformAudienceAlone() {
+    // The Basic and token paths judge the minted token's audiences, cached or fresh, by one rule.
+    assertNull(EdgeAuth.refusalFor(new JsonArray(List.of("qits-platform"))));
+    assertNull(EdgeAuth.refusalFor(new JsonArray(List.of("somebody-else", "qits-platform"))));
     assertEquals(
-        "the credential is not for dev-qits-artifacts or qits-platform",
-        EdgeAuth.refusalFor(new JsonArray(List.of("somebody-else")), accepted));
+        "the credential is not for qits-platform",
+        EdgeAuth.refusalFor(new JsonArray(List.of("somebody-else"))));
     assertEquals(
-        "the credential is not for dev-qits-artifacts",
-        EdgeAuth.refusalFor(
-            new JsonArray(List.of("qits-platform")), List.of("dev-qits-artifacts")));
+        "the credential is not for qits-platform",
+        EdgeAuth.refusalFor(new JsonArray(List.of("dev-qits-artifacts"))),
+        "an application's own wire alias is not an audience any vhost accepts");
   }
 
   @Test

@@ -487,11 +487,11 @@ label to the application it fronts, and the upstream is that application's wire 
 environment the Host name named — `<env>-qits-<application>:8080`, the address qits-deployments
 gives every service on qits-net:
 
-| label | application | `dev`'s upstream | demanded audience |
-|---|---|---|---|
-| `registry` | `qits-artifacts` | `dev-qits-artifacts:8080` | `dev-qits-artifacts` |
-| `mirror` | `qits-mirror` | `dev-qits-mirror:8080` | `dev-qits-mirror` |
-| `githost` | `qits-githost` | `dev-qits-githost:8080` | `dev-qits-githost` |
+| label | application | `dev`'s upstream |
+|---|---|---|
+| `registry` | `qits-artifacts` | `dev-qits-artifacts:8080` |
+| `mirror` | `qits-mirror` | `dev-qits-mirror:8080` |
+| `githost` | `qits-githost` | `dev-qits-githost:8080` |
 
 These used to be keys — `qits.edge.apps.<app>.host-pattern`, `audience-pattern` and `port` — and
 the live store held six `QITS_EDGE_APPS_*_PATTERN` entries spelling this one rule, one of them a
@@ -524,17 +524,13 @@ against the keys fetched from `qits.edge.idp.dial-url/jwks` and cached — idp i
 cannot reach it, and keeping it off the per-pull path is worth more than the freshness a call-out
 would buy. An unknown `kid` buys **one** refresh, behind a cooldown, so a made-up kid cannot turn
 into a request per request at the identity provider. The checks are RS256 only, an exact accepted `iss`, live
-`exp` within the skew, and the demanded audience or the platform audience in `aud`.
+`exp` within the skew, and `qits-platform` in `aud`.
 
-**The audience is derived per request, in code.** A platform app vhost demands its application's
-own `<env>-qits-<application>` (the table above), resolved from the environment the vhost named.
-idp's resource audiences are env-prefixed, so that is what keeps the tiers apart: a token minted for
-`githost.dev.…` does not open `githost.prod.…`. Every other name — a published service host —
-demands the platform audience alone.
-
-**One audience opens every vhost.** A token whose `aud` names `qits-platform` passes on every gated
-vhost and on every path: Bearer, Git's `Basic oauth2:<token>`, and Basic client credentials. A
-person's command-line tool gets this token. The audience has no `{env}`, on purpose: it only says
+**One audience opens every vhost, and no other does.** A token whose `aud` names `qits-platform`
+passes on every gated vhost, in every environment, and on every path: Bearer, Git's
+`Basic oauth2:<token>`, and Basic client credentials. A token without it is refused, whatever else
+its `aud` names — `dev-qits-githost` opens nothing. It is the one audience idp mints. It has no
+`{env}`, on purpose: it only says
 the token is for this platform, and the token's roles are what each service checks
 (epic qits-540 dossier, 'Plan (as of 2026-09-13)', C4). `qits.edge.auth.audience-pattern` and
 `qits.edge.auth.platform-audience` were keys until qits-528, each defaulting to that literal; no
@@ -589,8 +585,7 @@ maven, npm and git send `Authorization: Basic` and nothing else — none of them
 challenge, fetches a token and retries — so a gated request carrying **Basic** is accepted on its
 own terms. The edge validates it the only way a client id and secret can be validated: it spends
 them at idp, exactly as `/token` does, and then treats the token that comes back as if the caller
-had presented it. Same issuer, same `exp`, same signature, same demanded audience — a commissioned
-client opens precisely the vhosts its audiences name.
+had presented it. Same issuer, same `exp`, same signature, same audience.
 
 A credential that is not base64 of `<id>:<secret>` is refused **here**, without a call: there is
 nothing to ask idp about, and asking would hold the caller for the whole retry window below.
@@ -599,8 +594,7 @@ The result is cached against a **SHA-256 of the credential** — never the crede
 shorter of the minted token's life and `qits.edge.auth.basic-cache-ttl-ms`, in a bounded LRU. Without
 it, a Basic client resends its credential on every request, so every dependency fetch would put an
 idp round trip on the path. What is cached is the credential's own soundness plus the audiences it
-carried; the demanded audience is still answered per request, so one cached validation cannot cross
-tiers. **Refusals are not cached**: a rotated secret must start working the moment it is right.
+carried, checked for `qits-platform` on every request. **Refusals are not cached**: a rotated secret must start working the moment it is right.
 
 The `401` stays the Bearer challenge whatever the credential was — docker is the client that reads
 it — and carries `error="invalid_token"` when a credential was presented and refused.
@@ -632,7 +626,7 @@ The edge `POST`s it to `<qits.edge.idp.dial-url>/api/tokens/introspect` with its
 secret in HTTP Basic — the pair it introspects browser sessions with (`qits.edge.idp.client-id`
 / `-secret`), over the same dial, with the same per-attempt timeout and retry window. idp answers
 the ordinary idp JWT the token currently stands for; the edge holds that JWT to the Bearer rules —
-issuer, expiry, signature, and this vhost's audience — and **forwards the JWT in the token's place**.
+issuer, expiry, signature, and the platform audience — and **forwards the JWT in the token's place**.
 An upstream never sees a token: it sees a JWT its own OIDC mechanism already validates, with the
 token's roles in `groups`. A token can therefore never buy more than the JWT it stands for.
 

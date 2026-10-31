@@ -23,11 +23,12 @@
 # ignores a stored value, so declaring one would replace a hand-set address in the same step.
 #
 # THE SIX `QITS_EDGE_APPS_*_PATTERN` KEYS ARE RETIRED, and their absence here is the mechanism.
-# They spelled the upstream alias (and, for githost and the editor, the audience) of the platform's
+# They spelled the upstream alias (and, for githost and the editor, an audience) of the platform's
 # app vhosts — registry, mirror, githost, editor. That is not an installation fact: every service on
 # this platform is `<env>-qits-<application>` on qits-net, so the alias is the PLATFORM's, and the
-# owner's ruling (2026-10-03, qits-528) is that it is code. It is now: PlatformApps derives both,
-# and nothing in the edge reads any of the six. The release before this one declared them, so a
+# owner's ruling (2026-10-03, qits-528) is that it is code. It is now: PlatformApps derives the
+# alias, every gated vhost accepts the one audience `qits-platform`, and nothing in the edge reads
+# any of the six. The release before this one declared them, so a
 # declaration once stated each key; once no pinned version (serving, or one rollback away) states
 # them, qits-configuration's GC (`RetiredEntryCollector`) collects the entries. Until then they sit
 # inert in the container's environment — `EdgeChallengeTest` pins that they bind nothing.

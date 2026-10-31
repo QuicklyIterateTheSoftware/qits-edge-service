@@ -66,11 +66,11 @@ import org.jboss.logging.Logger;
  * reads a {@code WWW-Authenticate: Bearer} challenge, fetches a token and retries. So a gated
  * request carrying {@code Authorization: Basic} is validated the only way a client id and secret
  * can be: by spending them at idp ({@link IdpGrants}) and reading the token that comes back. What
- * happens next is the Bearer path exactly — same issuer, same expiry, same signature, same demanded
- * audience — so a commissioned client opens precisely the vhosts its audiences name and no others.
+ * happens next is the Bearer path exactly — same issuer, same expiry, same signature, same
+ * audience.
  *
- * <p><b>One audience opens every vhost:</b> {@link PlatformApps#PLATFORM_AUDIENCE}. A token that
- * names it passes on every path above, next to the vhost's own audience. Its roles are the
+ * <p><b>One audience opens every gated vhost, and no other does:</b> {@link
+ * PlatformApps#PLATFORM_AUDIENCE}, on every path above and in every environment. Its roles are the
  * permission, and the services check them.
  *
  * <p><b>And what goes on upstream is the TOKEN, never the pair.</b> A service one hop in cannot
@@ -209,8 +209,8 @@ public class EdgeAuth {
 
   /**
    * A credential idp accepted: the token it minted, the audiences that token carried, and when this
-   * belief stops. The audiences are kept rather than a yes/no, because the demanded audience is a
-   * per-request question — one cached validation must still refuse the vhost of another tier.
+   * belief stops. The audiences are kept rather than a yes/no, and the platform audience is checked
+   * against them on every request.
    *
    * <p><b>The token is held because it is what goes out.</b> An accepted request leaves this
    * process carrying it, so a cache hit that had only a verdict would have to forward nothing at
@@ -259,36 +259,6 @@ public class EdgeAuth {
         && readApps.contains(route.app());
   }
 
-  /**
-   * The audience this vhost demands, derived from what it fronts rather than configured.
-   *
-   * <p>A platform app vhost ({@link PlatformApps}) demands its application's own resource audience
-   * in the environment the Host name named: {@code githost.dev} demands {@code dev-qits-githost}.
-   * <b>This is the boundary between tiers.</b> idp's resource audiences are env-prefixed, so a
-   * token minted for dev's githost does not open prod's.
-   *
-   * <p>Every other name — a projected service host, an environment door — demands the platform
-   * audience alone, the open calling model's own rule: roles, not tiers, are the permission.
-   *
-   * <p>Package-private and static so it can be asserted without booting an application.
-   */
-  static String audienceFor(HostEnvironments.Route route) {
-    return route.toApp() && PlatformApps.contains(route.app())
-        ? PlatformApps.audience(route.app(), route.environment())
-        : PlatformApps.PLATFORM_AUDIENCE;
-  }
-
-  /**
-   * The audiences that open a vhost: the one it demands, and the platform audience. A token needs
-   * only one of them. The platform audience is the same on every vhost and every tier; the token's
-   * roles are what the services then check.
-   */
-  static List<String> acceptedAudiences(String demanded) {
-    return PlatformApps.PLATFORM_AUDIENCE.equals(demanded)
-        ? List.of(demanded)
-        : List.of(demanded, PlatformApps.PLATFORM_AUDIENCE);
-  }
-
   /** Whether this request is docker fetching a token rather than asking for a registry object. */
   public static boolean isTokenRequest(HttpServerRequest request) {
     return TOKEN_PATH.equals(request.path())
@@ -335,9 +305,8 @@ public class EdgeAuth {
    * credential, and a request that carries one anyway must still be held to every rule — otherwise
    * an {@code Authorization} header of any junk at all would be a way past the gate.
    */
-  public Future<String> checkCredential(HostEnvironments.Route route, HttpServerRequest request) {
+  public Future<String> checkCredential(HttpServerRequest request) {
     String header = request.getHeader(HttpHeaders.AUTHORIZATION);
-    List<String> audiences = acceptedAudiences(audienceFor(route));
     if (header != null && header.toLowerCase(Locale.ROOT).startsWith(BASIC)) {
       String credential = header.substring(BASIC.length()).trim();
       String opaque = TokenValue.fromBasic(credential);
@@ -345,11 +314,11 @@ public class EdgeAuth {
         // A token as the password of a Basic pair — git's `oauth2:<token>`, or any user at all.
         // Looked for FIRST, so a token is never spent at idp as a client secret nor parsed as the
         // JWT an `oauth2:` password otherwise is.
-        return checkToken(request, opaque, audiences);
+        return checkToken(request, opaque);
       }
       String workstationToken = oauth2Token(credential);
       if (workstationToken != null) {
-        return checkBearer(workstationToken, audiences)
+        return checkBearer(workstationToken)
             .map(
                 problem -> {
                   if (problem == null) {
@@ -364,20 +333,20 @@ public class EdgeAuth {
       // A client id and secret, sent by something that cannot do docker's token dance — maven, npm,
       // git. Spending them at idp is the only way to know they are good — and the token that comes
       // back is what goes on, so the secret stops here.
-      return checkBasic(request, credential, audiences);
+      return checkBasic(request, credential);
     }
     if (header == null || !header.toLowerCase(Locale.ROOT).startsWith(BEARER)) {
       return Future.succeededFuture("no bearer token");
     }
     String presented = header.substring(BEARER.length()).trim();
     if (TokenValue.isToken(presented)) {
-      return checkToken(request, presented, audiences);
+      return checkToken(request, presented);
     }
-    return checkBearer(presented, audiences);
+    return checkBearer(presented);
   }
 
   /** Validate the JWT carried directly as Bearer, or as Git's {@code oauth2:<token>} Basic pair. */
-  private Future<String> checkBearer(String compact, List<String> audiences) {
+  private Future<String> checkBearer(String compact) {
     SignedJwt jwt;
     try {
       jwt = SignedJwt.parse(compact);
@@ -385,7 +354,11 @@ public class EdgeAuth {
       return Future.succeededFuture(e.getMessage());
     }
     String problem =
-        jwt.problem(idp.issuers(), audiences, Instant.now(), config.clockSkewSeconds());
+        jwt.problem(
+            idp.issuers(),
+            PlatformApps.PLATFORM_AUDIENCE,
+            Instant.now(),
+            config.clockSkewSeconds());
     if (problem != null) {
       // Claims before signature: a claim check needs no key, so an expired or misaddressed token is
       // refused without a JWKS lookup — and a made-up kid cannot use one to force a fetch.
@@ -446,8 +419,7 @@ public class EdgeAuth {
    * on it (a validator that cannot answer must not open the door) but it is not written down as a
    * verdict about the credential.
    */
-  private Future<String> checkBasic(
-      HttpServerRequest request, String credential, List<String> audiences) {
+  private Future<String> checkBasic(HttpServerRequest request, String credential) {
     if (!isClientCredentials(credential)) {
       // Refused HERE, without a call. A credential that cannot be a client id and a secret has
       // nothing to ask idp about, and asking would spend the whole patience window on it during an
@@ -458,7 +430,7 @@ public class EdgeAuth {
     Validated known = validated.get(fingerprint);
     if (known != null) {
       if (known.expiresAtMillis() > System.currentTimeMillis()) {
-        return Future.succeededFuture(forward(request, known, audiences));
+        return Future.succeededFuture(forward(request, known));
       }
       // Out of time: dropped here rather than left for the LRU bound to reach, so a spent token
       // does not sit in memory for as long as its credential stays popular.
@@ -495,7 +467,7 @@ public class EdgeAuth {
                         }
                         Validated fresh = remember(minted, issued);
                         validated.put(fingerprint, fresh);
-                        return forward(request, fresh, audiences);
+                        return forward(request, fresh);
                       });
             });
   }
@@ -578,14 +550,13 @@ public class EdgeAuth {
    * <p>An idp that cannot be reached is a FAILED future carrying {@link IdpUnreachable}, never a
    * pass and never a cached refusal: nothing was learnt about the token.
    */
-  private Future<String> checkToken(
-      HttpServerRequest request, String token, List<String> audiences) {
+  private Future<String> checkToken(HttpServerRequest request, String token) {
     return introspectToken(token)
         .map(
             known ->
                 known.refusal() != null
                     ? known.refusal()
-                    : forward(request, known.audiences(), known.accessToken(), audiences));
+                    : forward(request, known.audiences(), known.accessToken()));
   }
 
   /**
@@ -595,8 +566,8 @@ public class EdgeAuth {
    * <p>The minted JWT is held to the rules a minted Basic token is ({@link #checkBasic}): it
    * parses, its issuer and expiry hold, and its signature verifies against the published key.
    * Running the one code path means a token can never buy more than the JWT it stands for. The
-   * vhost's audience is NOT decided here — one cached answer must still refuse the vhost of another
-   * tier — which is why the audiences are kept rather than a yes.
+   * audience is NOT decided here: the JWT's audiences are kept and checked per request, as the
+   * other paths do.
    */
   private Future<Introspected> introspectToken(String token) {
     String fingerprint = fingerprint(token);
@@ -691,14 +662,13 @@ public class EdgeAuth {
    * <p>The two halves are one method so they cannot come apart: there is no way to accept a Basic
    * credential here without replacing it, and no way to replace it without having accepted it.
    */
-  private String forward(HttpServerRequest request, Validated accepted, List<String> audiences) {
-    return forward(request, accepted.audiences(), accepted.token(), audiences);
+  private String forward(HttpServerRequest request, Validated accepted) {
+    return forward(request, accepted.audiences(), accepted.token());
   }
 
-  /** {@link #forward(HttpServerRequest, Validated, List)} for any minted JWT and its audiences. */
-  private static String forward(
-      HttpServerRequest request, JsonArray carried, String jwt, List<String> audiences) {
-    String problem = refusalFor(carried, audiences);
+  /** {@link #forward(HttpServerRequest, Validated)} for any minted JWT and its audiences. */
+  private static String forward(HttpServerRequest request, JsonArray carried, String jwt) {
+    String problem = refusalFor(carried);
     if (problem == null) {
       request.headers().set(HttpHeaders.AUTHORIZATION, "Bearer " + jwt);
     }
@@ -706,15 +676,15 @@ public class EdgeAuth {
   }
 
   /**
-   * null when the token's audiences name one this vhost accepts, the reason when they do not.
+   * null when the token's audiences name {@link PlatformApps#PLATFORM_AUDIENCE}, the reason when
+   * they do not.
    *
    * @param carried the {@code aud} values of the minted token, cached or fresh
-   * @param accepted {@link #acceptedAudiences}, resolved for this request
    */
-  static String refusalFor(JsonArray carried, List<String> accepted) {
-    return SignedJwt.namesAny(carried, accepted)
+  static String refusalFor(JsonArray carried) {
+    return carried.contains(PlatformApps.PLATFORM_AUDIENCE)
         ? null
-        : "the credential is not for " + SignedJwt.either(accepted);
+        : "the credential is not for " + PlatformApps.PLATFORM_AUDIENCE;
   }
 
   /** What to cache about a credential idp accepted, and for how long. */
