@@ -6,8 +6,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A bearer carried on a WebSocket handshake's {@code Sec-WebSocket-Protocol}, for the one caller
- * that has no other way to send it: a page on the loopback (epic qits-1230, feature qits-1246).
+ * A bearer carried on a WebSocket handshake's {@code Sec-WebSocket-Protocol}, for a caller that has
+ * no other way to send it: a page on the loopback (epic qits-1230, feature qits-1246), or a page
+ * under the platform domain opening a socket of its own (qits-1342).
  *
  * <p><b>Why it exists.</b> Under {@code ng serve} an SPA on {@code http://localhost:<port>} calls
  * the platform with {@code Authorization: Bearer <token>} — see {@link EdgeCors} for that ruling. A
@@ -16,6 +17,11 @@ import java.util.List;
  * DOES control on a handshake is the subprotocol list, so the token rides there:
  *
  * <pre>{@code new WebSocket(url, ['qits.bearer', token])}</pre>
+ *
+ * <p>A page under the platform domain normally has the session cookie and uses it instead, but a
+ * socket of its own may still offer the marker — the same browser limitation applies there too —
+ * and is admitted on the same anchor {@link EdgeSessions#admitsOrigin} gives CORS and the login
+ * return: under the stated domain, at any depth, or the apex itself.
  *
  * <p><b>The contract.</b> The offer names {@link #MARKER}, and the entry immediately after it is
  * the token — a JWT or a {@code qits_tok_} value, both of which are RFC 7230 {@code token}s
@@ -26,9 +32,9 @@ import java.util.List;
  * <p><b>What the edge does with it</b> ({@link EdgeRouter}):
  *
  * <ol>
- *   <li>a page that is not on the loopback ({@link EdgeCors#isLoopback}) offering the marker is
- *       refused {@code 403} — a page under the platform domain has the cookie and uses it, and
- *       nothing else is meant to open a socket this way;
+ *   <li>a page that is neither on the loopback ({@link EdgeCors#isLoopback}) nor an origin the
+ *       platform itself admits ({@link EdgeSessions#admitsOrigin}) offering the marker is refused
+ *       {@code 403};
  *   <li>a marker with no token after it is refused {@code 401};
  *   <li>otherwise the token is MOVED: out of the offer and into {@code Authorization: Bearer}, the
  *       one place the rest of the edge reads a credential from. From there it is the ordinary

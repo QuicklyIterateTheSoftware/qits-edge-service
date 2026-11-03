@@ -621,8 +621,9 @@ public class EdgeRouter {
     }
 
     if (isWebSocketUpgrade(request) && EdgeWebSocketBearer.offersBearer(request.headers())) {
-      // A loopback page's socket, carrying its bearer in the subprotocol offer because a browser
-      // WebSocket cannot send Authorization. See EdgeWebSocketBearer for the contract.
+      // A loopback page's socket, or a platform page's own, carrying its bearer in the subprotocol
+      // offer because a browser WebSocket cannot send Authorization. See EdgeWebSocketBearer for
+      // the contract.
       if (!bearerSubprotocol(request)) {
         return;
       }
@@ -633,8 +634,17 @@ public class EdgeRouter {
 
   /**
    * Admit a handshake that offers {@link EdgeWebSocketBearer#MARKER}, or refuse it: {@code 403}
-   * unless its page is on the loopback, {@code 401} when no token follows the marker. Admitted, the
-   * token has moved into {@code Authorization} and the ordinary gate judges it.
+   * unless its page is on the loopback or an origin the platform itself admits — {@link
+   * EdgeSessions#admitsOrigin}, the same anchor {@link EdgeCors} and the login return are held to:
+   * under the stated domain, at any depth, or the apex itself — {@code 401} when no token follows
+   * the marker. Admitted, the token has moved into {@code Authorization} and the ordinary gate
+   * judges it.
+   *
+   * <p>A page under the platform domain normally has the session cookie and uses it; this door
+   * exists for the one caller that cannot — the loopback under {@code ng serve} — but a platform
+   * page that offers the marker anyway (its own terminal or chat socket, where a browser {@code
+   * WebSocket} cannot set {@code Authorization} and has no occasion to read the cookie) is admitted
+   * on the same anchor as everything else it does. A foreign origin is still refused.
    *
    * <p>Neither refusal names the token, and neither does any line this process logs: the offer is
    * never logged, and after this method it no longer holds the token at all.
@@ -642,9 +652,11 @@ public class EdgeRouter {
    * @return true when the handshake goes on to the gate, false when it has been answered
    */
   private boolean bearerSubprotocol(HttpServerRequest request) {
-    if (!EdgeCors.isLoopback(request.getHeader(HttpHeaders.ORIGIN))) {
+    String origin = request.getHeader(HttpHeaders.ORIGIN);
+    if (!EdgeCors.isLoopback(origin) && !sessions.admitsOrigin(origin)) {
       LOG.infof(
-          "refused a WebSocket bearer subprotocol from a page that is not on the loopback: %s on %s",
+          "refused a WebSocket bearer subprotocol from a page that is neither on the loopback nor"
+              + " under the platform domain: %s on %s",
           request.path(), authority(request));
       request
           .response()
@@ -653,8 +665,8 @@ public class EdgeRouter {
           .end(
               "The "
                   + EdgeWebSocketBearer.MARKER
-                  + " subprotocol is accepted from a loopback page only; a page under the platform"
-                  + " domain uses its session.\n");
+                  + " subprotocol is accepted from a loopback page or a page under the platform"
+                  + " domain only.\n");
       return false;
     }
     if (!EdgeWebSocketBearer.moveToAuthorization(request.headers())) {

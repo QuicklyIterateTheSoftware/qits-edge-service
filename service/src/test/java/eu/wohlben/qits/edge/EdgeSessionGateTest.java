@@ -524,15 +524,18 @@ class EdgeSessionGateTest {
   }
 
   @Test
-  void theSubprotocolBearerIsRefusedFromAnyPageNotOnTheLoopback() {
-    // A page under the domain has the cookie and uses it; a foreign page and a caller naming no
-    // page are not what this door was opened for. 403 even with a perfectly good token.
+  void theSubprotocolBearerIsRefusedFromAForeignPageOrALookalikeHost() {
+    // Neither on the loopback nor under the platform domain (EdgeSessions#admitsOrigin) — a
+    // foreign page, a caller naming no page, and a host that merely looks like the domain: a
+    // prefix with no separating dot, and the domain used as a prefix of a foreign one. 403 even
+    // with a perfectly good token.
     String jwt = TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE));
     for (String origin :
         java.util.Arrays.asList(
-            "https://projects.dev.acme.example.com",
             "http://evil.example:4200",
             "http://localhost.evil.example",
+            "https://evilexample.com",
+            "https://example.com.evil.com",
             null)) {
       Map<String, String> headers =
           new java.util.HashMap<>(bearerHandshake(origin, EdgeWebSocketBearer.MARKER + ", " + jwt));
@@ -543,6 +546,52 @@ class EdgeSessionGateTest {
       assertNull(answer.line("upstream"), origin);
       assertTrue(!answer.body().contains(jwt), "the refusal never echoes the token");
     }
+  }
+
+  @Test
+  void aPlatformPagesOwnSocketCarriesItsBearerInTheSubprotocolToo() {
+    // A page under the platform domain normally has the cookie and uses it, but its own terminal
+    // or chat socket may still offer the marker — the same browser WebSocket limitation applies
+    // there too (qits-1342) — and is admitted on the same anchor as CORS and the login return
+    // (EdgeSessions#admitsOrigin): any depth under the domain, not only the loopback.
+    String jwt = TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE));
+    int before = StubGateways.introspections();
+    EdgeClient.Opened opened =
+        client()
+            .handshake(
+                "ci.dev.acme.example.com",
+                "/terminal",
+                Map.of("Origin", "https://projects.dev.acme.example.com"),
+                List.of(EdgeWebSocketBearer.MARKER, jwt));
+    String seen = opened.frame();
+    assertTrue(seen.lines().anyMatch("upstream=mirror-dev"::equals), seen);
+    assertTrue(seen.lines().anyMatch(("authorization=Bearer " + jwt)::equals), seen);
+    assertTrue(
+        seen.lines().anyMatch("sec-websocket-protocol=-"::equals),
+        "neither the marker nor the token is offered upstream: " + seen);
+    assertEquals(EdgeWebSocketBearer.MARKER, opened.subprotocol());
+    // The machine path: no session is read even though the page is one that would carry a cookie.
+    assertEquals(before, StubGateways.introspections());
+  }
+
+  @Test
+  void theApexOriginsSocketCarriesItsBearerInTheSubprotocolToo() {
+    // The apex itself is admitted exactly like every other depth under the domain.
+    String jwt = TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE));
+    EdgeClient.Opened opened =
+        client()
+            .handshake(
+                "ci.dev.acme.example.com",
+                "/terminal",
+                Map.of("Origin", "https://" + StubGateways.DOMAIN),
+                List.of(EdgeWebSocketBearer.MARKER, jwt));
+    String seen = opened.frame();
+    assertTrue(seen.lines().anyMatch("upstream=mirror-dev"::equals), seen);
+    assertTrue(seen.lines().anyMatch(("authorization=Bearer " + jwt)::equals), seen);
+    assertTrue(
+        seen.lines().anyMatch("sec-websocket-protocol=-"::equals),
+        "neither the marker nor the token is offered upstream: " + seen);
+    assertEquals(EdgeWebSocketBearer.MARKER, opened.subprotocol());
   }
 
   @Test
