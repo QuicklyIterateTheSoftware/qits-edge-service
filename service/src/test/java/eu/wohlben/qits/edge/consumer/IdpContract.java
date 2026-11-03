@@ -30,6 +30,15 @@ import java.util.List;
  * <p><b>The one refusal pinned here</b> (ticket qits-950, part B2): a commissioned token that was
  * deleted answers {@code introspectToken} with a 404, both on the vhost door and the docker realm.
  * idp's verification of this pact then forbids ever answering a deleted token with 200.
+ *
+ * <p><b>And the token this service presents</b> (qits-543/qits-1330): the client-credentials mint
+ * of the named client {@code qits} — {@code POST /idp/token} with HTTP Basic, {@code
+ * grant_type=client_credentials} and {@code audience=qits-platform} — recorded by qits-idp as
+ * {@code issueToken} in {@value #A_SERVICE_CLIENT_CALLING_ITS_PEERS}. No class of this source tree
+ * spends the token: the qits-eventstream library's durable listeners and catch-up queries do,
+ * asking {@code OidcClients} for {@code qits} (qits-1328), so that is the row's trigger. {@code
+ * IdpTokenMintPactTest} runs it through the real oidc client, because the client only exists inside
+ * the application.
  */
 final class IdpContract {
 
@@ -43,6 +52,21 @@ final class IdpContract {
   static final String A_COMMISSIONED_TOKEN = "a commissioned token";
   static final String A_COMMISSIONED_TOKEN_THAT_WAS_DELETED =
       "a commissioned token that was deleted";
+
+  /** The qits-idp state that records the client-credentials mint of a service client. */
+  static final String A_SERVICE_CLIENT_CALLING_ITS_PEERS = "a service client calling its peers";
+
+  /**
+   * The mint, caused by whichever qits-eventstream call needs a bearer first (qits-1328): a durable
+   * listener's catch-up read or its live delivery.
+   */
+  static final GoldenInteraction MINT =
+      GoldenInteraction.of(
+              Trigger.of("call", "call", "qits-eventstream (subscriber, catch-up query)"),
+              A_SERVICE_CLIENT_CALLING_ITS_PEERS,
+              "issueToken")
+          .header("Authorization", "{authorization}")
+          .consumes("access_token", "expires_in");
 
   /** The edge fetches keys lazily: the first token it checks makes both calls. */
   private static final Trigger FIRST_AUTHENTICATED_REQUEST =
@@ -117,7 +141,8 @@ final class IdpContract {
           TOKEN_FOR_VHOST,
           TOKEN_FOR_REALM,
           TOKEN_REFUSED_FOR_VHOST,
-          TOKEN_REFUSED_FOR_REALM);
+          TOKEN_REFUSED_FOR_REALM,
+          MINT);
 
   private IdpContract() {}
 

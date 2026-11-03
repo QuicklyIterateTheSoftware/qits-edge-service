@@ -208,6 +208,16 @@
             <artifactId>quarkus-security</artifactId>
         </dependency>
         <dependency>
+            <!-- The token this service PRESENTS (qits-543/qits-1328): the named client `qits`, its
+                 own qits-idp service client by client credentials, configured in
+                 application.properties from the deployer's idp:client resource. Brought in alone,
+                 it enables no OIDC tenant of its own and changes no request the edge authenticates
+                 — that is quarkus-oidc, not this extension — it only lets the qits-eventstream
+                 library mint this process's own bearer through OidcClients.getClient("qits"). -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-oidc-client</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-jdbc-postgresql</artifactId>
         </dependency>
