@@ -512,9 +512,16 @@ gives every service on qits-net:
 | `idp` | `qits-idp` | `dev-qits-idp:8080` |
 
 `idp` joined the three machine vhosts in qits-1403 so its name answers before the deployment
-catch-up ends (see *Startup is a rebuild*). Its gate is the one it had as a published host: the
-anonymous prefixes (`/idp/`, so the login page and `/idp/jwks`) on its own name, and the ordinary
-service-vhost gate for anything else. `PlatformApps` states idp's own route, `/idp`, so that "on the
+catch-up ends (see *Startup is a rebuild*). Its gate is the one it had as a published host — the
+anonymous prefixes (`/idp/`, so the login page and `/idp/jwks`) on its own name, the session gate
+for a cookie, the ordinary service-vhost gate off its route — with one addition: **under idp's own
+route, a request carrying `Authorization` passes through untouched.** idp judges every credential
+itself (a `client_credentials` pair at `/idp/token`, its own Basic at the introspection doors, its
+own Bearer on reads), so the edge checks, spends, mints and rewrites nothing there and refuses
+nothing; spending a Basic pair and forwarding the minted JWT instead would break every grant made on
+idp's public name. The `X-Qits-*` namespace is still stripped, attribution included: keeping a
+service bearer's three headers would need the credential checked. This holds whether the name came
+from the projection or from `PlatformApps`, before the catch-up and after. `PlatformApps` states idp's own route, `/idp`, so that "on the
 name that owns them" holds without the projection; once idp's deployment is replayed, its published
 `idp` host must point at the same `<env>-qits-idp:8080` or the frame is refused, as `registry`'s is.
 

@@ -728,6 +728,30 @@ class EdgeSessionGateTest {
   }
 
   @Test
+  void aPublishedIdpHostPassesItsOwnRouteThroughWithTheCredentialAsSent() {
+    // The same rule as idp's platform label, on the host idp's deployment published: the label is
+    // `idp` either way. A Basic grant reaches idp as sent, with no grant made by the edge.
+    publishIdpHost();
+    int grants = StubGateways.grants();
+    String pair =
+        "Basic "
+            + Base64.getEncoder()
+                .encodeToString("dev-qits-ci:secret".getBytes(StandardCharsets.UTF_8));
+    EdgeClient.Answer answer =
+        client()
+            .send(
+                HttpMethod.POST,
+                "idp.dev.acme.example.com",
+                "/idp/token",
+                "grant_type=client_credentials",
+                Map.of("Authorization", pair, "X-Qits-User", "admin"));
+    assertEquals(IDP_UPSTREAM, answer.line("upstream"), answer.body());
+    assertEquals(pair, answer.upstreamHeader("Authorization"));
+    assertEquals(grants, StubGateways.grants());
+    assertNull(answer.upstreamHeader("X-Qits-User"));
+  }
+
+  @Test
   void anotherHostStillRefusesTheLoginPrefix() {
     // The prefix is anonymous on its OWNER's name, not on every name: /idp/ on ci is one service's
     // routes offered by another, and ci refuses it like any path it has no credential for.

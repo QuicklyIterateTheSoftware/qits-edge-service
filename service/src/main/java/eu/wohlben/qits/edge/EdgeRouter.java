@@ -633,7 +633,47 @@ public class EdgeRouter {
       }
     }
 
+    if (passesThroughToIdp(target.route(), request.path(), request.headers())) {
+      // idp checks its own credentials. Spending a client secret here and forwarding the minted
+      // JWT instead is what would break every client_credentials grant made on idp's public name.
+      proxy(request, target, null);
+      return;
+    }
+
     serviceGate(request, target);
+  }
+
+  /**
+   * Whether this request goes to idp exactly as it was sent: a request on the {@link
+   * PlatformApps#IDP} label, under idp's own route ({@link PlatformApps#owns}), carrying an {@code
+   * Authorization} header of any scheme (qits-1403).
+   *
+   * <p><b>idp is the one service that judges credentials itself</b> — {@code /idp/token} spends a
+   * client id and secret, {@code /idp/api/tokens/introspect} and {@code /api/sessions/introspect}
+   * take the caller's own Basic, every read accepts its own Bearer — so the edge's machine gate,
+   * which spends a Basic pair at idp and forwards the minted JWT in its place, would hand idp a
+   * credential it never asked for. Here nothing is checked, spent, minted or rewritten, and nothing
+   * is refused: idp answers 401 itself when it should.
+   *
+   * <p><b>Only with an {@code Authorization} header.</b> A request without one keeps the ordinary
+   * path: the anonymous prefix, or the browser session, introspected as before. idp reads the
+   * {@code qits-session} cookie itself and relies on no {@code X-Qits-*} header the edge writes, so
+   * nothing on idp depends on the edge gating a credentialed request — but the cookie path is left
+   * exactly as it was rather than reasoned about.
+   *
+   * <p>What still happens is {@link #proxy}'s unconditional hygiene: the {@code X-Qits-*} namespace
+   * is stripped, identity and attribution alike — no service-bearer exception here, because that
+   * would need the credential checked — the page's caller is asserted, and the unused session
+   * cookie is removed. Whether the name came from the projection or from {@link PlatformApps}, and
+   * before the catch-up or after, the label is the same, so the answer is too. Static so it is
+   * asserted without a boot.
+   */
+  static boolean passesThroughToIdp(
+      HostEnvironments.Route route, String path, io.vertx.core.MultiMap headers) {
+    return route.toApp()
+        && PlatformApps.IDP.equals(route.app())
+        && PlatformApps.owns(PlatformApps.IDP, path)
+        && headers.contains(HttpHeaders.AUTHORIZATION);
   }
 
   /**
