@@ -839,6 +839,29 @@ The SDK is **disabled under `%dev` and `%test`**: a clone-alone `./mvnw verify` 
 reach, and an exporter retrying against an unresolvable name turns the suite into a wall of export
 failures. Telemetry is real in a deployment.
 
+**One exception: the OTLP ingest this edge proxies gets no span of its own** (qits-1432). Once
+every service exports its telemetry through this edge rather than straight to qits-observability,
+each export batch is itself a proxied request under `/observability/api/otel/` — and without the
+exception, that request opens its own edge span, which is exported in the next batch, which proxies
+through here too: a trace reporting on itself for ever. Two halves, because the edge opens a span on
+each side of the hop:
+
+- the inbound **SERVER** span is dropped by `quarkus.otel.traces.suppress-application-uris=
+  /observability/api/otel/*`, Quarkus' own escape hatch for exactly this shape. It reads off the
+  Vert.x HTTP instrumentation's own attributes, set from `receiveRequest` before this process' own
+  catch-all route ever runs, so it reaches a proxied request as readily as a JAX-RS one;
+- the outbound **CLIENT** span — the edge's own reverse-proxy hop to the upstream, instrumented by
+  the identical Vert.x tracer on the one `Vertx` this whole process shares — is a different
+  `SpanKind` the config key never reaches (and a different attribute, `url.full` rather than
+  `url.path`, even if it did), so `ObservabilityIngestSampler` drops it directly: a CDI `Sampler`
+  bean Quarkus wraps with the same config key, so both halves apply together rather than one instead
+  of the other.
+
+Dropping is not refusing: the request is proxied exactly as any other, with the caller's
+`Authorization` passing through unchanged, and a dropped span still lets its trace id propagate to
+whatever is downstream of it. Nothing else on this path is suppressed — logs and metrics for the
+same request still leave as they would for any other.
+
 ### TLS: wildcard certificates through DNS-01
 
 The `acme/` module is the edge's ACME client. For the **stated domain** — `qits.edge.domain`, the
