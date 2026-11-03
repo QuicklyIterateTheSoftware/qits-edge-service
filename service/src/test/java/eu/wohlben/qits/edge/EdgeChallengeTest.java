@@ -39,8 +39,29 @@ class EdgeChallengeTest {
   // -------------------------------
 
   @Test
-  void thePlatformAppVhostsAreExactlyTheThreePlatformApplications() {
-    assertEquals(Set.of("registry", "mirror", "githost"), PlatformApps.labels());
+  void thePlatformAppVhostsAreExactlyTheFourPlatformApplications() {
+    // idp joined the three machine vhosts (qits-1403): its name must answer before the deployment
+    // catch-up ends, so it cannot wait for the projection to learn it.
+    assertEquals(Set.of("registry", "mirror", "githost", "idp"), PlatformApps.labels());
+    assertTrue(PlatformApps.contains("IDP"), "a Host name arrives in any case");
+    assertEquals("qits-idp", PlatformApps.application("idp"));
+  }
+
+  @Test
+  void idpIsAddressedByThePlatformsOwnRuleAndOwnsItsOwnRoute() {
+    // dev-qits-idp:8080, the alias qits-deployments gives it — the address its own deployment
+    // publishes, so a published `idp` host and the platform label agree
+    // (DeploymentActiveSubscriber).
+    // The path is never rewritten: idp.qits.<domain>/idp/jwks reaches dev-qits-idp:8080/idp/jwks.
+    assertEquals(
+        new Upstream("dev-qits-idp", 8080), EdgeRouter.appUpstream("idp", "dev", Map.of()));
+    assertTrue(PlatformApps.owns("idp", "/idp"));
+    assertTrue(PlatformApps.owns("idp", "/idp/jwks"));
+    assertTrue(PlatformApps.owns("idp", "/idp/login"));
+    assertFalse(PlatformApps.owns("idp", "/idpx/login"), "a route matches whole segments");
+    assertFalse(PlatformApps.owns("idp", "/ci/api/runs"));
+    assertFalse(PlatformApps.owns("registry", "/idp/login"), "only idp owns the login prefix");
+    assertFalse(PlatformApps.owns("brochure", "/idp/login"));
   }
 
   @Test
@@ -516,7 +537,7 @@ class EdgeChallengeTest {
             "QITS_EDGE_SESSIONS_ENABLED", "true");
     assertEquals(Optional.of("database-secret"), sessionClientSecret(live));
     assertEquals(Optional.of("dev-qits-edge"), sessionClientId(live));
-    assertEquals("http://dev-qits-idp:8080/idp", dialUrl(live));
+    assertEquals("http://dev-qits-idp:8080/idp", dialUrl(live), "the alias, never the resource");
     assertTrue(
         applicationProperties(live)
             .withMapping(SessionsConfig.class)
@@ -527,19 +548,61 @@ class EdgeChallengeTest {
             + " turns the gate on");
   }
 
-  /** The address reads only the resource: a stated QITS_IDP_DIAL_URL moves nothing (qits-540). */
+  /** A stated QITS_IDP_DIAL_URL moves nothing (qits-540). */
   @Test
   void anOldEnvironmentDialUrlIsNotRead() throws Exception {
     assertEquals(
         "http://dev-qits-idp:8080/idp",
-        dialUrl(
-            Map.of(
-                "QITS_RESOURCE_IDP_URL", "http://dev-qits-idp:8080/idp",
-                "QITS_IDP_DIAL_URL", "http://stated:8080/idp")));
-    assertEquals(
-        "http://dev-qits-idp:8080/idp",
         dialUrl(Map.of("QITS_IDP_DIAL_URL", "http://stated:8080/idp")),
         "alone it is not a fallback either");
+  }
+
+  /**
+   * THE EDGE'S OWN DIAL STAYS INTERNAL (qits-1403, exception E1). The deployer makes {@code
+   * QITS_RESOURCE_IDP_URL} idp's PUBLIC name for every service — a name this process serves — so
+   * reading it would have the edge dial its own gate for every key fetch and introspection.
+   */
+  @Test
+  void thePublicIdpResourceDoesNotMoveTheEdgesDial() throws Exception {
+    assertEquals(
+        "http://dev-qits-idp:8080/idp",
+        dialUrl(
+            Map.of(
+                "QITS_ENVIRONMENT", "dev",
+                "QITS_RESOURCE_IDP_URL", "https://idp.qits.wohlben.eu/idp")));
+    assertEquals(
+        "http://stated:8080/idp",
+        dialUrl(
+            Map.of(
+                "QITS_RESOURCE_IDP_URL", "https://idp.qits.wohlben.eu/idp",
+                "QITS_EDGE_IDP_DIAL_URL", "http://stated:8080/idp")),
+        "the key's own environment spelling is the one override");
+  }
+
+  /**
+   * QITS-EVENTS AND QITS-OBSERVABILITY ARE DIALLED ON THEIR INTERNAL ALIASES (qits-1403, E1). The
+   * eventstream jar's default for {@code qits.events.url} will move to the public name — through
+   * this process, whose own catch-up waits for qits-events — so the shipped file pins the alias,
+   * above the jar's ordinal 100.
+   */
+  @Test
+  void theShippedFilePinsTheInternalEventsAndObservabilityAddresses() throws Exception {
+    var live = applicationProperties(Map.of("QITS_ENVIRONMENT", "dev")).build();
+    assertEquals("http://dev-qits-events:8080", live.getValue("qits.events.url", String.class));
+    assertEquals(
+        "http://dev-qits-observability:8080",
+        live.getValue("qits.observability.url", String.class));
+
+    var outranked =
+        applicationProperties(Map.of("QITS_ENVIRONMENT", "dev"))
+            .withSources(
+                new PropertiesConfigSource(
+                    Map.of("qits.events.url", "https://events.qits.wohlben.eu"), "jar", 100))
+            .build();
+    assertEquals(
+        "http://dev-qits-events:8080",
+        outranked.getValue("qits.events.url", String.class),
+        "a library default that moves to the public name does not move the edge");
   }
 
   /**
@@ -567,8 +630,8 @@ class EdgeChallengeTest {
    * the shipped file under exactly that environment and feeds the result to a real {@link Idp}.
    */
   @Test
-  void theResourceIdpAddressMovesTheDialBaseAndNeverBecomesAnIssuer() throws Exception {
-    Map<String, String> env = Map.of("QITS_RESOURCE_IDP_URL", "http://dev-qits-idp:8080/idp");
+  void theStatedIdpAddressMovesTheDialBaseAndNeverBecomesAnIssuer() throws Exception {
+    Map<String, String> env = Map.of("QITS_EDGE_IDP_DIAL_URL", "http://dev-qits-idp:8080/idp");
     Idp idp = new Idp();
     idp.configuredDial = dialUrl(env);
 
@@ -604,8 +667,8 @@ class EdgeChallengeTest {
         "the environment is derived from what qits-deployments injects, not written down");
     assertEquals(
         "http://stated:8080/idp",
-        dialUrl(Map.of("QITS_RESOURCE_IDP_URL", "http://stated:8080/idp")),
-        "and the deployer's idp:client resource states it outright");
+        dialUrl(Map.of("QITS_EDGE_IDP_DIAL_URL", "http://stated:8080/idp")),
+        "and the key's own environment spelling states it outright");
   }
 
   /**

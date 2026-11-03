@@ -66,6 +66,14 @@ public class DeploymentProjectionBootstrap {
   }
 
   /**
+   * Lower or raise the barrier by hand — for a suite that has to see what a catching-up edge
+   * answers, the way {@code ProjectSansBootstrap#authoritative(boolean)} is for its own.
+   */
+  void authoritative(boolean value) {
+    state.set(value ? State.READY : State.CATCHING_UP);
+  }
+
+  /**
    * A stable readiness data value, useful without exposing eventstream's implementation details.
    */
   public String state() {

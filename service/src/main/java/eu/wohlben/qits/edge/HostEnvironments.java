@@ -125,6 +125,20 @@ public final class HostEnvironments {
   public static final String LANDING = "landing";
 
   /**
+   * The platform's own project, a constant of the platform rather than a projected fact — see
+   * {@code EdgeSessions.PLATFORM_PROJECT}, which is this value.
+   *
+   * <p><b>Its platform labels are read before the project projection knows it</b> (qits-1403). On a
+   * fresh edge database {@code qits} is unknown until the project catch-up has read qits-projects'
+   * log through qits-events — which checks the edge's token against keys fetched from {@code
+   * idp.qits.<domain>}, through the edge. An unknown-project 503 there is the same boot that waits
+   * for itself as the deployment barrier was. So {@code <label>.qits.<domain>}, for a label {@link
+   * #apps()} holds, is that app in the default environment whether or not the project has been read
+   * yet; every other name in an unread {@code qits} is still an unknown project.
+   */
+  public static final String PLATFORM_PROJECT = "qits";
+
+  /**
    * Which of the grammar's positions a name landed on. It is the whole answer: {@code EdgeRouter}
    * switches on it rather than inferring the reading from which components happen to be null.
    */
@@ -479,6 +493,10 @@ public final class HostEnvironments {
     // Rightmost first, because that is the reading: the project is the label next to the domain.
     String project = labels[labels.length - 1];
     if (!projects.containsKey(project)) {
+      if (PLATFORM_PROJECT.equals(project) && labels.length == 2 && apps.contains(labels[0])) {
+        // The platform's own labels in its own project, not yet read — see PLATFORM_PROJECT.
+        return Route.app(defaultEnvironment, labels[0], project);
+      }
       return Route.unknownProject(defaultEnvironment, leading(project));
     }
     boolean supportsEnvironments = projects.get(project) == null || projects.get(project);

@@ -72,6 +72,16 @@ final class TestTokens {
     return mint(IDP, KID, "RS256", claims(issuer, audiences, Instant.now().plusSeconds(seconds)));
   }
 
+  /** {@link #valid}, carrying these roles in idp's {@code groups} claim. */
+  static String withRoles(String issuer, List<String> audiences, List<String> roles) {
+    return mint(
+        IDP,
+        KID,
+        "RS256",
+        claims(issuer, audiences, Instant.now().plusSeconds(300))
+            .put("groups", new JsonArray(roles)));
+  }
+
   static JsonObject claims(String issuer, List<String> audiences, Instant expiry) {
     return new JsonObject()
         .put("iss", issuer)

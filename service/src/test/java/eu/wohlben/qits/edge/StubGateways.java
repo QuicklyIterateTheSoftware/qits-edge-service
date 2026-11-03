@@ -302,6 +302,10 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
             "127.0.0.1:" + listen(app + "-" + environment));
       }
     }
+    // idp's platform label in ONE environment, so a suite can reach it before the catch-up ends
+    // (qits-1403). Only dev: prod keeps the derived alias, which is what the provider states'
+    // `prod-qits-idp:8080` deployment must agree with to publish the `idp` host at all.
+    config.put("qits.edge.apps.idp.hosts.dev", "127.0.0.1:" + listen("idp-dev"));
     // No address for the two apps beyond the overrides above: where each one goes otherwise is
     // code (PlatformApps), and every environment here overrides it, so a request that reached the
     // derived alias would be a resolution bug rather than a test that happened to pass.
