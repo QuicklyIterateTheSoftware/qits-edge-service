@@ -235,6 +235,16 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <!-- InMemorySpanExporter, for ObservabilityIngestSpanSuppressionTest (qits-1432): %test
+                 disables the Quarkus SDK, so that test turns it back on for itself and reads spans
+                 off a CDI-produced in-memory exporter rather than a real OTLP receiver. No
+                 <version>: the quarkus-bom imports the opentelemetry-bom that manages it — the same
+                 dependency qits-projects-service's OtelGitTracingTest carries for the same reason. -->
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>io.rest-assured</groupId>
             <artifactId>rest-assured</artifactId>
             <scope>test</scope>
@@ -463,8 +473,27 @@
                         <configuration>
                             <excludes>
                                 <exclude>**/EdgeSessionGateTest.java</exclude>
+                                <exclude>**/ObservabilityIngestSpanSuppressionTest.java</exclude>
                                 <exclude>**/contracts/**</exclude>
                             </excludes>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <!-- The OTel span suppression proof (qits-1432), in a JVM of its own for
+                             the same reason as EdgeSessionGateTest below: quarkus.otel.sdk.disabled
+                             is read at boot, this class turns it back on for itself alone, and a
+                             second Quarkus start in one JVM silently degrades a WebSocket upgrade
+                             through vertx-http-proxy, breaking the socket tests of whichever class
+                             ran second with nothing logged anywhere. -->
+                        <id>otel-span-suppression-tests</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <includes>
+                                <include>**/ObservabilityIngestSpanSuppressionTest.java</include>
+                            </includes>
                         </configuration>
                     </execution>
                     <execution>
