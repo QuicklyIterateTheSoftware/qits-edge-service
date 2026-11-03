@@ -19,7 +19,14 @@ import java.util.List;
  * <p>{@code qits.edge.idp.dial-url} is the address this process actually connects to for discovery,
  * tokens and introspection; every path under it is derived here rather than configured, because the
  * paths belong to idp rather than to a deployment. The key set is the exception: its address is the
- * {@code jwks_uri} of the discovery document.
+ * {@code jwks_uri} of the discovery document — which idp writes for the name it was asked on, so a
+ * discovery read on the internal alias names the internal key set.
+ *
+ * <p><b>The address is idp's INTERNAL one, {@code http://<env>-qits-idp:8080/idp}</b>, while every
+ * other service dials idp's public name (qits-1403, exception E1). That public name is served by
+ * this process, so an edge that dialled it would put its own gate in front of every key fetch and
+ * introspection it makes. {@code QITS_RESOURCE_IDP_URL} is therefore not read; {@code
+ * QITS_EDGE_IDP_DIAL_URL} is the one override.
  *
  * <p><b>WHY THEY ARE TWO, and it is not tidiness.</b> The issuer is stamped into every token in
  * flight and compared for equality by every consumer, so it cannot move with a deployment; the

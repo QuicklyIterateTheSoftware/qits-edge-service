@@ -56,6 +56,9 @@ class EdgeRoutingTest {
    */
   @Inject ProjectSansBootstrap projectSans;
 
+  /** The deployment projection's barrier, lowered to see what a catching-up edge answers. */
+  @Inject DeploymentProjectionBootstrap routingBootstrap;
+
   @Inject
   @DataSource("edge")
   AgroalDataSource edgeDataSource;
@@ -1039,6 +1042,168 @@ class EdgeRoutingTest {
                 "/ci/api/runs",
                 withToken(Map.of(EdgeHeaders.CALLER, "qits-idp")))
             .upstreamHeader(EdgeHeaders.CALLER));
+  }
+
+  // --- a service bearer's own attribution (qits-1403) --------------------------------------------
+
+  /** What a platform service stamps on its own call, and an identity it must never assert. */
+  private static Map<String, String> attribution(Map<String, String> credential) {
+    Map<String, String> headers = new java.util.HashMap<>(credential);
+    headers.put(EdgeHeaders.CAUSATION_ID, "evt-42");
+    headers.put(EdgeHeaders.CALLER, "qits-ci");
+    headers.put(EdgeHeaders.ENVIRONMENT, "dev");
+    headers.put(EdgeHeaders.USER, "admin");
+    headers.put(EdgeHeaders.ROLES, "qits:root");
+    return headers;
+  }
+
+  @Test
+  void aSystemBearerKeepsItsAttributionThroughTheEdge() {
+    // A platform service dialling a peer's public name: its causation, caller and environment are
+    // what a trace is stitched from, and the strip used to erase them.
+    EdgeClient.Answer answer =
+        client()
+            .get(
+                "registry.dev." + PROJECT + ".example.com",
+                "/v2/",
+                attribution(
+                    bearer(
+                        TestTokens.withRoles(
+                            issuer(),
+                            List.of(StubGateways.PLATFORM_AUDIENCE),
+                            List.of("qits:system")))));
+    assertEquals("registry-dev", answer.line("upstream"), answer.body());
+    assertEquals("evt-42", answer.upstreamHeader(EdgeHeaders.CAUSATION_ID));
+    assertEquals("qits-ci", answer.upstreamHeader(EdgeHeaders.CALLER));
+    assertEquals("dev", answer.upstreamHeader(EdgeHeaders.ENVIRONMENT));
+    assertNull(answer.upstreamHeader(EdgeHeaders.USER), "identity is always stripped");
+    assertNull(answer.upstreamHeader(EdgeHeaders.ROLES));
+  }
+
+  @Test
+  void anyOtherCredentialHasTheAttributionStripped() throws Exception {
+    // A JWT without qits:system, and an agent's opaque token, keep today's rule: the strip.
+    Thread.sleep(tokenCacheTtlMs() + 400);
+    for (Map<String, String> credential : List.of(token(), bearer(StubGateways.TOKEN))) {
+      EdgeClient.Answer answer =
+          client().get("registry.dev." + PROJECT + ".example.com", "/v2/", attribution(credential));
+      assertEquals("registry-dev", answer.line("upstream"), answer.body());
+      assertNull(answer.upstreamHeader(EdgeHeaders.CAUSATION_ID));
+      assertNull(answer.upstreamHeader(EdgeHeaders.CALLER));
+      assertNull(answer.upstreamHeader(EdgeHeaders.ENVIRONMENT));
+      assertNull(answer.upstreamHeader(EdgeHeaders.USER));
+    }
+  }
+
+  // --- the platform labels before the deployment catch-up (qits-1403) ---------------------------
+
+  @Test
+  void aPlatformLabelOnTheUnreadPlatformProjectIsServed() throws Exception {
+    // A fresh edge database: `qits` is not a project here until qits-projects' log is read, and
+    // that read waits on idp's name. The platform labels on it are served in the default
+    // environment anyway; any other name on it is still the unknown project.
+    projectSans.authoritative(false);
+    try {
+      EdgeClient.Answer registry = client().get("registry.qits.example.com", "/v2/", token());
+      assertEquals("registry-prod", registry.line("upstream"), registry.body());
+
+      EdgeClient.Answer other = client().get("ci.qits.example.com", "/", token());
+      assertEquals(503, other.status(), "a projected name on an unread project still waits");
+      assertNull(other.line("upstream"));
+    } finally {
+      projectSans.authoritative(true);
+    }
+    assertEquals(
+        "registry-prod",
+        client().get("registry.qits.example.com", "/v2/", token()).line("upstream"),
+        "and with the barrier down, still served rather than a 404 about the project");
+  }
+
+  @Test
+  void aBasicGrantOnIdpsOwnRouteReachesIdpExactlyAsSent() {
+    // A service's client_credentials grant on idp's public name. The edge must not spend the pair
+    // at idp and forward a minted JWT in its place: idp's /token would then see no client at all.
+    int grants = StubGateways.grants();
+    Map<String, String> headers = new java.util.HashMap<>(basic("dev-qits-ci", "secret"));
+    headers.put("Content-Type", "application/x-www-form-urlencoded");
+    headers.put(EdgeHeaders.USER, "admin");
+    headers.put(EdgeHeaders.CAUSATION_ID, "evt-42");
+    String sent = headers.get("Authorization");
+    EdgeClient.Answer answer =
+        client()
+            .send(
+                HttpMethod.POST,
+                "idp.dev." + PROJECT + ".example.com",
+                "/idp/token",
+                "grant_type=client_credentials",
+                headers);
+    assertEquals("idp-dev", answer.line("upstream"), answer.body());
+    assertEquals(sent, answer.upstreamHeader("Authorization"), "the pair, untouched");
+    assertEquals(grants, StubGateways.grants(), "the edge made no grant of its own");
+    assertNull(answer.upstreamHeader(EdgeHeaders.USER), "identity is still stripped");
+    assertNull(
+        answer.upstreamHeader(EdgeHeaders.CAUSATION_ID),
+        "and attribution too: deciding a service bearer here would need the credential checked");
+  }
+
+  @Test
+  void anyCredentialOnIdpsOwnRoutePassesUncheckedBeforeAndAfterTheCatchUp() {
+    // A bearer the edge would refuse is idp's to refuse, not the edge's — and the rule is the
+    // label's, so it holds while the projection is still reading too.
+    Map<String, String> junk = bearer("not-a-jwt");
+    assertEquals(
+        "idp-dev",
+        client()
+            .get("idp.dev." + PROJECT + ".example.com", "/idp/userinfo", junk)
+            .line("upstream"));
+    assertEquals(
+        "Bearer not-a-jwt",
+        client()
+            .get("idp.dev." + PROJECT + ".example.com", "/idp/api/tokens", junk)
+            .upstreamHeader("Authorization"));
+    routingBootstrap.authoritative(false);
+    try {
+      assertEquals(
+          "idp-dev",
+          client()
+              .get("idp.dev." + PROJECT + ".example.com", "/idp/userinfo", junk)
+              .line("upstream"));
+    } finally {
+      routingBootstrap.authoritative(true);
+    }
+    // Off idp's route the name is gated as any other service's.
+    EdgeClient.Answer offRoute = client().get("idp.dev." + PROJECT + ".example.com", "/v2/", junk);
+    assertEquals(401, offRoute.status(), offRoute.body());
+    assertNull(offRoute.line("upstream"));
+  }
+
+  @Test
+  void idpsNameAnswersWhileTheRoutingProjectionCatchesUpAndNothingElseDoes() {
+    // The boot this exists for: qits-events checks the edge's catch-up token against keys it
+    // fetches from idp's public name — through the edge. Held behind the replay, that is a boot
+    // waiting for itself.
+    activateCi();
+    routingBootstrap.authoritative(false);
+    try {
+      EdgeClient.Answer idp =
+          client().get("idp.dev." + PROJECT + ".example.com", "/idp/jwks", token());
+      assertEquals("idp-dev", idp.line("upstream"), idp.body());
+
+      EdgeClient.Answer registry =
+          client().get("registry.dev." + PROJECT + ".example.com", "/v2/", token());
+      assertEquals("registry-dev", registry.line("upstream"), "every platform label is served");
+
+      EdgeClient.Answer ci = client().get("ci.dev." + PROJECT + ".example.com", "/", token());
+      assertEquals(503, ci.status(), "a published name waits for the projection");
+      assertEquals("1", ci.headers().get("retry-after"));
+      assertNull(ci.line("upstream"));
+    } finally {
+      routingBootstrap.authoritative(true);
+    }
+    assertEquals(
+        "mirror-dev",
+        client().get("ci.dev." + PROJECT + ".example.com", "/", token()).line("upstream"),
+        "and it is served the moment the catch-up is done");
   }
 
   @Test

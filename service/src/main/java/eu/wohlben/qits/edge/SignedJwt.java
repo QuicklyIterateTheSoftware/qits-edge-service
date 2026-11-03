@@ -136,6 +136,18 @@ public record SignedJwt(
     return expiry == null ? null : Instant.ofEpochSecond(expiry);
   }
 
+  /**
+   * The {@code groups} claim — the roles idp minted, which every service's OIDC mechanism reads as
+   * the permission. One string or an array, like {@code aud}; absent is no roles.
+   */
+  public JsonArray roles() {
+    Object groups = claims.getValue("groups");
+    if (groups instanceof JsonArray array) {
+      return array;
+    }
+    return groups == null ? new JsonArray() : new JsonArray().add(groups);
+  }
+
   /** The {@code aud} claim, which JWT allows to be one string or an array of them. */
   public JsonArray audiences() {
     Object aud = claims.getValue("aud");

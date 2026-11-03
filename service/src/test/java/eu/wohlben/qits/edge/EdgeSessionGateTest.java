@@ -49,6 +49,9 @@ class EdgeSessionGateTest {
   /** The gate itself, for the return-host fallback no routed request can reach any more. */
   @Inject EdgeSessions sessions;
 
+  /** The deployment projection's barrier, lowered to see what a catching-up edge answers. */
+  @Inject DeploymentProjectionBootstrap routingBootstrap;
+
   @Inject
   @io.quarkus.agroal.DataSource("edge")
   io.agroal.api.AgroalDataSource edgeDataSource;
@@ -697,6 +700,54 @@ class EdgeSessionGateTest {
         client().get("idp.dev.acme.example.com", "/idp/login", cookieHeader("no-such-session"));
     assertEquals(IDP_UPSTREAM, answer.line("upstream"));
     assertEquals("theme=dark", answer.upstreamHeader("Cookie"));
+    assertNull(answer.upstreamHeader("X-Qits-User"));
+  }
+
+  @Test
+  void idpsPlatformLabelServesTheLoginPrefixBeforeAnythingIsPublished() {
+    // qits-1403: before the catch-up ends nothing published is trusted, so idp's name is answered
+    // from PlatformApps alone — and its anonymous prefix with it, on the same "the name that OWNS
+    // it" rule. That is what serves /jwks to qits-events while the edge is still reading.
+    routingBootstrap.authoritative(false);
+    try {
+      for (String path : List.of("/idp/login", "/idp/jwks")) {
+        EdgeClient.Answer answer =
+            client().get("idp.dev.acme.example.com", path, Map.of("X-Qits-User", "admin"));
+        assertEquals("idp-dev", answer.line("upstream"), path + ": " + answer.body());
+        assertNull(answer.upstreamHeader("X-Qits-User"), "a forged identity is stripped");
+      }
+      // Off its own route the name is gated as any other: no credential, no upstream.
+      EdgeClient.Answer gated = client().get("idp.dev.acme.example.com", "/v2/");
+      assertTrue(gated.status() == 401 || gated.status() == 302, gated.status() + gated.body());
+      assertNull(gated.line("upstream"));
+      // And the prefix stays idp's: on another platform label it opens nothing.
+      assertNull(client().get("registry.dev.acme.example.com", "/idp/login").line("upstream"));
+    } finally {
+      routingBootstrap.authoritative(true);
+    }
+  }
+
+  @Test
+  void aPublishedIdpHostPassesItsOwnRouteThroughWithTheCredentialAsSent() {
+    // The same rule as idp's platform label, on the host idp's deployment published: the label is
+    // `idp` either way. A Basic grant reaches idp as sent, with no grant made by the edge.
+    publishIdpHost();
+    int grants = StubGateways.grants();
+    String pair =
+        "Basic "
+            + Base64.getEncoder()
+                .encodeToString("dev-qits-ci:secret".getBytes(StandardCharsets.UTF_8));
+    EdgeClient.Answer answer =
+        client()
+            .send(
+                HttpMethod.POST,
+                "idp.dev.acme.example.com",
+                "/idp/token",
+                "grant_type=client_credentials",
+                Map.of("Authorization", pair, "X-Qits-User", "admin"));
+    assertEquals(IDP_UPSTREAM, answer.line("upstream"), answer.body());
+    assertEquals(pair, answer.upstreamHeader("Authorization"));
+    assertEquals(grants, StubGateways.grants());
     assertNull(answer.upstreamHeader("X-Qits-User"));
   }
 

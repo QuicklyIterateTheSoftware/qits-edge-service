@@ -282,6 +282,37 @@ public class EdgeAuth {
     return scheme.startsWith(BEARER) || scheme.startsWith(BASIC);
   }
 
+  /** The role idp mints for the platform's own services, and only for them. */
+  static final String SYSTEM_ROLE = "qits:system";
+
+  /**
+   * Whether this {@code Authorization} value is a JWT carried as {@code Bearer} whose roles include
+   * {@link #SYSTEM_ROLE} — a platform service calling on its own behalf (qits-1403).
+   *
+   * <p><b>It decides nothing about acceptance</b>: it reads claims without a key, so it is asked
+   * only of a request {@link #checkCredential} already accepted, and of the value the caller
+   * PRESENTED, read before that check — which rewrites an accepted Basic pair or opaque token into
+   * the Bearer JWT it stood for. A {@code Basic} value and an opaque {@code qits_tok_} token are
+   * therefore never service bearers here, whatever JWT idp handed back for them: an agent's token
+   * is not a service's statement about itself.
+   *
+   * <p>Package-private and static so it is asserted without booting anything.
+   */
+  static boolean isServiceBearer(String authorization) {
+    if (authorization == null || !authorization.toLowerCase(Locale.ROOT).startsWith(BEARER)) {
+      return false;
+    }
+    String presented = authorization.substring(BEARER.length()).trim();
+    if (TokenValue.isToken(presented)) {
+      return false;
+    }
+    try {
+      return SignedJwt.parse(presented).roles().contains(SYSTEM_ROLE);
+    } catch (RuntimeException unreadable) {
+      return false;
+    }
+  }
+
   /**
    * Whether this vhost admits this request with no credential at all: the enforcement switch and
    * the reads {@link AuthConfig#anonymousReadApps()} opened on its app label.

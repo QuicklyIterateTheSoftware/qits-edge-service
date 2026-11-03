@@ -31,6 +31,51 @@ class EdgeRouterNamesTest {
   }
 
   @Test
+  void onlyAPlatformLabelIsServedBeforeTheCatchUpEnds() {
+    // qits-1403: the edge's own catch-up dials qits-events, which fetches its keys from
+    // idp.qits.<domain> through the edge — so idp's name cannot wait behind the replay. Every
+    // platform label is answered from code; everything else keeps the 503.
+    HostEnvironments names =
+        HostEnvironments.of(
+            java.util.List.of("prod", "dev"), "prod", PlatformApps.labels(), "wohlben.eu");
+    java.util.Map<String, Boolean> projects = java.util.Map.of("qits", false, "acme", true);
+
+    assertTrue(EdgeRouter.servedBeforeCatchUp(names.route("idp.qits.wohlben.eu", projects)));
+    assertTrue(EdgeRouter.servedBeforeCatchUp(names.route("registry.qits.wohlben.eu", projects)));
+    assertTrue(
+        EdgeRouter.servedBeforeCatchUp(names.route("githost.dev.localhost:8080", projects)),
+        "a machine name of a platform label too");
+
+    assertFalse(
+        EdgeRouter.servedBeforeCatchUp(names.route("ci.dev.acme.wohlben.eu", projects)),
+        "a published name needs the projection");
+    assertFalse(EdgeRouter.servedBeforeCatchUp(names.route("qits.wohlben.eu", projects)));
+    assertFalse(EdgeRouter.servedBeforeCatchUp(names.route("wohlben.eu", projects)));
+    assertFalse(
+        EdgeRouter.servedBeforeCatchUp(names.route("idp.nosuchproject.wohlben.eu", projects)),
+        "an unknown project is no application position");
+  }
+
+  @Test
+  void onlyACredentialOnIdpsOwnRoutePassesThroughUnchecked() {
+    io.vertx.core.MultiMap credential =
+        io.vertx.core.MultiMap.caseInsensitiveMultiMap().add("authorization", "Basic eDp5");
+    io.vertx.core.MultiMap none = io.vertx.core.MultiMap.caseInsensitiveMultiMap();
+    Route idp = Route.app("prod", "idp", "qits");
+
+    assertTrue(EdgeRouter.passesThroughToIdp(idp, "/idp/token", credential));
+    assertTrue(EdgeRouter.passesThroughToIdp(idp, "/idp/api/tokens/introspect", credential));
+    assertFalse(
+        EdgeRouter.passesThroughToIdp(idp, "/idp/login", none),
+        "no credential keeps the ordinary path: anonymous prefix or session");
+    assertFalse(EdgeRouter.passesThroughToIdp(idp, "/v2/", credential), "off idp's own route");
+    assertFalse(
+        EdgeRouter.passesThroughToIdp(
+            Route.app("prod", "registry", "qits"), "/idp/token", credential),
+        "another label's /idp/ is not idp's");
+  }
+
+  @Test
   void nothingStatedIsNothingComposed() {
     // Not reachable through configuration — the key has a default — but the normalisation is the
     // same function a Host goes through, and an empty domain is what EdgeSessions refuses at boot.

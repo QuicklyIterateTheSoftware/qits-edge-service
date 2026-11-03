@@ -61,8 +61,10 @@ renamed_from: qits-platform-edge
 # idp:client ASKS QITS-DEPLOYMENTS TO PROVISION THIS APPLICATION'S OWN QITS-IDP SERVICE CLIENT — id
 # `dev-qits-edge` (derived from env + application), roles `qits:system`, fixed in qits-idp code. The
 # deployer stores the secret the way it stores a database password, and injects
-# QITS_RESOURCE_IDP_URL, QITS_RESOURCE_IDP_CLIENT_ID and QITS_RESOURCE_IDP_CLIENT_SECRET, which are
-# the only variables the edge's qits.edge.idp.* keys read — there is no fallback any more (qits-540).
+# QITS_RESOURCE_IDP_URL, QITS_RESOURCE_IDP_CLIENT_ID and QITS_RESOURCE_IDP_CLIENT_SECRET. The edge
+# reads the client pair only — there is no fallback any more (qits-540). It does NOT read the URL:
+# that is idp's public name, served by this very process, so the edge dials idp on its internal
+# alias instead (qits.edge.idp.dial-url, qits-1403).
 #
 # Ticket qits-162, epic qits-540 contract C3.
 resources: postgresql:edge:qits_platform_edge, postgresql:eventstream:qits_platform_edge_eventstream, idp:client
