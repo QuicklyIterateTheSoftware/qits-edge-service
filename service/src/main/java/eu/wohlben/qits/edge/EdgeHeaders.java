@@ -42,8 +42,10 @@ import java.util.List;
  * A session's own identity is written back after the strip and only then; a request without one has
  * the namespace emptied and no person asserted, its identity being whatever its token proves. The
  * calling application, {@link #CALLER}, is written back the same way whenever the page the request
- * came from is one of the platform's own, session or not. The gateway one hop in still does its
- * own, and has to: a request may reach it from qits-net without passing this process at all.
+ * came from is one of the platform's own, session or not. One exception, and it is narrow: a
+ * request carrying an accepted {@code qits:system} JWT keeps the attribution its service stamped on
+ * it — {@link #SERVICE_ATTRIBUTION} — and nothing else. The gateway one hop in still does its own,
+ * and has to: a request may reach it from qits-net without passing this process at all.
  *
  * <p><b>Nothing else is touched.</b> No header outside the reserved prefix is stripped, no path is
  * rewritten, no body is read. {@code Authorization} and every custom header pass through as they
@@ -97,6 +99,24 @@ final class EdgeHeaders implements ProxyInterceptor {
    */
   static final String CALLER = RESERVED_PREFIX + "Caller";
 
+  /** The event or request a service's call was caused by — set by the calling service itself. */
+  static final String CAUSATION_ID = RESERVED_PREFIX + "Causation-Id";
+
+  /** The environment a service's call is made in — set by the calling service itself. */
+  static final String ENVIRONMENT = RESERVED_PREFIX + "Environment";
+
+  /**
+   * The attribution a SERVICE states about its own call, kept as sent when — and only when — the
+   * request carries an accepted {@code qits:system} JWT of its own (qits-1403). Every service
+   * stamps these on its outbound calls, and once those calls reach a peer through this process
+   * rather than on qits-net the strip would erase them: a trace would lose who asked and why. A
+   * service bearer is a credential idp minted for a platform service, checked here in full, so its
+   * statement about itself is as good as the one it made on qits-net. The identity headers — {@link
+   * #USER}, {@link #USER_ID}, {@link #ROLES} — are never in this list: a machine's identity is its
+   * token.
+   */
+  static final List<String> SERVICE_ATTRIBUTION = List.of(CAUSATION_ID, CALLER, ENVIRONMENT);
+
   /**
    * Whether a header name belongs to the reserved namespace. Case-insensitive: header names are,
    * and a client sending {@code x-qits-user} must be treated exactly like one sending {@code
@@ -134,6 +154,35 @@ final class EdgeHeaders implements ProxyInterceptor {
    *     null to assert none — a machine's request, a foreign page, a name no application serves
    */
   static void applyIdentity(MultiMap headers, EdgeSessions.Session session, String caller) {
+    applyIdentity(headers, session, caller, false);
+  }
+
+  /**
+   * {@link #applyIdentity(MultiMap, EdgeSessions.Session, String)}, for a request that may carry a
+   * service bearer.
+   *
+   * <p><b>A service bearer keeps its own attribution</b>: with {@code serviceBearer} true, the
+   * {@link #SERVICE_ATTRIBUTION} headers it sent are written back after the strip exactly as they
+   * arrived, and the page's caller is asserted only when it sent no {@link #CALLER} of its own.
+   * Everything else in the namespace goes, identity above all. With it false this is today's rule
+   * unchanged: strip all of it, assert the page's caller.
+   *
+   * @param serviceBearer whether the request carried a JWT this process accepted and whose roles
+   *     include {@code qits:system} — {@link EdgeAuth#isServiceBearer}. Never true for a browser
+   *     session, an anonymous request, a client secret or an opaque {@code qits_tok_} token
+   */
+  static void applyIdentity(
+      MultiMap headers, EdgeSessions.Session session, String caller, boolean serviceBearer) {
+    // The service's own statement, read before the strip and only for a service bearer.
+    java.util.Map<String, List<String>> kept = new java.util.LinkedHashMap<>();
+    if (serviceBearer) {
+      for (String name : SERVICE_ATTRIBUTION) {
+        List<String> values = headers.getAll(name);
+        if (!values.isEmpty()) {
+          kept.put(name, List.copyOf(values));
+        }
+      }
+    }
     // Snapshot the names first: removing from the map while iterating its own name view would
     // otherwise skip entries.
     for (String name : List.copyOf(headers.names())) {
@@ -142,7 +191,8 @@ final class EdgeHeaders implements ProxyInterceptor {
       }
     }
     // Only now, with the namespace provably empty, is it safe to write into it.
-    if (caller != null) {
+    kept.forEach(headers::set);
+    if (caller != null && !headers.contains(CALLER)) {
       headers.set(CALLER, caller);
     }
     if (session == null) {

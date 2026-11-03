@@ -58,8 +58,14 @@ a surviving projection is safe and there is no projection truncate.
 
 Until qits-events explicitly marks the final catch-up page as its head, `/q/health/ready` is DOWN,
 `/main-navigation` returns `503 Retry-After: 1`, and every non-`/q` request returns the same
-retryable `503`. The edge therefore never presents a partial direct-routing or navigation view as
-authoritative. An unavailable event log or a failed event handler leaves it down and retries after
+retryable `503` — **except a platform app label's** (`PlatformApps`: `registry`, `mirror`,
+`githost`, `idp`), which is served from code throughout, exactly as if nothing had been published
+(qits-1403). The persisted snapshot is not consulted for those names until the head is reached. The
+exception is not a convenience: the edge's own catch-up dials qits-events, and qits-events fetches
+the keys it checks that call's token with from `https://idp.qits.<domain>/idp/jwks` — through the
+edge. Holding `idp` behind the replay would be a boot that waits for itself. The edge therefore
+never presents a partial direct-routing or navigation view as authoritative, and never needs one to
+serve the four names it routes by rule. An unavailable event log or a failed event handler leaves it down and retries after
 `qits.edge.projection.catchup.retry`; a confirmed head enables admission. The ordinary generic
 eventstream startup sweep is disabled here because this named, readiness-owning rebuild is the
 startup path; scheduled sweeps remain the post-start safety net.
@@ -251,8 +257,10 @@ machine token are both answered `404` like any other request.
   but it issues none, stores none, and serves no page. Registration, login and logout are
   qits-idp's, reached through the anonymous `/idp/` prefix on idp's own host.
 - **No header stripping or injection beyond `X-Forwarded-*` and `X-Qits-*`.** The reserved prefix is
-  stripped, and the three identity headers are asserted, only while the session gate is on and only
-  where a session was actually used: a service vhost a browser reached with its cookie. A service
+  stripped on every request, and the three identity headers are asserted only while the session gate
+  is on and only where a session was actually used: a service vhost a browser reached with its
+  cookie. A `qits:system` bearer keeps its own `X-Qits-Causation-Id`, `X-Qits-Caller` and
+  `X-Qits-Environment` (see *A service's own name, gated per request*). A service
   still does its own hygiene and has to — a request can reach it from qits-net without passing this
   process. `Authorization`, `Cookie` and every custom header pass through untouched.
 - **No UI, no SPA, no landing page, no `/api`.** The paths this process answers are `/q`,
@@ -453,7 +461,7 @@ a file.
 | `qits.edge.projection.catchup.required` | `QITS_EDGE_PROJECTION_CATCHUP_REQUIRED` | `true` | Requires a complete deployment-history rebuild before the edge is ready; turn off only in an intentionally offline test/dev setup |
 | `qits.edge.projection.catchup.retry` | `QITS_EDGE_PROJECTION_CATCHUP_RETRY` | `PT1S` | Delay before retrying an incomplete, failed, or unavailable deployment-history read |
 | `qits.edge.shutdown.linger` | `QITS_EDGE_SHUTDOWN_LINGER` | `10s` | How long the process stays alive after the HTTP drain so the kernel can send what the last responses queued; with `quarkus.shutdown.timeout` it must stay under the 10m stop grace (qits-1170) |
-| `qits.edge.idp.dial-url` | `QITS_RESOURCE_IDP_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-idp:8080/idp` | The address the edge dials. `/jwks`, `/token` and the two introspection paths are derived from it, never configured. It is never the issuer: the accepted `iss` is `https://idp.qits.<qits.edge.domain>` alone, derived in code and not configurable (qits-730). `QITS_IDP_DIAL_URL` is not read any more (qits-540) |
+| `qits.edge.idp.dial-url` | `QITS_EDGE_IDP_DIAL_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-idp:8080/idp` | The address the edge dials. `/jwks`, `/token` and the two introspection paths are derived from it, never configured. It is never the issuer: the accepted `iss` is `https://idp.qits.<qits.edge.domain>` alone, derived in code and not configurable (qits-730). **Internal on purpose** (qits-1403, exception E1): `QITS_RESOURCE_IDP_URL` is not read any more, because the deployer makes it idp's public name — which this process serves — and the edge must not dial its own gate to check a token. Nothing injects `QITS_EDGE_IDP_DIAL_URL`. `QITS_IDP_DIAL_URL` is not read either (qits-540) |
 | `qits.edge.auth.enforce-on-apps` | `QITS_EDGE_AUTH_ENFORCE_ON_APPS` | `true` | Service vhosts require a valid idp token |
 | `qits.edge.auth.anonymous-read-apps` | `QITS_EDGE_AUTH_ANONYMOUS_READ_APPS` | — | App labels whose `GET` and `HEAD` are open; every other method on them still needs a token |
 | `qits.edge.auth.clock-skew-seconds` | `QITS_EDGE_AUTH_CLOCK_SKEW_SECONDS` | `30` | How far this clock and idp's may disagree about `exp` |
@@ -473,7 +481,8 @@ a file.
 | `qits.edge.sessions.stale-grace-ms` | `QITS_EDGE_SESSIONS_STALE_GRACE_MS` | `60000` | How long a cached session outlives an **unreachable** idp |
 | `qits.edge.idp.client-id` | `QITS_RESOURCE_IDP_CLIENT_ID` | — | The edge's own idp client, for introspection: the `idp:client` resource the deployer injects (epic qits-540 dossier, 'Plan (as of 2026-09-13)', C4/D6/D7). Its id is `{env}-qits-edge` and stays so — the plan's D2 cutover to `qits-platform-edge` is obsolete with the platform tier gone. `QITS_EDGE_SESSIONS_CLIENT_ID` is not read any more (qits-540) |
 | `qits.edge.idp.client-secret` | `QITS_RESOURCE_IDP_CLIENT_SECRET` | — | Its secret; `QITS_EDGE_SESSIONS_CLIENT_SECRET` is not read any more. Unset is "no credential", which fails startup if the gate is on. These three keys were `qits.idp.dial-url` and `qits.edge.sessions.client-*`, whose environment spellings ARE the older variable names — and an environment variable outranks `application.properties`, so with both injected the old one won (qits-163). They stay under `qits.edge.idp` so a container still carrying the older names cannot set them. Nothing injects `QITS_EDGE_IDP_*` |
-| `qits.observability.url` | `QITS_OBSERVABILITY_URL` | `http://qits-observability:8080` | Where telemetry goes; the OTLP endpoint is derived from it |
+| `qits.events.url` | `QITS_EVENTS_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-events:8080` | Where the edge's durable consumers read qits-events. **Pinned in this repository's `application.properties`** (qits-1403, exception E1), above the qits-eventstream jar's own default, which is to move to qits-events' public name — through the edge, whose catch-up is what that name waits behind |
+| `qits.observability.url` | `QITS_OBSERVABILITY_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-observability:8080` | Where telemetry goes; the OTLP endpoint is derived from it. Internal for the same reason: the edge's telemetry must not loop through its own listener |
 
 Six things fail **at startup** rather than per request, deliberately: an environment or application
 name that could not be a DNS label, a default that is not in the list, an application that shares an
@@ -492,6 +501,14 @@ gives every service on qits-net:
 | `registry` | `qits-artifacts` | `dev-qits-artifacts:8080` |
 | `mirror` | `qits-mirror` | `dev-qits-mirror:8080` |
 | `githost` | `qits-githost` | `dev-qits-githost:8080` |
+| `idp` | `qits-idp` | `dev-qits-idp:8080` |
+
+`idp` joined the three machine vhosts in qits-1403 so its name answers before the deployment
+catch-up ends (see *Startup is a rebuild*). Its gate is the one it had as a published host: the
+anonymous prefixes (`/idp/`, so the login page and `/idp/jwks`) on its own name, and the ordinary
+service-vhost gate for anything else. `PlatformApps` states idp's own route, `/idp`, so that "on the
+name that owns them" holds without the projection; once idp's deployment is replayed, its published
+`idp` host must point at the same `<env>-qits-idp:8080` or the frame is refused, as `registry`'s is.
 
 These used to be keys — `qits.edge.apps.<app>.host-pattern`, `audience-pattern` and `port` — and
 the live store held six `QITS_EDGE_APPS_*_PATTERN` entries spelling this one rule, one of them a
@@ -714,7 +731,13 @@ dropped first, whatever the outcome: the reserved prefix is what a hop *asserts*
 
 1. a `Bearer` or `Basic` **machine credential** takes the machine path above, checked in full, and
    is proxied with no identity headers and with the browser cookie removed — a machine's identity is
-   in its token;
+   in its token. **A service bearer keeps its attribution** (qits-1403): when the credential the
+   caller itself presented is a `Bearer` JWT the edge accepted and whose `groups` include
+   `qits:system`, its `X-Qits-Causation-Id`, `X-Qits-Caller` and `X-Qits-Environment` pass as sent,
+   so a service's call to a peer's public name traces like its call on qits-net did. Nothing else
+   qualifies — a client secret, a git `oauth2:` pair, an opaque `qits_tok_` token (whatever JWT idp
+   stands it for) and a JWT without the role all keep the strip — and `X-Qits-User`, `X-Qits-User-Id`
+   and `X-Qits-Roles` are stripped from every request, service bearer or not;
 2. otherwise, with the session gate on, a `qits-session` **cookie** is introspected at idp and
    becomes `X-Qits-User`, `X-Qits-User-Id` and `X-Qits-Roles` (comma-separated — a role never holds
    a comma). **The cookie is kept**: the service behind the name is an ordinary qits service and the
@@ -732,7 +755,8 @@ With the session gate off, and for a configured application with no published ho
 exactly as it stood.
 
 **`X-Qits-Caller` names the application whose page a request comes from** (qits-1198), on every
-proxied request and independent of the four branches above. A service stamps it on its own outbound
+proxied request and independent of the four branches above — except that a service bearer's own
+`X-Qits-Caller`, where it sent one, is kept rather than replaced. A service stamps it on its own outbound
 calls; a browser cannot, so the edge asserts it after the same strip. The page is the request's
 `Origin`, else the origin of its `Referer` (a same-origin GET sends no `Origin`); it must be one CORS
 admits under the stated domain, and its name is then read exactly as a request to it would be routed

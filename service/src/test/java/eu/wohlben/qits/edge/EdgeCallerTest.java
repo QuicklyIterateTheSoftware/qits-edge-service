@@ -3,6 +3,7 @@ package eu.wohlben.qits.edge;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.vertx.core.MultiMap;
 import java.util.LinkedHashMap;
@@ -205,5 +206,105 @@ class EdgeCallerTest {
 
     assertEquals("qits-landing", headers.get(EdgeHeaders.CALLER));
     assertEquals("operator", headers.get(EdgeHeaders.USER));
+  }
+
+  // --- a service bearer's own attribution (qits-1403) --------------------------------------------
+
+  /** Everything a service stamps on its call, plus the identity a client must never assert. */
+  private static MultiMap sentByAService() {
+    MultiMap headers = MultiMap.caseInsensitiveMultiMap();
+    headers.add("x-qits-causation-id", "evt-42");
+    headers.add(EdgeHeaders.CALLER, "qits-ci");
+    headers.add(EdgeHeaders.ENVIRONMENT, "dev");
+    headers.add(EdgeHeaders.USER, "admin");
+    headers.add(EdgeHeaders.USER_ID, "id-0");
+    headers.add(EdgeHeaders.ROLES, "qits:admin");
+    headers.add("X-Qits-Anything-Else", "forged");
+    return headers;
+  }
+
+  @Test
+  void aServiceBearerKeepsItsCausationCallerAndEnvironmentAndNothingElse() {
+    MultiMap headers = sentByAService();
+
+    EdgeHeaders.applyIdentity(headers, null, "qits-landing", true);
+
+    assertEquals(List.of("evt-42"), headers.getAll(EdgeHeaders.CAUSATION_ID));
+    assertEquals(
+        List.of("qits-ci"),
+        headers.getAll(EdgeHeaders.CALLER),
+        "the service's own, not the page's");
+    assertEquals(List.of("dev"), headers.getAll(EdgeHeaders.ENVIRONMENT));
+    assertFalse(headers.contains(EdgeHeaders.USER), "identity is always stripped");
+    assertFalse(headers.contains(EdgeHeaders.USER_ID));
+    assertFalse(headers.contains(EdgeHeaders.ROLES));
+    assertFalse(headers.contains("X-Qits-Anything-Else"), "the rest of the namespace goes too");
+  }
+
+  @Test
+  void aServiceBearerThatNamedNoCallerGetsThePagesReading() {
+    MultiMap headers = MultiMap.caseInsensitiveMultiMap();
+    headers.add(EdgeHeaders.CAUSATION_ID, "evt-42");
+
+    EdgeHeaders.applyIdentity(headers, null, "qits-landing", true);
+
+    assertEquals("qits-landing", headers.get(EdgeHeaders.CALLER));
+    assertEquals("evt-42", headers.get(EdgeHeaders.CAUSATION_ID));
+  }
+
+  @Test
+  void everyOtherRequestHasTheAttributionStrippedAsBefore() {
+    // A browser, an anonymous read, a client secret, an agent's opaque token: none is a service
+    // bearer, so none keeps what it sent — the page's caller is asserted and nothing else is.
+    MultiMap headers = sentByAService();
+
+    EdgeHeaders.applyIdentity(headers, null, "qits-landing", false);
+
+    assertEquals(List.of("qits-landing"), headers.getAll(EdgeHeaders.CALLER));
+    assertFalse(headers.contains(EdgeHeaders.CAUSATION_ID));
+    assertFalse(headers.contains(EdgeHeaders.ENVIRONMENT));
+    assertFalse(headers.contains(EdgeHeaders.USER));
+
+    MultiMap browser = sentByAService();
+    EdgeHeaders.applyIdentity(
+        browser, new EdgeSessions.Session("id-1", "operator", "qits:admin", 0L), null, false);
+    assertFalse(browser.contains(EdgeHeaders.CALLER));
+    assertFalse(browser.contains(EdgeHeaders.CAUSATION_ID));
+    assertEquals("operator", browser.get(EdgeHeaders.USER), "the session's, not the client's");
+    assertEquals("qits:admin", browser.get(EdgeHeaders.ROLES));
+  }
+
+  @Test
+  void onlyAPresentedJwtWithTheSystemRoleIsAServiceBearer() {
+    String issuer = "https://idp.qits." + DOMAIN;
+    List<String> platform = List.of(PlatformApps.PLATFORM_AUDIENCE);
+    assertTrue(
+        EdgeAuth.isServiceBearer(
+            "Bearer " + TestTokens.withRoles(issuer, platform, List.of("qits:system"))));
+    assertTrue(
+        EdgeAuth.isServiceBearer(
+            "bearer " + TestTokens.withRoles(issuer, platform, List.of("x", "qits:system"))),
+        "the scheme is case-insensitive");
+
+    assertFalse(
+        EdgeAuth.isServiceBearer(
+            "Bearer " + TestTokens.withRoles(issuer, platform, List.of("qits:agent"))),
+        "an agent's JWT is no service's");
+    assertFalse(
+        EdgeAuth.isServiceBearer("Bearer " + TestTokens.valid(issuer, platform)), "no roles");
+    assertFalse(
+        EdgeAuth.isServiceBearer(
+            "Bearer " + TokenValue.PREFIX + "abcdefghijklmnopqrstuvwxyz0123456789"),
+        "an opaque token is never one, whatever JWT idp hands back for it");
+    assertFalse(
+        EdgeAuth.isServiceBearer(
+            "Basic "
+                + java.util.Base64.getEncoder()
+                    .encodeToString(
+                        ("oauth2:" + TestTokens.withRoles(issuer, platform, List.of("qits:system")))
+                            .getBytes(java.nio.charset.StandardCharsets.UTF_8))),
+        "a Basic pair is never one");
+    assertFalse(EdgeAuth.isServiceBearer("Bearer not-a-jwt"));
+    assertFalse(EdgeAuth.isServiceBearer(null));
   }
 }

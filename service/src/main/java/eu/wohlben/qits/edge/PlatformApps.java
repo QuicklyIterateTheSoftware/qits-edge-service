@@ -25,6 +25,14 @@ import java.util.Set;
  *
  * <p>A label that is not here reaches a service only through the deployment projection: the service
  * publishes the name it answers to. Projected services are what every other host is.
+ *
+ * <p><b>These labels are served before the deployment catch-up ends</b> (qits-1403), and that is
+ * the second reason they are code. Every other name waits behind the startup replay with a {@code
+ * 503}; a name here does not, because the edge's own catch-up dials qits-events, and qits-events
+ * fetches its signing keys from {@code idp.qits.<domain>} — through this process. Holding {@link
+ * #IDP} behind the replay would be a boot that waits for itself. So the whole label set answers
+ * from this class while the projection is still reading, exactly as it would with nothing
+ * published.
  */
 final class PlatformApps {
 
@@ -37,12 +45,33 @@ final class PlatformApps {
   /** Every platform application listens here; an override carries its own port. */
   static final int PORT = 8080;
 
+  /**
+   * The label idp answers on: {@code idp.qits.<domain>}, where the login page, {@code /jwks} and
+   * {@code /token} live, and the issuer every accepted token names.
+   */
+  static final String IDP = "idp";
+
   /** App label → the application behind it. */
   private static final Map<String, String> APPLICATIONS =
       Map.of(
-          "registry", "qits-artifacts",
-          "mirror", "qits-mirror",
-          "githost", "qits-githost");
+          "registry",
+          "qits-artifacts",
+          "mirror",
+          "qits-mirror",
+          "githost",
+          "qits-githost",
+          IDP,
+          "qits-idp");
+
+  /**
+   * The route a platform application owns, where the edge has to know it without the projection:
+   * idp's {@code /idp} (its {@code deployments.yml} {@code routes:}). It is what lets the anonymous
+   * prefixes ({@code qits.edge.sessions.anonymous-prefixes}, {@code /idp/}) be served on idp's own
+   * name before idp's deployment has been replayed — the same "on the name that OWNS them" rule the
+   * projection answers once it has. A label with no entry owns no anonymous path here; registry,
+   * mirror and githost need none.
+   */
+  private static final Map<String, String> ROUTES = Map.of(IDP, "/idp");
 
   private PlatformApps() {}
 
@@ -63,6 +92,16 @@ final class PlatformApps {
       throw new IllegalArgumentException("`" + label + "` is not a platform app label");
     }
     return application;
+  }
+
+  /**
+   * Whether {@code path} is under the route the platform application behind {@code label} owns —
+   * {@link #ROUTES}, matched as a published endpoint matches: the route itself or anything below
+   * it. False for a label with no stated route.
+   */
+  static boolean owns(String label, String path) {
+    String route = label == null ? null : ROUTES.get(label.toLowerCase(Locale.ROOT));
+    return route != null && path != null && (path.equals(route) || path.startsWith(route + "/"));
   }
 
   /** The application's wire alias in one environment: {@code dev-qits-artifacts}. */

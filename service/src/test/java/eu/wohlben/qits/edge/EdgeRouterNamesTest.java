@@ -31,6 +31,32 @@ class EdgeRouterNamesTest {
   }
 
   @Test
+  void onlyAPlatformLabelIsServedBeforeTheCatchUpEnds() {
+    // qits-1403: the edge's own catch-up dials qits-events, which fetches its keys from
+    // idp.qits.<domain> through the edge — so idp's name cannot wait behind the replay. Every
+    // platform label is answered from code; everything else keeps the 503.
+    HostEnvironments names =
+        HostEnvironments.of(
+            java.util.List.of("prod", "dev"), "prod", PlatformApps.labels(), "wohlben.eu");
+    java.util.Map<String, Boolean> projects = java.util.Map.of("qits", false, "acme", true);
+
+    assertTrue(EdgeRouter.servedBeforeCatchUp(names.route("idp.qits.wohlben.eu", projects)));
+    assertTrue(EdgeRouter.servedBeforeCatchUp(names.route("registry.qits.wohlben.eu", projects)));
+    assertTrue(
+        EdgeRouter.servedBeforeCatchUp(names.route("githost.dev.localhost:8080", projects)),
+        "a machine name of a platform label too");
+
+    assertFalse(
+        EdgeRouter.servedBeforeCatchUp(names.route("ci.dev.acme.wohlben.eu", projects)),
+        "a published name needs the projection");
+    assertFalse(EdgeRouter.servedBeforeCatchUp(names.route("qits.wohlben.eu", projects)));
+    assertFalse(EdgeRouter.servedBeforeCatchUp(names.route("wohlben.eu", projects)));
+    assertFalse(
+        EdgeRouter.servedBeforeCatchUp(names.route("idp.nosuchproject.wohlben.eu", projects)),
+        "an unknown project is no application position");
+  }
+
+  @Test
   void nothingStatedIsNothingComposed() {
     // Not reachable through configuration — the key has a default — but the normalisation is the
     // same function a Host goes through, and an empty domain is what EdgeSessions refuses at boot.

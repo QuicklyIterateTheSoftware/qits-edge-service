@@ -554,9 +554,15 @@ public class EdgeRouter {
       request.pause();
     }
 
-    if (!projectionBootstrap.authoritative()) {
+    HostEnvironments.Route named =
+        hostEnvironments.route(
+            authority(request), projects.projects(), routes.landingEnvironments());
+    boolean authoritative = projectionBootstrap.authoritative();
+    if (!authoritative && !servedBeforeCatchUp(named)) {
       // A persisted snapshot can be stale or wholly absent until the startup replay has reached
-      // qits-events' confirmed head. Callers get an explicit, retryable admission refusal instead.
+      // qits-events' confirmed head. Callers get an explicit, retryable admission refusal instead —
+      // every caller but a platform label's, which needs no projection at all
+      // (servedBeforeCatchUp).
       request
           .response()
           .setStatusCode(503)
@@ -565,10 +571,6 @@ public class EdgeRouter {
           .end("edge deployment routing is catching up; retry shortly\\n");
       return;
     }
-
-    HostEnvironments.Route named =
-        hostEnvironments.route(
-            authority(request), projects.projects(), routes.landingEnvironments());
     if (named.reading() == HostEnvironments.Reading.UNKNOWN_PROJECT) {
       // The one reading a later frame can still change, and the only one the catch-up barrier
       // holds back: every other label is read by position, so nothing the projection learns moves
@@ -591,7 +593,9 @@ public class EdgeRouter {
       unreadable(request, named);
       return;
     }
-    Target target = target(named);
+    // Before the catch-up a platform label is answered from code alone, as if nothing had been
+    // published: the persisted snapshot is exactly what is not trusted yet.
+    Target target = authoritative ? target(named) : new Target(named, null);
     if (target == null) {
       // NOT a fall-through to the gateway. The name is app-shaped, so it was aimed at a service —
       // and no configuration and no deployment claims it. Answering here is the whole point: a
@@ -630,6 +634,20 @@ public class EdgeRouter {
     }
 
     serviceGate(request, target);
+  }
+
+  /**
+   * Whether this name is answered while the deployment projection is still catching up: a {@link
+   * PlatformApps} label, and nothing else (qits-1403).
+   *
+   * <p>Such a name needs no projection to be routed — its upstream is derived in code — and one of
+   * them cannot wait for it: the edge's own catch-up dials qits-events, which fetches its signing
+   * keys from {@code idp.qits.<domain>} through this process. Every other name, and {@code
+   * /q/health/ready}, stays behind the barrier exactly as before. Static so it is asserted without
+   * a boot — see {@code EdgeRouterNamesTest}.
+   */
+  static boolean servedBeforeCatchUp(HostEnvironments.Route named) {
+    return named.toApp() && PlatformApps.contains(named.app());
   }
 
   /**
@@ -1111,16 +1129,28 @@ public class EdgeRouter {
     if (sessions.enabled()
         && !EdgeAuth.carriesCredential(request)
         && sessions.anonymous(request.path())
-        && target.host() != null) {
-      EdgeEndpoint endpoint = routes.resolve(target.environment(), request.path());
-      if (endpoint != null && endpoint.application().equals(target.host().application())) {
-        // Nobody vouched for this caller, so no identity may arrive upstream — proxy() strips the
-        // reserved namespace on every path now, so this needs no strip of its own.
-        proxy(request, target, null);
-        return;
-      }
+        && ownsAnonymousPath(target, request.path())) {
+      // Nobody vouched for this caller, so no identity may arrive upstream — proxy() strips the
+      // reserved namespace on every path now, so this needs no strip of its own.
+      proxy(request, target, null);
+      return;
     }
     machine(request, target);
+  }
+
+  /**
+   * Whether the service behind this name owns {@code path}: for a published host, the endpoint the
+   * projection resolves it to is that service's own; for a platform label nothing has published —
+   * which is every one of them before the catch-up ends — the route {@link PlatformApps#owns}
+   * states in code. The second is what serves idp's login page and {@code /jwks} on {@code idp.<…>}
+   * while the projection is still reading, on the same rule the first applies once it has.
+   */
+  private boolean ownsAnonymousPath(Target target, String path) {
+    if (target.host() != null) {
+      EdgeEndpoint endpoint = routes.resolve(target.environment(), path);
+      return endpoint != null && endpoint.application().equals(target.host().application());
+    }
+    return target.route().toApp() && PlatformApps.owns(target.route().app(), path);
   }
 
   /**
@@ -1142,12 +1172,22 @@ public class EdgeRouter {
       refuseService(request, target);
       return;
     }
+    // Read BEFORE the check, which rewrites an accepted Basic or opaque token into the Bearer JWT
+    // it
+    // stood for: only a JWT the caller itself presented can make it a service bearer.
+    String presented = request.getHeader(HttpHeaders.AUTHORIZATION);
     Future<String> checked = auth.checkCredential(request);
     if (!checked.isComplete()) {
       request.pause();
     }
     checked
-        .onSuccess(rejection -> dispatch(request, target, rejection))
+        .onSuccess(
+            rejection ->
+                dispatch(
+                    request,
+                    target,
+                    rejection,
+                    rejection == null && EdgeAuth.isServiceBearer(presented)))
         .onFailure(
             failure -> {
               if (failure instanceof EdgeAuth.IdpUnreachable) {
@@ -1227,13 +1267,14 @@ public class EdgeRouter {
    * Proxy, or answer the challenge. Split out of {@link #handle} because it is what runs after the
    * credential check, which may have crossed an event-loop boundary to refresh a signing key.
    */
-  private void dispatch(HttpServerRequest request, Target target, String rejection) {
+  private void dispatch(
+      HttpServerRequest request, Target target, String rejection, boolean serviceBearer) {
     if (rejection != null) {
       auth.challenge(request, rejection);
       return;
     }
     // No session, so no identity: a machine's own is in the token it carried.
-    proxy(request, target, null);
+    proxy(request, target, null, serviceBearer);
   }
 
   /**
@@ -1242,6 +1283,19 @@ public class EdgeRouter {
    * has passed through this method, so what it does is done always.
    */
   private void proxy(HttpServerRequest request, Target target, EdgeSessions.Session session) {
+    proxy(request, target, session, false);
+  }
+
+  /**
+   * {@link #proxy(HttpServerRequest, Target, EdgeSessions.Session)}, saying whether the request
+   * carried an accepted {@code qits:system} JWT of its own — whose attribution headers then pass as
+   * sent; see {@link EdgeHeaders#applyIdentity}.
+   */
+  private void proxy(
+      HttpServerRequest request,
+      Target target,
+      EdgeSessions.Session session,
+      boolean serviceBearer) {
     // The reserved X-Qits-* namespace is stripped on EVERY path out of this process, and only a
     // validated session's own identity is written back — both halves in one call, see
     // EdgeHeaders.applyIdentity. A null session (a machine credential, or a read the deployment
@@ -1255,8 +1309,10 @@ public class EdgeRouter {
     // covers a path the interceptor chain never sees.
     // The calling application is asserted in the same call, after the same strip — a client's own
     // X-Qits-Caller is gone either way, and only the edge's reading of the page replaces it.
-    String caller = caller(request);
-    EdgeHeaders.applyIdentity(request.headers(), session, caller);
+    // A service bearer's own X-Qits-Causation-Id, -Caller and -Environment survive the strip; see
+    // EdgeHeaders.applyIdentity. What the span records is whatever caller the request leaves with.
+    EdgeHeaders.applyIdentity(request.headers(), session, caller(request), serviceBearer);
+    String caller = request.getHeader(EdgeHeaders.CALLER);
     if (caller != null) {
       // On the edge's own SERVER span, read off the request's own context: at this point the
       // current one may be another request's — see RequestSpans.
