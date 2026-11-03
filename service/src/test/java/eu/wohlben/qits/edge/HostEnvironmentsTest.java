@@ -288,7 +288,26 @@ class HostEnvironmentsTest {
     // anything else — which is exactly what the catch-up barrier holds back.
     assertEquals(Route.apex("prod"), EDGE.route("wohlben.eu"));
     assertEquals(Reading.UNKNOWN_PROJECT, EDGE.route("qits.wohlben.eu").reading());
-    assertEquals(Reading.UNKNOWN_PROJECT, EDGE.route("githost.qits.wohlben.eu").reading());
+    assertEquals(Reading.UNKNOWN_PROJECT, EDGE.route("ci.qits.wohlben.eu").reading());
+    assertEquals(Reading.UNKNOWN_PROJECT, EDGE.route("githost.someproject.wohlben.eu").reading());
+  }
+
+  @Test
+  void thePlatformsOwnLabelsAreReadBeforeItsProjectIs() {
+    // qits-1403: a fresh edge database knows no project until the project catch-up has read
+    // qits-events — which checks the edge's token against keys from idp.qits.<domain>. So the
+    // platform labels in the platform's own project are apps before that read, in the default
+    // environment, and nothing else is.
+    assertEquals(Route.app("prod", "githost", "qits"), EDGE.route("githost.qits.wohlben.eu"));
+    assertEquals(Route.app("prod", "registry", "qits"), EDGE.route("REGISTRY.qits.wohlben.eu."));
+    assertEquals(
+        Reading.UNKNOWN_PROJECT,
+        EDGE.route("githost.dev.qits.wohlben.eu").reading(),
+        "only the env-less spelling: whether qits has environments is not known yet");
+    assertEquals(
+        Reading.UNKNOWN_PROJECT,
+        EDGE.route("landing.qits.wohlben.eu").reading(),
+        "a label PlatformApps does not hold waits like any other");
   }
 
   // --- what configuration refuses ----------------------------------------------------------------

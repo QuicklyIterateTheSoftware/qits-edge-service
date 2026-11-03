@@ -84,6 +84,14 @@ else is: a configured vhost, a published host, the apex and an environment's own
 the set, and `edge_project` is persisted, so a restarted edge whose rows survived serves normally
 throughout. The window is a genuinely behind projection — a wiped database, or a first boot.
 
+**The platform's own labels on the platform's own project are the exception** (qits-1403):
+`<label>.qits.<domain>`, for a `PlatformApps` label, is that application in the default environment
+even while `qits` has not been read yet. On a fresh database `qits` is unknown until this consumer
+has read qits-projects' log through qits-events, and qits-events checks that read's token against
+keys from `idp.qits.<domain>` — so answering idp's name with the unknown-project 503 would be a boot
+that waits for itself. Only the env-less spelling is read this way (whether `qits` has environments
+is exactly what is not known yet), and every other name in an unread `qits` still waits.
+
 **This is the only proxy tier there is.** There was a second one — `qits-gateway`, one per
 environment, demultiplexing services by PATH inside its tier — and it is gone: every service is
 reached on a name of its own now, so a per-environment hop would have been a second address for

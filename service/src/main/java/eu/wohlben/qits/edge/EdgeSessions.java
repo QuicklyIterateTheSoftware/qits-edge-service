@@ -447,7 +447,7 @@ public class EdgeSessions {
    * platform itself runs is inside it, so its door is the one name a deployment of the edge can
    * compose about itself without being told anything but the domain.
    */
-  static final String PLATFORM_PROJECT = "qits";
+  static final String PLATFORM_PROJECT = HostEnvironments.PLATFORM_PROJECT;
 
   /**
    * The canonical origin, DERIVED from the stated domain: the platform project's own door.
