@@ -599,7 +599,8 @@ class EdgeSessionGateTest {
 
   @Test
   void aPageUnderTheDomainStillOpensItsSocketWithTheCookie() {
-    // Unchanged: no marker offered, so the session is read and asserted as before.
+    // Unchanged: no marker offered, so the session is read as before and opens the socket — with
+    // no identity asserted for it (qits-1373).
     String seen =
         client()
             .handshake(
@@ -610,7 +611,9 @@ class EdgeSessionGateTest {
                     "https://projects.dev.acme.example.com",
                     "Cookie",
                     cookie(StubGateways.SESSION)));
-    assertTrue(seen.lines().anyMatch(("x-qits-user=" + StubGateways.SESSION_USER)::equals), seen);
+    assertTrue(
+        seen.lines().anyMatch(l -> l.startsWith("cookie=") && l.contains("qits-session=")), seen);
+    assertTrue(seen.lines().anyMatch("x-qits-user=-"::equals), seen);
     assertTrue(seen.lines().anyMatch("sec-websocket-protocol=-"::equals), seen);
   }
 
@@ -951,21 +954,22 @@ class EdgeSessionGateTest {
   }
 
   @Test
-  void aSessionOpensAnAppsOwnNameWithItsIdentity() {
+  void aSessionOpensAnAppsOwnNameAndAssertsNoIdentity() {
     // And the other half: registry is a service vhost like any other once the cookie is good. The
     // upstream that answers is the NAMED environment's, which is what the second label decided.
     EdgeClient.Answer answer =
         client().get("registry.dev.acme.example.com", "/v2/_catalog", session());
     assertEquals("registry-dev", answer.line("upstream"));
-    assertEquals(StubGateways.SESSION_USER, answer.upstreamHeader("X-Qits-User"));
+    assertNoIdentity(answer);
   }
 
   // --- a session that works ---------------------------------------------------------------------
 
   @Test
-  void aSpoofedIdentityIsStrippedBeforeTheRealOneIsWritten() {
-    // The forged header and the trusted one have the same name. This is the assertion that the
-    // write happens downstream of the strip rather than beside it.
+  void aSpoofedIdentityIsStrippedAndASessionWritesNoneInItsPlace() {
+    // qits-1373: a valid session opens the gate and asserts nobody. A client's own identity headers
+    // are stripped like the rest of the reserved prefix, and nothing is written back for the
+    // session — the service authenticates the bearer it is sent.
     Map<String, String> spoofed = new java.util.HashMap<>(session());
     spoofed.put("X-Qits-User", "admin");
     spoofed.put("X-Qits-User-Id", "00000000-0000-0000-0000-000000000000");
@@ -973,9 +977,8 @@ class EdgeSessionGateTest {
     spoofed.put("x-qits-something-invented-later", "whatever");
 
     EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", "/api/runs", spoofed);
-    assertEquals(StubGateways.SESSION_USER, answer.upstreamHeader("X-Qits-User"));
-    assertEquals(StubGateways.SESSION_USER_ID, answer.upstreamHeader("X-Qits-User-Id"));
-    assertEquals("qits:admin", answer.upstreamHeader("X-Qits-Roles"));
+    assertEquals("mirror-dev", answer.line("upstream"), "the session opened the gate");
+    assertNoIdentity(answer);
     assertNull(
         answer.upstreamHeader("X-Qits-Something-Invented-Later"),
         "the prefix is the rule, so a header nobody has thought of yet is stripped too");
@@ -993,14 +996,14 @@ class EdgeSessionGateTest {
     assertEquals("POST", answer.line("method"));
     assertEquals("hello edge", answer.line("body"));
     assertEquals("10", answer.line("body-bytes"));
-    assertEquals(StubGateways.SESSION_USER, answer.upstreamHeader("X-Qits-User"));
+    assertNoIdentity(answer);
   }
 
   @Test
   void aWebSocketUpgradeCarriesTheSessionAndDropsASpoofedIdentity() {
-    // The upgrade path never reaches the interceptor chain, so it is a second way to lose both
-    // halves at once — a forged X-Qits-User through the front door, or an authenticated terminal
-    // arriving anonymous. Every workspace terminal on the platform is one of these.
+    // The upgrade path never reaches the interceptor chain, so it is a second way to let a forged
+    // X-Qits-User through the front door. Every workspace terminal on the platform is one of these.
+    // The session still opens the handshake (its cookie arrives); no identity is written for it.
     String seen =
         client()
             .handshake(
@@ -1013,10 +1016,11 @@ class EdgeSessionGateTest {
                     "admin",
                     "X-Qits-Roles",
                     "qits:root"));
-    assertTrue(seen.lines().anyMatch(("x-qits-user=" + StubGateways.SESSION_USER)::equals), seen);
     assertTrue(
-        seen.lines().anyMatch(("x-qits-user-id=" + StubGateways.SESSION_USER_ID)::equals), seen);
-    assertTrue(seen.lines().anyMatch("x-qits-roles=qits:admin"::equals), seen);
+        seen.lines().anyMatch(l -> l.startsWith("cookie=") && l.contains("qits-session=")), seen);
+    assertTrue(seen.lines().anyMatch("x-qits-user=-"::equals), seen);
+    assertTrue(seen.lines().anyMatch("x-qits-user-id=-"::equals), seen);
+    assertTrue(seen.lines().anyMatch("x-qits-roles=-"::equals), seen);
   }
 
   @Test
@@ -1093,15 +1097,12 @@ class EdgeSessionGateTest {
   // --- a service's own name, which is a browser host now ----------------------------------------
 
   @Test
-  void aSessionReachesAServiceHostWithItsIdentityAndKeepsItsCookie() {
-    // The cookie is the credential here, so it stays: the service behind the name is an ordinary
-    // qits service and the browser will make the next request with it too. The three identity
-    // headers are what it reads.
+  void aSessionReachesAServiceHostWithNoIdentityAndKeepsItsCookie() {
+    // The cookie is the credential here, so it stays: the browser will make the next request with
+    // it too. It is the edge's gate and nothing more (qits-1373): no identity header is written.
     EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", "/runs/7", session());
     assertEquals("mirror-dev", answer.line("upstream"), "its own upstream, not the environment's");
-    assertEquals(StubGateways.SESSION_USER, answer.upstreamHeader("X-Qits-User"));
-    assertEquals(StubGateways.SESSION_USER_ID, answer.upstreamHeader("X-Qits-User-Id"));
-    assertEquals("qits:admin", answer.upstreamHeader("X-Qits-Roles"));
+    assertNoIdentity(answer);
     assertTrue(
         answer.upstreamHeader("Cookie").contains("qits-session="), answer.upstreamHeader("Cookie"));
   }
@@ -1122,7 +1123,24 @@ class EdgeSessionGateTest {
                     "Bearer "
                         + TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE))));
     assertEquals("mirror-dev", answer.line("upstream"));
-    assertNull(answer.upstreamHeader("X-Qits-User"));
+    assertNoIdentity(answer);
+  }
+
+  @Test
+  void aBearerCallerHasItsForgedIdentityStrippedAndNoneWritten() {
+    // A bearer is validated by the service itself; the edge writes no identity for it either, and a
+    // client's own X-Qits-User beside a valid token is stripped.
+    Map<String, String> headers =
+        new java.util.HashMap<>(
+            Map.of(
+                "Authorization",
+                "Bearer " + TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE))));
+    headers.put("X-Qits-User", "admin");
+    headers.put("X-Qits-User-Id", "00000000-0000-0000-0000-000000000000");
+    headers.put("X-Qits-Roles", "qits:root");
+    EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", "/api/runs", headers);
+    assertEquals("mirror-dev", answer.line("upstream"));
+    assertNoIdentity(answer);
   }
 
   // --- the application vhosts, untouched
@@ -1133,10 +1151,8 @@ class EdgeSessionGateTest {
     // Nothing browses a registry, so the app vhosts keep the machine gate and nothing of the
     // browser
     // machinery — no session lookup, no redirect. But the reserved-prefix strip is NOT part of that
-    // machinery: it runs on every path out of the edge, because it is the whole basis of a
-    // forward-auth service's trust in X-Qits-User and cannot depend on there being a session here.
-    // A registry does not read the prefix, but this path is shared with application vhosts whose
-    // services do, and a valid machine token is not licence to forge a user identity behind it.
+    // machinery: it runs on every path out of the edge, whatever the credential, so a client's own
+    // X-Qits-* never reaches an upstream — whatever a future app might believe of the namespace.
     assertEquals(401, client().get("registry.dev.acme.example.com", "/v2/").status());
     EdgeClient.Answer answer =
         client()
@@ -1241,7 +1257,7 @@ class EdgeSessionGateTest {
     try {
       EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", "/api/two", session());
       assertEquals("mirror-dev", answer.line("upstream"), "the belief stands while idp is away");
-      assertEquals(StubGateways.SESSION_USER, answer.upstreamHeader("X-Qits-User"));
+      assertNoIdentity(answer);
     } finally {
       StubGateways.idpUp();
     }
@@ -1325,6 +1341,13 @@ class EdgeSessionGateTest {
 
   private static Map<String, String> cookieHeader(String value) {
     return Map.of("Cookie", cookie(value));
+  }
+
+  /** qits-1373: the edge writes no identity header for anybody — session, bearer or none. */
+  private static void assertNoIdentity(EdgeClient.Answer answer) {
+    assertNull(answer.upstreamHeader("X-Qits-User"), "the edge asserts no identity");
+    assertNull(answer.upstreamHeader("X-Qits-User-Id"));
+    assertNull(answer.upstreamHeader("X-Qits-Roles"));
   }
 
   private static Map<String, String> session() {

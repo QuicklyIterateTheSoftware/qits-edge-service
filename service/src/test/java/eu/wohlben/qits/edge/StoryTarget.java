@@ -307,9 +307,9 @@ public final class StoryTarget {
   /** The three forgeries plus the one nobody has invented yet, and whatever else a beat needs. */
   public static Map<String, String> forged(Map<String, String> extra) {
     Map<String, String> headers = new LinkedHashMap<>();
-    headers.put(EdgeHeaders.USER, FORGED_USER);
-    headers.put(EdgeHeaders.USER_ID, FORGED_USER_ID);
-    headers.put(EdgeHeaders.ROLES, FORGED_ROLES);
+    headers.put("X-Qits-User", FORGED_USER);
+    headers.put("X-Qits-User-Id", FORGED_USER_ID);
+    headers.put("X-Qits-Roles", FORGED_ROLES);
     headers.put(INVENTED_HEADER, "whatever a future hop might trust");
     headers.putAll(extra);
     return Map.copyOf(headers);

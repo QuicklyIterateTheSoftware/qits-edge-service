@@ -28,14 +28,14 @@ import org.junit.jupiter.api.TestMethodOrder;
  * records what arrived — the one posture this repository's suite has never had, and the only one in
  * which the platform's central trust claim is a fact rather than a sentence.
  *
- * <p>That claim is the reason this file exists, and it is the oldest class of this catalogue. Half
- * the fleet's CLAUDE.md files say some version of "the edge asserts {@code X-Qits-User} / {@code
- * X-Qits-User-Id} / {@code X-Qits-Roles} and every service behind it believes them
- * unconditionally", and each of those services tests the BELIEVING half against headers its own
- * suite wrote. Nobody tests the ASSERTING half except this repository, and until this catalogue
- * existed it did so with {@code @QuarkusTest} alone: {@code EdgeSessionGateTest} proves the
- * strip-then-inject against in-process stub upstreams inside the same JVM as the router. What only
- * a launched process has is this:
+ * <p>That claim is the reason this file exists, and it is the oldest class of this catalogue. It
+ * used to be "the edge asserts {@code X-Qits-User} / {@code X-Qits-User-Id} / {@code X-Qits-Roles}
+ * and every service behind it believes them" — forward-auth, which the platform retired (epic
+ * qits-543). It is now the narrower one that outlived it (qits-1373): <b>no client-supplied {@code
+ * X-Qits-*} header ever reaches a service, and the edge writes no identity of its own</b>; a
+ * session is the gate on a service's pages, and a service authenticates the bearer it is sent.
+ * {@code EdgeSessionGateTest} proves it against in-process stub upstreams inside the same JVM as
+ * the router. What only a launched process has is this:
  *
  * <ul>
  *   <li><b>The gate is a boot-time decision, and this is the boot that makes it.</b> {@code
@@ -102,7 +102,7 @@ import org.junit.jupiter.api.TestMethodOrder;
 public class ForwardAuthBootstrapIT {
 
   static final String IDENTITY_SLUG =
-      "a-forged-identity-never-reaches-the-service-and-the-one-idp-vouched-for-does";
+      "a-forged-identity-never-reaches-the-service-and-the-edge-asserts-none-in-its-place";
 
   static final String DOOR_SLUG = "the-door-serves-nothing-and-a-health-probe-is-never-gated";
 
@@ -117,15 +117,15 @@ public class ForwardAuthBootstrapIT {
   }
 
   @UserStory(
-      value = "A forged identity never reaches the service, and the one idp vouched for does",
+      value = "A forged identity never reaches the service, and the edge asserts none in its place",
       category = StoryTarget.CATEGORY)
   @UserStoryDescription(
       """
-      Every service on this platform believes three headers without checking them: `X-Qits-User`,
-      `X-Qits-User-Id` and `X-Qits-Roles` say who a caller is, and there is no second opinion
-      anywhere behind this process. That is a sound arrangement and a cheap one, and it rests
-      entirely on one property of the front door — that the door writes those headers and a client
-      cannot.
+      Every service on this platform authenticates the bearer it is sent, and reads nobody from a
+      header. The `X-Qits-` prefix used to carry an identity — `X-Qits-User`, `X-Qits-User-Id` and
+      `X-Qits-Roles`, written here from a browser session — and it carries none now. The front door
+      still empties the whole prefix on every request, so that nothing a client wrote under it ever
+      reaches a service, whatever a future app might believe of it.
 
       So the story is told from the far side. A stranger asks a service host for a page and stamps
       the three headers on the request herself, hoping the edge passes them along. She is refused
@@ -137,12 +137,12 @@ public class ForwardAuthBootstrapIT {
       all, which is the part only the service's own recording can say.
 
       Then she logs in, and sends exactly the same forged headers with the cookie. This time the
-      request is served — and the service is told she is the person idp vouched for, not the
-      administrator she claimed to be. Her three forgeries are gone, and so is a fourth header
-      nobody has invented yet: the rule is the reserved prefix rather than a list of names, because
-      a list is a thing somebody extends a day late.
+      request is served — the session is the gate on a service's pages — and the service is told
+      nothing about who she is: her three forgeries are gone and nothing is written in their place,
+      and so is a fourth header nobody has invented yet: the rule is the reserved prefix rather than
+      a list of names, because a list is a thing somebody extends a day late.
 
-      What makes the identity real is that the edge does not decide it. The cookie is opaque — 256
+      What makes the gate real is that the edge does not decide it. The cookie is opaque — 256
       random bits, stored hashed at idp — so this process asks, over a socket, presenting its own
       client credential, because an introspection endpoint anyone could call would be an oracle
       about everybody's session. And it asks ONCE for a browser that keeps browsing: every image
@@ -150,7 +150,7 @@ public class ForwardAuthBootstrapIT {
       path of every request a logged-in person makes.
       """)
   @Order(1)
-  void aForgedIdentityIsRefusedAndAValidatedOneIsAssertedInItsPlace(Interactions story) {
+  void aForgedIdentityIsRefusedAndNoneIsAssertedInItsPlace(Interactions story) {
     StoryUpstream upstream = StoryUpstream.attach(StoryTarget.PROJECTS);
 
     story.note(
@@ -260,7 +260,7 @@ public class ForwardAuthBootstrapIT {
     story
         .note(
             "the same forgeries again, now behind a cookie — and this time the request is SERVED,"
-                + " which is what makes the assertions below about identity rather than about"
+                + " which is what makes the assertions below about the headers rather than about"
                 + " access")
         .as("a-session-arrives-carrying-forgeries");
     story
@@ -270,15 +270,15 @@ public class ForwardAuthBootstrapIT {
                 + " endpoint anyone could call would be an oracle about everybody's session")
         .as("the-cookie-is-introspected-at-idp");
 
-    // The assertion the whole platform's trust model rests on, made on the SERVICE's own recording:
-    // what arrived is what a real qits service would have believed.
+    // The assertion made on the SERVICE's own recording: no identity header arrives at all — not
+    // the caller's forgeries, and nothing the edge wrote from the session (qits-1373).
     StoryUpstream.Request arrived = upstream.onlyRequestTo(StoryTarget.IDENTITY_PATH);
     assertEquals(
-        StoryTarget.SESSION_USER,
-        arrived.header(EdgeHeaders.USER),
-        "the service must be told who idp vouched for, never who the caller claimed to be");
-    assertEquals(StoryTarget.SESSION_USER_ID, arrived.header(EdgeHeaders.USER_ID));
-    assertEquals(StoryTarget.SESSION_ROLES_HEADER, arrived.header(EdgeHeaders.ROLES));
+        StoryUpstream.ABSENT,
+        arrived.header("X-Qits-User"),
+        "the service is told nobody — a forged identity is stripped and the edge asserts none");
+    assertEquals(StoryUpstream.ABSENT, arrived.header("X-Qits-User-Id"));
+    assertEquals(StoryUpstream.ABSENT, arrived.header("X-Qits-Roles"));
     assertEquals(
         StoryUpstream.ABSENT,
         arrived.header(StoryTarget.INVENTED_HEADER),
@@ -297,13 +297,11 @@ public class ForwardAuthBootstrapIT {
     // above, made on the SERVICE's own recording; the note is what a reader needs beside the arrow.
     story
         .note(
-            "the service is told X-Qits-User: "
-                + StoryTarget.SESSION_USER
-                + " — who idp vouched for, never who the caller claimed to be. All three forgeries"
-                + " are gone, and so is a reserved header nobody has invented yet: the rule is the"
-                + " `X-Qits-` prefix, because a list of names is a thing somebody extends a day"
-                + " late")
-        .as("the-service-is-told-the-vouched-for-identity");
+            "the service is told no identity at all — the session opened the gate and asserts"
+                + " nobody. All three forgeries are gone, and so is a reserved header nobody has"
+                + " invented yet: the rule is the `X-Qits-` prefix, because a list of names is a"
+                + " thing somebody extends a day late")
+        .as("the-service-is-told-no-identity");
 
     // The edge asked, and it asked as itself. Without its own credential in that call, idp's
     // introspection endpoint would be an oracle anybody on the network could ask about any cookie.
@@ -332,9 +330,9 @@ public class ForwardAuthBootstrapIT {
                 StoryTarget.forgedWithSession(StoryTarget.SESSION))
             .status());
     assertEquals(
-        StoryTarget.SESSION_USER,
-        upstream.onlyRequestTo(StoryTarget.SECOND_PATH).header(EdgeHeaders.USER),
-        "the cached belief must assert the same identity the call established");
+        StoryUpstream.ABSENT,
+        upstream.onlyRequestTo(StoryTarget.SECOND_PATH).header("X-Qits-User"),
+        "the cached belief opens the gate the same way and asserts no identity either");
     assertEquals(
         askedBefore + 1,
         StoryNetwork.introspections(),
@@ -598,7 +596,7 @@ public class ForwardAuthBootstrapIT {
     ReportAssertions.assertStepId(
         StoryTarget.CATEGORY, IDENTITY_SLUG, "the-cookie-is-introspected-at-idp");
     ReportAssertions.assertStepId(
-        StoryTarget.CATEGORY, IDENTITY_SLUG, "the-service-is-told-the-vouched-for-identity");
+        StoryTarget.CATEGORY, IDENTITY_SLUG, "the-service-is-told-no-identity");
     ReportAssertions.assertStepId(
         StoryTarget.CATEGORY, IDENTITY_SLUG, "a-second-read-is-served-without-asking-idp-again");
 

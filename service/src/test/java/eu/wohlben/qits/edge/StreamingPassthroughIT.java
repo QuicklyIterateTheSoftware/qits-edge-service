@@ -96,8 +96,9 @@ public class StreamingPassthroughIT {
 
       So the operator opens a terminal with a real session and the same four forged headers as
       every other story here. The socket comes up, the service pushes a frame down it, and the
-      service's recording of the HANDSHAKE — which is the only place this is visible — shows the
-      identity idp vouched for and none of her forgeries.
+      service's recording of the HANDSHAKE — which is the only place this is visible — shows none
+      of her forgeries, and no identity written in their place: the session opened the socket, and
+      who she is the service learns from its own bearer.
 
       One thing it also shows is a gap, stated rather than hidden: the upgrade path drops the
       client's `Host`, so the upstream reads the name she typed from `X-Forwarded-Host` and finds a
@@ -107,7 +108,7 @@ public class StreamingPassthroughIT {
       """)
   @UserflowRunsAfter(ForwardAuthBootstrapIT.class)
   @Order(1)
-  void aTerminalIsSplicedThroughWithTheVouchedForIdentity(Interactions story) {
+  void aTerminalIsSplicedThroughWithNoIdentityAsserted(Interactions story) {
     StoryUpstream projects = StoryUpstream.attach(StoryTarget.PROJECTS);
     long askedBefore = StoryNetwork.introspections();
 
@@ -134,20 +135,20 @@ public class StreamingPassthroughIT {
     assertEquals("socket", handshake.kind(), "it arrived as an upgrade, not as a proxied GET");
     assertEquals("101", handshake.status());
     assertEquals(
-        StoryTarget.SESSION_USER,
-        handshake.header(EdgeHeaders.USER),
-        "the identity is asserted on the upgrade path too — which it was not, once");
-    assertEquals(StoryTarget.SESSION_USER_ID, handshake.header(EdgeHeaders.USER_ID));
-    assertEquals(StoryTarget.SESSION_ROLES_HEADER, handshake.header(EdgeHeaders.ROLES));
+        StoryUpstream.ABSENT,
+        handshake.header("X-Qits-User"),
+        "no identity reaches the service on the upgrade path either — forged or the edge's own");
+    assertEquals(StoryUpstream.ABSENT, handshake.header("X-Qits-User-Id"));
+    assertEquals(StoryUpstream.ABSENT, handshake.header("X-Qits-Roles"));
     assertEquals(
         StoryUpstream.ABSENT,
         handshake.header(StoryTarget.INVENTED_HEADER),
         "and the reserved prefix is emptied here as well, not just on the proxied path");
     story
         .note(
-            "the service's recording of the HANDSHAKE shows X-Qits-User: "
-                + StoryTarget.SESSION_USER
-                + " and none of the four forgeries. This is a second implementation of the strip —"
+            "the service's recording of the HANDSHAKE shows no identity header at all: none of"
+                + " the four forgeries, and nothing written for the session. This is a second"
+                + " implementation of the strip —"
                 + " the upgrade path never installs the interceptor chain — and it is the path a"
                 + " forged identity used to cross this process on")
         .as("the-forgeries-are-gone-on-the-upgrade-path-too");

@@ -30,6 +30,12 @@ import org.jboss.logging.Logger;
  * Browser sessions, terminated at the edge — the other half of {@link EdgeAuth}, for the caller
  * that has no client id and cannot be given one.
  *
+ * <p><b>A session is a gate, not an identity</b> (qits-1373). It decides whether a browser reaches
+ * a service's pages at all — which keeps full pages such as a docs bundle or swagger-ui private —
+ * and nothing more. The edge writes no {@code X-Qits-User}, {@code X-Qits-User-Id} or {@code
+ * X-Qits-Roles} from it: a service authenticates the bearer the page sends it and reads nobody from
+ * a header, so who the person is, it learns from that token.
+ *
  * <p><b>The cookie is opaque and idp is the truth.</b> {@code qits-session} carries 256 random
  * bits; idp stores their fingerprint against a row. So this process cannot decide anything about a
  * session on its own — it asks, and caches the answer. The alternative, a signed cookie verified
@@ -47,9 +53,10 @@ import org.jboss.logging.Logger;
  * <ol>
  *   <li>Every inbound {@code X-Qits-*} header is dropped. See {@link EdgeHeaders#applyIdentity}.
  *   <li>A {@code Bearer} or {@code Basic} machine credential takes {@link EdgeAuth}'s path exactly,
- *       and is proxied with NO identity headers — a machine's identity is in its token, and writing
- *       a username for it would invent one.
- *   <li>A session cookie is introspected here and becomes the three identity headers.
+ *       and is proxied with no identity headers — its identity is in its token, which the service
+ *       validates itself.
+ *   <li>A session cookie is introspected here; a live one lets the request through, still with no
+ *       identity header written for it.
  *   <li>A path under {@link SessionsConfig#anonymousPrefixes()} is proxied anonymously — the login
  *       page has to be reachable by someone who cannot log in yet.
  *   <li>Anything else is refused: a navigation is sent to the login page — which lives on the host
@@ -128,12 +135,13 @@ public class EdgeSessions {
   private Map<String, Cached> sessions;
 
   /**
-   * A session idp vouched for.
+   * A session idp vouched for — what opened the gate, kept for this process' own decisions and
+   * logs. None of it is forwarded to an upstream (qits-1373).
    *
-   * @param userId the subject, into {@code X-Qits-User-Id}
-   * @param username the name an upstream writes into an audit column, into {@code X-Qits-User}
-   * @param roles the role strings comma-separated, into {@code X-Qits-Roles} — safe because a role
-   *     never holds a comma, and one that did is dropped rather than allowed to split into two
+   * @param userId the subject idp named
+   * @param username the principal name idp named
+   * @param roles the role strings comma-separated — a role never holds a comma, and one that did is
+   *     dropped rather than allowed to split into two
    * @param expiresAtMillis when the session dies whatever any cache believes
    */
   public record Session(String userId, String username, String roles, long expiresAtMillis) {}
@@ -352,11 +360,10 @@ public class EdgeSessions {
   /**
    * The refusal, in the shape the caller can act on.
    *
-   * <p><b>A navigation is redirected and everything else is not</b>, which is the same distinction
-   * qits-gateway's {@code NonNavigationRequestChecker} makes and for the same reason: only a
-   * request that renders a document can show a login page. A 302 handed to an {@code EventSource}
-   * or a {@code fetch} is followed into HTML the caller cannot use, and handed to a WebSocket
-   * handshake it kills the socket with nothing to read.
+   * <p><b>A navigation is redirected and everything else is not</b>: only a request that renders a
+   * document can show a login page. A 302 handed to an {@code EventSource} or a {@code fetch} is
+   * followed into HTML the caller cannot use, and handed to a WebSocket handshake it kills the
+   * socket with nothing to read.
    *
    * <p><b>No {@code WWW-Authenticate} here</b>, unlike {@link EdgeAuth#challenge}. A {@code Basic}
    * challenge would pop the browser's own credential dialog on every background fetch a logged-out
@@ -651,9 +658,8 @@ public class EdgeSessions {
     String userId = answered.getString("userId");
     String username = answered.getString("username");
     if (!headerSafe(userId) || !headerSafe(username)) {
-      // Both go into headers an upstream trusts unconditionally, and a control character in one of
-      // them is a second header. Nothing about the platform's own idp sends such a value; refusing
-      // rather than sanitising means a strange answer never becomes a strange identity.
+      // An answer naming nobody usable is not a session. Nothing about the platform's own idp sends
+      // such a value; refusing rather than sanitising means a strange answer never opens the gate.
       LOG.warn("the identity provider named no usable user");
       return null;
     }

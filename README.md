@@ -261,16 +261,17 @@ machine token are both answered `404` like any other request.
   /` answers rather than rewrites. `/token` remains the single path this process claims on a
   configured application vhost.
 - **No login page and no session of its own.** The edge *reads* a session — it introspects the
-  `qits-session` cookie at idp and turns it into identity headers (see *Browser sessions* below) —
-  but it issues none, stores none, and serves no page. Registration, login and logout are
-  qits-idp's, reached through the anonymous `/idp/` prefix on idp's own host.
+  `qits-session` cookie at idp and lets a live one through (see *Browser sessions* below) — but
+  it asserts no identity from it, and it issues none, stores none, and serves no page.
+  Registration, login and logout are qits-idp's, reached through the anonymous `/idp/` prefix on
+  idp's own host.
 - **No header stripping or injection beyond `X-Forwarded-*` and `X-Qits-*`.** The reserved prefix is
-  stripped on every request, and the three identity headers are asserted only while the session gate
-  is on and only where a session was actually used: a service vhost a browser reached with its
-  cookie. A `qits:system` bearer keeps its own `X-Qits-Causation-Id`, `X-Qits-Caller` and
-  `X-Qits-Environment` (see *A service's own name, gated per request*). A service
-  still does its own hygiene and has to — a request can reach it from qits-net without passing this
-  process. `Authorization`, `Cookie` and every custom header pass through untouched.
+  stripped on every request, and **no identity is ever written back into it** (qits-1373): no
+  `X-Qits-User`, `X-Qits-User-Id` or `X-Qits-Roles`, for a session or a bearer. A service
+  authenticates only the bearer it is sent and reads nobody from a header. What the edge does write
+  after the strip is attribution: `X-Qits-Caller` for a platform page, and a `qits:system` bearer's
+  own `X-Qits-Causation-Id`, `X-Qits-Caller` and `X-Qits-Environment` (see *A service's own name,
+  gated per request*). `Authorization`, `Cookie` and every custom header pass through untouched.
 - **No UI, no SPA, no landing page, no `/api`.** The paths this process answers are `/q`,
   `/main-navigation`, `/upstream-pools`, and, on a configured application vhost only, `/token`. It knows nothing about
   projects or repositories: a navigation slot says WHERE the shell hangs an entry, and the shell
@@ -745,7 +746,8 @@ validates the same value one hop later.
 `ci.dev.example.com` is one service and one name, and both a person and a machine type it. So the
 gate on a **service vhost** — a published host, or a configured application vhost, which are now the
 same thing — is decided per request rather than per plane. Every inbound `X-Qits-*` header is
-dropped first, whatever the outcome: the reserved prefix is what a hop *asserts*.
+dropped first, whatever the outcome, and no identity header is written back on any branch
+(qits-1373) — a service learns who called from the bearer it validates itself.
 
 1. a `Bearer` or `Basic` **machine credential** takes the machine path above, checked in full, and
    is proxied with no identity headers and with the browser cookie removed — a machine's identity is
@@ -754,12 +756,11 @@ dropped first, whatever the outcome: the reserved prefix is what a hop *asserts*
    `qits:system`, its `X-Qits-Causation-Id`, `X-Qits-Caller` and `X-Qits-Environment` pass as sent,
    so a service's call to a peer's public name traces like its call on qits-net did. Nothing else
    qualifies — a client secret, a git `oauth2:` pair, an opaque `qits_tok_` token (whatever JWT idp
-   stands it for) and a JWT without the role all keep the strip — and `X-Qits-User`, `X-Qits-User-Id`
-   and `X-Qits-Roles` are stripped from every request, service bearer or not;
-2. otherwise, with the session gate on, a `qits-session` **cookie** is introspected at idp and
-   becomes `X-Qits-User`, `X-Qits-User-Id` and `X-Qits-Roles` (comma-separated — a role never holds
-   a comma). **The cookie is kept**: the service behind the name is an ordinary qits service and the
-   browser's next request carries it too;
+   stands it for) and a JWT without the role all keep the strip;
+2. otherwise, with the session gate on, a `qits-session` **cookie** is introspected at idp and a
+   live one is let through — a **gate, not an identity**: nothing about the person is written
+   upstream. It is what keeps full pages such as a docs bundle or swagger-ui private. **The cookie
+   is kept**: the browser's next request carries it too;
 3. a caller holding neither still gets that app's **anonymous reads** (`anonymous-read-apps`), so
    `docker pull`, `npm install` and `git clone` work on exactly the names they work on today — and,
    on the name that **owns** them, the `anonymous-prefixes`, which is what serves `/idp/login` on
@@ -1009,8 +1010,8 @@ Two harness details worth knowing before they cost an afternoon:
 
 **The integration half is a different posture entirely** and is not in `./mvnw verify` by default:
 the story catalogue (`*IT`) runs the **packaged** artifact as a launched process, with the browser
-gate ON, against stand-ins on real sockets. That is where the forward-auth claim stops being an
-in-JVM assertion about a stub and becomes a fact about the bytes a service would have believed. See
+gate ON, against stand-ins on real sockets. That is where the strip claim stops being an in-JVM
+assertion about a stub and becomes a fact about the bytes a service actually receives. See
 [Userflows](#userflows--the-proofs-that-double-as-documentation) for the class list and the command.
 
 ## Userflows — the proofs that double as documentation
@@ -1030,7 +1031,7 @@ that one, `ForwardAuthBootstrapIT` included.
 
 | Class | Story | Edges |
 | --- | --- | --- |
-| `ForwardAuthBootstrapIT` | A forged identity never reaches the service, and the one idp vouched for does | 7 |
+| `ForwardAuthBootstrapIT` | A forged identity never reaches the service, and the edge asserts none in its place | 7 |
 | `ForwardAuthBootstrapIT` | The door serves nothing, and a health probe is never gated | 6 |
 | `VhostRoutingIT` | One name, one service: the Host header is the whole routing decision | 7 |
 | `SessionlessWallIT` | The 401 wall: nothing a stranger sends leaves this process | 5 |
@@ -1056,8 +1057,8 @@ recording:
   idp needs exactly canned JSON, which is what that library is for.
 
 **What only a far-side recording can say** is most of this catalogue: the reserved `X-Qits-*`
-namespace arriving empty on an anonymous read, the vouched-for identity arriving in its place on a
-session, a person's cookie NOT arriving on a machine vhost, which of two services received an
+namespace arriving empty on an anonymous read and on a session alike (no identity is written in
+its place, qits-1373), a person's cookie NOT arriving on a machine vhost, which of two services received an
 identical request, and a request that arrived and was then dropped mid-answer.
 
 **And what only a negative assertion can say** is the sharpest claim of all. `SessionlessWallIT`

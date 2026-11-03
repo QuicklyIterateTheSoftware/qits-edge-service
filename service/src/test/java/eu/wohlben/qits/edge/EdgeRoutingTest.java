@@ -1052,8 +1052,8 @@ class EdgeRoutingTest {
     headers.put(EdgeHeaders.CAUSATION_ID, "evt-42");
     headers.put(EdgeHeaders.CALLER, "qits-ci");
     headers.put(EdgeHeaders.ENVIRONMENT, "dev");
-    headers.put(EdgeHeaders.USER, "admin");
-    headers.put(EdgeHeaders.ROLES, "qits:root");
+    headers.put("X-Qits-User", "admin");
+    headers.put("X-Qits-Roles", "qits:root");
     return headers;
   }
 
@@ -1076,8 +1076,8 @@ class EdgeRoutingTest {
     assertEquals("evt-42", answer.upstreamHeader(EdgeHeaders.CAUSATION_ID));
     assertEquals("qits-ci", answer.upstreamHeader(EdgeHeaders.CALLER));
     assertEquals("dev", answer.upstreamHeader(EdgeHeaders.ENVIRONMENT));
-    assertNull(answer.upstreamHeader(EdgeHeaders.USER), "identity is always stripped");
-    assertNull(answer.upstreamHeader(EdgeHeaders.ROLES));
+    assertNull(answer.upstreamHeader("X-Qits-User"), "identity is always stripped");
+    assertNull(answer.upstreamHeader("X-Qits-Roles"));
   }
 
   @Test
@@ -1091,7 +1091,7 @@ class EdgeRoutingTest {
       assertNull(answer.upstreamHeader(EdgeHeaders.CAUSATION_ID));
       assertNull(answer.upstreamHeader(EdgeHeaders.CALLER));
       assertNull(answer.upstreamHeader(EdgeHeaders.ENVIRONMENT));
-      assertNull(answer.upstreamHeader(EdgeHeaders.USER));
+      assertNull(answer.upstreamHeader("X-Qits-User"));
     }
   }
 
@@ -1126,7 +1126,7 @@ class EdgeRoutingTest {
     int grants = StubGateways.grants();
     Map<String, String> headers = new java.util.HashMap<>(basic("dev-qits-ci", "secret"));
     headers.put("Content-Type", "application/x-www-form-urlencoded");
-    headers.put(EdgeHeaders.USER, "admin");
+    headers.put("X-Qits-User", "admin");
     headers.put(EdgeHeaders.CAUSATION_ID, "evt-42");
     String sent = headers.get("Authorization");
     EdgeClient.Answer answer =
@@ -1140,7 +1140,7 @@ class EdgeRoutingTest {
     assertEquals("idp-dev", answer.line("upstream"), answer.body());
     assertEquals(sent, answer.upstreamHeader("Authorization"), "the pair, untouched");
     assertEquals(grants, StubGateways.grants(), "the edge made no grant of its own");
-    assertNull(answer.upstreamHeader(EdgeHeaders.USER), "identity is still stripped");
+    assertNull(answer.upstreamHeader("X-Qits-User"), "identity is still stripped");
     assertNull(
         answer.upstreamHeader(EdgeHeaders.CAUSATION_ID),
         "and attribution too: deciding a service bearer here would need the credential checked");

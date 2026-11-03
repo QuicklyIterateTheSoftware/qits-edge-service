@@ -148,10 +148,10 @@ public class VhostRoutingIT {
         atProjects.header(EdgeHeaders.HOST),
         "and it is described again as X-Forwarded-Host, for the hop that reads that instead");
     assertEquals(StoryTarget.DOCS_HOST, atDocs.header(EdgeHeaders.HOST));
-    // Both were served as the same person, which is what makes the difference between them purely
-    // the routing decision rather than anything about who asked.
-    assertEquals(StoryTarget.SESSION_USER, atProjects.header(EdgeHeaders.USER));
-    assertEquals(StoryTarget.SESSION_USER, atDocs.header(EdgeHeaders.USER));
+    // Both were served behind the same session cookie, which is what makes the difference between
+    // them purely the routing decision rather than anything about who asked.
+    assertTrue(atProjects.header("Cookie").contains("qits-session="), atProjects.header("Cookie"));
+    assertTrue(atDocs.header("Cookie").contains("qits-session="), atDocs.header("Cookie"));
     story
         .note(
             "the same path, the same cookie and the same browser reach TWO different services — the"

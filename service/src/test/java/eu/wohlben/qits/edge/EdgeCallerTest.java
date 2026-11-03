@@ -181,7 +181,7 @@ class EdgeCallerTest {
     headers.add("x-qits-caller", "qits-projects");
     headers.add(EdgeHeaders.CALLER, "qits-idp");
 
-    EdgeHeaders.applyIdentity(headers, null, "qits-ci");
+    EdgeHeaders.applyIdentity(headers, "qits-ci");
 
     assertEquals(List.of("qits-ci"), headers.getAll(EdgeHeaders.CALLER));
   }
@@ -191,21 +191,27 @@ class EdgeCallerTest {
     MultiMap headers = MultiMap.caseInsensitiveMultiMap();
     headers.add(EdgeHeaders.CALLER, "qits-idp");
 
-    EdgeHeaders.applyIdentity(headers, null, null);
+    EdgeHeaders.applyIdentity(headers, null);
 
     assertFalse(headers.contains(EdgeHeaders.CALLER));
   }
 
   @Test
-  void theCallerIsAssertedAlongsideASessionsIdentity() {
+  void theCallerIsAssertedAndNoIdentityIsEverWritten() {
+    // qits-1373: the edge asserts attribution, never a person. A forged identity is stripped and
+    // nothing takes its place — a service reads who called from the bearer it validates itself.
     MultiMap headers = MultiMap.caseInsensitiveMultiMap();
     headers.add(EdgeHeaders.CALLER, "forged");
+    headers.add("X-Qits-User", "admin");
+    headers.add("X-Qits-User-Id", "id-0");
+    headers.add("X-Qits-Roles", "qits:admin");
 
-    EdgeHeaders.applyIdentity(
-        headers, new EdgeSessions.Session("id-1", "operator", "qits:admin", 0L), "qits-landing");
+    EdgeHeaders.applyIdentity(headers, "qits-landing");
 
     assertEquals("qits-landing", headers.get(EdgeHeaders.CALLER));
-    assertEquals("operator", headers.get(EdgeHeaders.USER));
+    assertFalse(headers.contains("X-Qits-User"));
+    assertFalse(headers.contains("X-Qits-User-Id"));
+    assertFalse(headers.contains("X-Qits-Roles"));
   }
 
   // --- a service bearer's own attribution (qits-1403) --------------------------------------------
@@ -216,9 +222,9 @@ class EdgeCallerTest {
     headers.add("x-qits-causation-id", "evt-42");
     headers.add(EdgeHeaders.CALLER, "qits-ci");
     headers.add(EdgeHeaders.ENVIRONMENT, "dev");
-    headers.add(EdgeHeaders.USER, "admin");
-    headers.add(EdgeHeaders.USER_ID, "id-0");
-    headers.add(EdgeHeaders.ROLES, "qits:admin");
+    headers.add("X-Qits-User", "admin");
+    headers.add("X-Qits-User-Id", "id-0");
+    headers.add("X-Qits-Roles", "qits:admin");
     headers.add("X-Qits-Anything-Else", "forged");
     return headers;
   }
@@ -227,7 +233,7 @@ class EdgeCallerTest {
   void aServiceBearerKeepsItsCausationCallerAndEnvironmentAndNothingElse() {
     MultiMap headers = sentByAService();
 
-    EdgeHeaders.applyIdentity(headers, null, "qits-landing", true);
+    EdgeHeaders.applyIdentity(headers, "qits-landing", true);
 
     assertEquals(List.of("evt-42"), headers.getAll(EdgeHeaders.CAUSATION_ID));
     assertEquals(
@@ -235,9 +241,9 @@ class EdgeCallerTest {
         headers.getAll(EdgeHeaders.CALLER),
         "the service's own, not the page's");
     assertEquals(List.of("dev"), headers.getAll(EdgeHeaders.ENVIRONMENT));
-    assertFalse(headers.contains(EdgeHeaders.USER), "identity is always stripped");
-    assertFalse(headers.contains(EdgeHeaders.USER_ID));
-    assertFalse(headers.contains(EdgeHeaders.ROLES));
+    assertFalse(headers.contains("X-Qits-User"), "identity is always stripped");
+    assertFalse(headers.contains("X-Qits-User-Id"));
+    assertFalse(headers.contains("X-Qits-Roles"));
     assertFalse(headers.contains("X-Qits-Anything-Else"), "the rest of the namespace goes too");
   }
 
@@ -246,7 +252,7 @@ class EdgeCallerTest {
     MultiMap headers = MultiMap.caseInsensitiveMultiMap();
     headers.add(EdgeHeaders.CAUSATION_ID, "evt-42");
 
-    EdgeHeaders.applyIdentity(headers, null, "qits-landing", true);
+    EdgeHeaders.applyIdentity(headers, "qits-landing", true);
 
     assertEquals("qits-landing", headers.get(EdgeHeaders.CALLER));
     assertEquals("evt-42", headers.get(EdgeHeaders.CAUSATION_ID));
@@ -258,20 +264,19 @@ class EdgeCallerTest {
     // bearer, so none keeps what it sent — the page's caller is asserted and nothing else is.
     MultiMap headers = sentByAService();
 
-    EdgeHeaders.applyIdentity(headers, null, "qits-landing", false);
+    EdgeHeaders.applyIdentity(headers, "qits-landing", false);
 
     assertEquals(List.of("qits-landing"), headers.getAll(EdgeHeaders.CALLER));
     assertFalse(headers.contains(EdgeHeaders.CAUSATION_ID));
     assertFalse(headers.contains(EdgeHeaders.ENVIRONMENT));
-    assertFalse(headers.contains(EdgeHeaders.USER));
+    assertFalse(headers.contains("X-Qits-User"));
 
     MultiMap browser = sentByAService();
-    EdgeHeaders.applyIdentity(
-        browser, new EdgeSessions.Session("id-1", "operator", "qits:admin", 0L), null, false);
+    EdgeHeaders.applyIdentity(browser, null, false);
     assertFalse(browser.contains(EdgeHeaders.CALLER));
     assertFalse(browser.contains(EdgeHeaders.CAUSATION_ID));
-    assertEquals("operator", browser.get(EdgeHeaders.USER), "the session's, not the client's");
-    assertEquals("qits:admin", browser.get(EdgeHeaders.ROLES));
+    assertFalse(browser.contains("X-Qits-User"), "no identity is written for anybody");
+    assertFalse(browser.contains("X-Qits-Roles"));
   }
 
   @Test

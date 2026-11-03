@@ -152,10 +152,10 @@ public class UpstreamOutageIT {
         dropped.status(),
         "the service recorded the request and then answered nothing at all");
     assertEquals(
-        StoryTarget.SESSION_USER,
-        dropped.header(EdgeHeaders.USER),
-        "and it arrived fully formed — the identity was asserted before the hop failed, which is"
-            + " what makes this an upstream failure rather than a gate failure");
+        StoryTarget.PROJECTS_HOST,
+        dropped.header(EdgeHeaders.HOST),
+        "and it arrived fully formed — past the gate and described as forwarded before the hop"
+            + " failed, which is what makes this an upstream failure rather than a gate failure");
     story
         .note(
             "the request reached the container and the connection went away with no status on the"

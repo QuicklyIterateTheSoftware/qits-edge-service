@@ -22,21 +22,21 @@ import org.junit.jupiter.api.BeforeAll;
  * <b>The path on which the edge asserts NOTHING — and therefore the path on which the strip matters
  * most.</b>
  *
- * <p>{@code ForwardAuthBootstrapIT} proves the strip where there is something to put back: a
- * validated session's identity replaces whatever a client claimed. That is the reassuring half, and
- * it is not the half that broke. Two paths out of this process assert no identity at all — a
- * MACHINE credential, whose identity is inside its own token, and a read a deployment opened
- * through {@code qits.edge.auth.anonymous-read-apps}, where nobody has vouched for anybody. On
- * those paths there is no trusted value to write, so the temptation is to do nothing; and doing
- * nothing means a client-supplied {@code X-Qits-User} reaches a service that believes it
- * unconditionally.
+ * <p>{@code ForwardAuthBootstrapIT} proves the strip behind a validated session, which once wrote
+ * its own identity in place of whatever a client claimed and since qits-1373 writes none. That was
+ * the reassuring half, and it is not the half that broke. Two paths out of this process assert no
+ * identity at all — a MACHINE credential, whose identity is inside its own token, and a read a
+ * deployment opened through {@code qits.edge.auth.anonymous-read-apps}, where nobody has vouched
+ * for anybody. On those paths there is no trusted value to write, so the temptation is to do
+ * nothing; and doing nothing means a client-supplied {@code X-Qits-User} reaches a service that
+ * believes it unconditionally.
  *
  * <p><b>That was the shape of the defect, and it is why the strip moved.</b> It used to live on the
  * session branch, which is exactly where it is least needed. It is now unconditional, in {@code
  * EdgeRouter.proxy}, at the one point every request leaves this process by — {@code
- * EdgeHeaders.applyIdentity(headers, null)} empties the reserved namespace and writes nothing back.
- * This story is that half, asserted from the far side, on the vhost where a caller really does
- * arrive with no credential at all.
+ * EdgeHeaders.applyIdentity(headers, caller)} empties the reserved namespace and writes no identity
+ * back — on any path now, a session's included (qits-1373). This story is that half, asserted from
+ * the far side, on the vhost where a caller really does arrive with no credential at all.
  *
  * <p><b>And the cookie, which is the other direction of the same idea.</b> A session cookie set on
  * the parent domain is offered by the browser to every sibling name, by design — including the ones
@@ -118,10 +118,10 @@ public class AnonymousReadIT {
     StoryUpstream.Request arrived = mirror.onlyRequestTo(StoryTarget.MIRROR_READ);
     assertEquals(
         StoryUpstream.ABSENT,
-        arrived.header(EdgeHeaders.USER),
+        arrived.header("X-Qits-User"),
         "an anonymous read has no identity, so the service must be told none — not the caller's");
-    assertEquals(StoryUpstream.ABSENT, arrived.header(EdgeHeaders.USER_ID));
-    assertEquals(StoryUpstream.ABSENT, arrived.header(EdgeHeaders.ROLES));
+    assertEquals(StoryUpstream.ABSENT, arrived.header("X-Qits-User-Id"));
+    assertEquals(StoryUpstream.ABSENT, arrived.header("X-Qits-Roles"));
     assertEquals(
         StoryUpstream.ABSENT,
         arrived.header(StoryTarget.INVENTED_HEADER),
@@ -154,7 +154,7 @@ public class AnonymousReadIT {
             + " browser sent it");
     assertEquals(
         StoryUpstream.ABSENT,
-        atTheMirror.header(EdgeHeaders.USER),
+        atTheMirror.header("X-Qits-User"),
         "nothing was checked on an open read, so nothing may be asserted from it either");
     assertEquals(
         "Bearer a-token-of-its-own",

@@ -9,9 +9,10 @@ import java.util.List;
  *
  * <p>{@link AuthConfig} gates MACHINES: a token or a client id and secret, per vhost. This group
  * gates PEOPLE, on the service hosts, because those are the names a browser types. A valid {@code
- * qits-session} cookie becomes the {@code X-Qits-User} / {@code X-Qits-User-Id} / {@code
- * X-Qits-Roles} headers every service already trusts; anything else is sent to the login page or
- * refused.
+ * qits-session} cookie lets the request through; anything else is sent to the login page or
+ * refused. The gate asserts no identity downstream (qits-1373): no {@code X-Qits-User}, {@code
+ * X-Qits-User-Id} or {@code X-Qits-Roles} is written from a session, because every service
+ * authenticates the bearer it is sent and believes no header.
  *
  * <p><b>{@link #enabled()} is off, and that is the whole rollout plan.</b> The gate lands before
  * the identity provider can issue a session, so it ships inert and is flipped as a step of its own,

@@ -25,9 +25,9 @@ import java.util.concurrent.TimeUnit;
  * <p>This is the far side of every story in this catalogue, and the far side is where the evidence
  * is. What a story can see from in front of the edge is a status code; what a service behind it
  * would have BELIEVED is a header map, and only the receiver holds one. Every claim this repository
- * makes about the platform's trust model — the reserved namespace is emptied, an identity idp
- * vouched for is written in its place, a person's cookie does not reach a machine vhost, a name is
- * the whole routing decision — is a claim about bytes that arrived somewhere else.
+ * makes about the platform's trust model — the reserved namespace is emptied and no identity is
+ * written in its place, a person's cookie does not reach a machine vhost, a name is the whole
+ * routing decision — is a claim about bytes that arrived somewhere else.
  *
  * <h2>Why not {@code MockService}</h2>
  *

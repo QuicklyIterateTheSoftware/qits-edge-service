@@ -12,12 +12,11 @@ import io.vertx.httpproxy.ProxyResponse;
 import java.util.List;
 
 /**
- * Everything the edge does to a request: two things always, and a third while the session gate is
- * on.
+ * Everything the edge does to a request's headers, on every path out of this process.
  *
  * <p><b>1. It keeps the client's Host.</b> {@code vertx-http-proxy} leaves a proxied request's
  * authority unset, and the Vert.x client then fills the {@code Host} header in from the socket it
- * opened — so without this the environment gateway would see {@code prod-qits-gateway:8080} for
+ * opened — so without this an upstream would see its own socket address ({@code qits-ci:8080}) for
  * every request and never learn the name the browser typed. That name is what any redirect, cookie
  * domain or absolute URL it generates has to be built from, so losing it breaks all three at once
  * and leaves nothing in a log to say why. Measured on Vert.x 4.5.26 against a real upstream, not
@@ -26,26 +25,24 @@ import java.util.List;
  * <p><b>2. It describes the original client</b> with three headers, each set <b>only when
  * absent</b>: {@code X-Forwarded-For}, {@code X-Forwarded-Host} and {@code X-Forwarded-Proto}.
  *
- * <p>Set-if-absent, not set. qits-gateway overwrites the same names because it is the outermost hop
- * and an inbound value can only be client-supplied. The edge is not always outermost: a TLS
- * terminator may sit in front of it, and that terminator is the only hop that can tell the truth
- * about {@code https}. Overwriting there would replace a true value with a false one. What it costs
- * is that a direct client can supply its own — which is why nothing may make a trust decision on
- * these three, and nothing does: they are diagnostics and link generation. What authentication the
- * edge does make a decision on is the bearer token, which is signed — see {@code EdgeAuth}.
+ * <p>Set-if-absent, not set. The edge is not always the outermost hop: a TLS terminator may sit in
+ * front of it, and that terminator is the only hop that can tell the truth about {@code https}.
+ * Overwriting there would replace a true value with a false one. What it costs is that a direct
+ * client can supply its own — which is why nothing may make a trust decision on these three, and
+ * nothing does: they are diagnostics and link generation. What authentication the edge does make a
+ * decision on is the bearer token, which is signed — see {@code EdgeAuth}.
  *
  * <p><b>3. It keeps the {@code X-Qits-*} namespace honest</b> on <b>every</b> request that leaves
  * this process — see {@link #applyIdentity}, called unconditionally from {@code EdgeRouter.proxy}.
- * The strip is what makes a forward-auth service's trust in {@code X-Qits-User} sound, so it cannot
- * be conditional on there being a validated session to replace the value with: a machine credential
- * and a deployment-opened read carry no session and must still not be allowed to forge an identity.
- * A session's own identity is written back after the strip and only then; a request without one has
- * the namespace emptied and no person asserted, its identity being whatever its token proves. The
- * calling application, {@link #CALLER}, is written back the same way whenever the page the request
- * came from is one of the platform's own, session or not. One exception, and it is narrow: a
- * request carrying an accepted {@code qits:system} JWT keeps the attribution its service stamped on
- * it — {@link #SERVICE_ATTRIBUTION} — and nothing else. The gateway one hop in still does its own,
- * and has to: a request may reach it from qits-net without passing this process at all.
+ * Every inbound header under the prefix is dropped, session or none, credential or none. <b>The
+ * edge asserts no identity</b> (qits-1373): a service authenticates the bearer it is sent and reads
+ * nobody from a header, and a browser session is the edge's gate on navigations, not an identity it
+ * forwards. The strip stays anyway, because it is cheap and because it keeps the namespace meaning
+ * nothing a client wrote: a future app that trusted it would otherwise inherit forgeries. What is
+ * written back after the strip is attribution only — the calling application, {@link #CALLER},
+ * whenever the page the request came from is one of the platform's own; and, for a request carrying
+ * an accepted {@code qits:system} JWT, the attribution its service stamped on it, {@link
+ * #SERVICE_ATTRIBUTION}.
  *
  * <p><b>Nothing else is touched.</b> No header outside the reserved prefix is stripped, no path is
  * rewritten, no body is read. {@code Authorization} and every custom header pass through as they
@@ -62,26 +59,17 @@ final class EdgeHeaders implements ProxyInterceptor {
   static final String PROTO = "X-Forwarded-Proto";
 
   /**
-   * The platform's reserved header namespace: what a hop ASSERTS about a request and what every
-   * service behind it believes unconditionally. The strip rule is the same prefix, which is the
-   * whole point — an enumerated list's failure mode is adding a trusted header and forgetting to
-   * extend it, a silent, additive mistake no test naturally catches. The spelling is
-   * qits-gateway's, because it is the same contract one hop further in.
+   * The platform's reserved header namespace: what a hop STATES about a request, never what a
+   * client wrote. The strip rule is the same prefix, which is the whole point — an enumerated
+   * list's failure mode is adding a header somebody believes and forgetting to extend it, a silent,
+   * additive mistake no test naturally catches.
+   *
+   * <p>It used to carry an identity, {@code X-Qits-User}, {@code X-Qits-User-Id} and {@code
+   * X-Qits-Roles}, which this process wrote from a browser session for forward-auth services to
+   * believe. It writes none of them any more (qits-1373): every service authenticates a bearer
+   * itself. A client that still sends them has them stripped like any other reserved name.
    */
   static final String RESERVED_PREFIX = "X-Qits-";
-
-  /** The principal NAME — what an upstream writes into an audit column. */
-  static final String USER = RESERVED_PREFIX + "User";
-
-  /** The stable subject id, which outlives a rename. */
-  static final String USER_ID = RESERVED_PREFIX + "User-Id";
-
-  /**
-   * The role strings, comma-separated. New with browser sessions, and nothing downstream is obliged
-   * to read it yet — it is asserted from the start because adding a trusted header later means
-   * re-proving the strip rule.
-   */
-  static final String ROLES = RESERVED_PREFIX + "Roles";
 
   /**
    * The APPLICATION a request comes from — its deployed identity, the same value as its OTel {@code
@@ -111,16 +99,15 @@ final class EdgeHeaders implements ProxyInterceptor {
    * stamps these on its outbound calls, and once those calls reach a peer through this process
    * rather than on qits-net the strip would erase them: a trace would lose who asked and why. A
    * service bearer is a credential idp minted for a platform service, checked here in full, so its
-   * statement about itself is as good as the one it made on qits-net. The identity headers — {@link
-   * #USER}, {@link #USER_ID}, {@link #ROLES} — are never in this list: a machine's identity is its
-   * token.
+   * statement about itself is as good as the one it made on qits-net. No identity header is ever in
+   * this list: a machine's identity is its token, and the receiving service reads it there.
    */
   static final List<String> SERVICE_ATTRIBUTION = List.of(CAUSATION_ID, CALLER, ENVIRONMENT);
 
   /**
    * Whether a header name belongs to the reserved namespace. Case-insensitive: header names are,
-   * and a client sending {@code x-qits-user} must be treated exactly like one sending {@code
-   * X-Qits-User}.
+   * and a client sending {@code x-qits-caller} must be treated exactly like one sending {@code
+   * X-Qits-Caller}.
    */
   static boolean isReserved(String name) {
     return name != null
@@ -129,50 +116,45 @@ final class EdgeHeaders implements ProxyInterceptor {
   }
 
   /**
-   * Drop every inbound {@code X-Qits-*} header, then assert the session's own — the
-   * strip-then-inject of the forward-auth contract, on one request's header map.
+   * Drop every inbound {@code X-Qits-*} header, then write back the attribution this request is
+   * owed — and never an identity.
    *
    * <p><b>Both halves stay in this one method, and that is the rule rather than a tidiness.</b> The
-   * forged header and the trusted one have the same name, so the code that writes the trusted value
-   * has to be downstream of the code that removes the forged one; splitting them puts a security
-   * property in the hands of a call order somewhere else.
+   * forged header and the stated one have the same name, so the code that writes the stated value
+   * has to be downstream of the code that removes the forged one; splitting them puts the property
+   * in the hands of a call order somewhere else.
    *
    * <p><b>Called on the INBOUND request's map</b>, by {@link EdgeRouter} at the single point where
    * a request leaves this process for an upstream. That is what covers the two paths at once: an
    * ordinary proxied request copies these headers, and a WebSocket upgrade — the edge's own path,
    * {@code EdgeWebSocketUpgrade}, which never installs the interceptor chain, so {@link
-   * #handleProxyRequest} never runs for it — is forwarded from this same map. An upgrade was the
-   * way a forged {@code X-Qits-User} reached the gateway through the front door before this
-   * existed.
+   * #handleProxyRequest} never runs for it — is forwarded from this same map.
    *
-   * <p>The calling application is asserted here for the same reason and independently of the
-   * session: an anonymous read from a platform page has a caller and no person.
+   * <p><b>A browser session asserts nothing here</b> (qits-1373). It decides whether a navigation
+   * reaches a service at all — see {@code EdgeSessions} — and that is all it decides: who the
+   * person is, a service learns from the bearer the page sends it.
    *
-   * @param session the validated session whose identity is asserted, or null to strip and assert
-   *     nothing — an anonymous request, or a machine credential, whose identity is in its token
    * @param caller the application the request's page belongs to, asserted as {@link #CALLER}, or
    *     null to assert none — a machine's request, a foreign page, a name no application serves
    */
-  static void applyIdentity(MultiMap headers, EdgeSessions.Session session, String caller) {
-    applyIdentity(headers, session, caller, false);
+  static void applyIdentity(MultiMap headers, String caller) {
+    applyIdentity(headers, caller, false);
   }
 
   /**
-   * {@link #applyIdentity(MultiMap, EdgeSessions.Session, String)}, for a request that may carry a
-   * service bearer.
+   * {@link #applyIdentity(MultiMap, String)}, for a request that may carry a service bearer.
    *
    * <p><b>A service bearer keeps its own attribution</b>: with {@code serviceBearer} true, the
    * {@link #SERVICE_ATTRIBUTION} headers it sent are written back after the strip exactly as they
    * arrived, and the page's caller is asserted only when it sent no {@link #CALLER} of its own.
-   * Everything else in the namespace goes, identity above all. With it false this is today's rule
-   * unchanged: strip all of it, assert the page's caller.
+   * Everything else in the namespace goes. With it false: strip all of it, assert the page's
+   * caller.
    *
    * @param serviceBearer whether the request carried a JWT this process accepted and whose roles
    *     include {@code qits:system} — {@link EdgeAuth#isServiceBearer}. Never true for a browser
    *     session, an anonymous request, a client secret or an opaque {@code qits_tok_} token
    */
-  static void applyIdentity(
-      MultiMap headers, EdgeSessions.Session session, String caller, boolean serviceBearer) {
+  static void applyIdentity(MultiMap headers, String caller, boolean serviceBearer) {
     // The service's own statement, read before the strip and only for a service bearer.
     java.util.Map<String, List<String>> kept = new java.util.LinkedHashMap<>();
     if (serviceBearer) {
@@ -195,12 +177,6 @@ final class EdgeHeaders implements ProxyInterceptor {
     if (caller != null && !headers.contains(CALLER)) {
       headers.set(CALLER, caller);
     }
-    if (session == null) {
-      return;
-    }
-    headers.set(USER, session.username());
-    headers.set(USER_ID, session.userId());
-    headers.set(ROLES, session.roles());
   }
 
   /**
@@ -288,14 +264,14 @@ final class EdgeHeaders implements ProxyInterceptor {
    * <p>Called directly by {@link EdgeRouter} for a WebSocket handshake, which never reaches the
    * interceptor chain: an upgrade goes through {@code EdgeWebSocketUpgrade}, the edge's own path,
    * which forwards the inbound request's headers as this method leaves them. Without this call an
-   * upgraded connection — every interactive terminal on the platform — would arrive at the
-   * environment gateway with no record of who opened it.
+   * upgraded connection — every interactive terminal on the platform — would arrive at the upstream
+   * service with no record of who opened it.
    *
    * <p><b>Job 1 has no equivalent on that path</b>, and the gap is deliberate: the upgrade path
    * rebuilds the handshake with the client's own {@code Host} dropped, exactly as {@code
    * vertx-http-proxy}'s did before it. So an upstream reads a socket's original host name from
    * {@code X-Forwarded-Host}, not from {@code Host}. It costs nothing today because a handshake's
-   * Host is a protocol formality rather than something an environment gateway routes on.
+   * Host is a protocol formality rather than something an upstream service routes on.
    */
   static void applyForwarded(MultiMap headers, HttpServerRequest inbound) {
     SocketAddress remote = inbound.remoteAddress();

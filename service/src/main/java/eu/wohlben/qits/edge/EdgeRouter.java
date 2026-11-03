@@ -1336,22 +1336,17 @@ public class EdgeRouter {
       Target target,
       EdgeSessions.Session session,
       boolean serviceBearer) {
-    // The reserved X-Qits-* namespace is stripped on EVERY path out of this process, and only a
-    // validated session's own identity is written back — both halves in one call, see
-    // EdgeHeaders.applyIdentity. A null session (a machine credential, or a read the deployment
-    // opened) strips and asserts nothing: its identity is in its own token, and a client-supplied
-    // X-Qits-User must never reach an upstream that trusts the prefix unconditionally. This used to
-    // strip only on the session branch, so a machine or anonymous request could forge an identity a
-    // forward-auth service behind the edge believed — the strip is the whole basis of that trust
-    // and
-    // cannot be conditional on there being a session to replace it with. On the ordinary path the
-    // proxy copies these headers upstream; on an upgrade it forwards this same map, so one call
-    // covers a path the interceptor chain never sees.
+    // The reserved X-Qits-* namespace is stripped on EVERY path out of this process, and no
+    // identity is written back into it — not for a session, not for a machine (qits-1373): a
+    // service authenticates the bearer it is sent and reads nobody from a header. The strip stays
+    // so that a client-supplied X-Qits-* never reaches an upstream, whatever a future app might
+    // believe. On the ordinary path the proxy copies these headers upstream; on an upgrade it
+    // forwards this same map, so one call covers a path the interceptor chain never sees.
     // The calling application is asserted in the same call, after the same strip — a client's own
     // X-Qits-Caller is gone either way, and only the edge's reading of the page replaces it.
     // A service bearer's own X-Qits-Causation-Id, -Caller and -Environment survive the strip; see
     // EdgeHeaders.applyIdentity. What the span records is whatever caller the request leaves with.
-    EdgeHeaders.applyIdentity(request.headers(), session, caller(request), serviceBearer);
+    EdgeHeaders.applyIdentity(request.headers(), caller(request), serviceBearer);
     String caller = request.getHeader(EdgeHeaders.CALLER);
     if (caller != null) {
       // On the edge's own SERVER span, read off the request's own context: at this point the

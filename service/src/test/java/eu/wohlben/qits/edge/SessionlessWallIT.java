@@ -25,11 +25,12 @@ import org.junit.jupiter.api.BeforeAll;
  * traffic which did not happen, so it is the one story in this catalogue whose paying assertions
  * are all negative.</b>
  *
- * <p>Every service behind this door has no external authentication of its own. It reads {@code
- * X-Qits-User} and believes it, and it answers whatever arrives. So a request that reaches an
- * upstream is a request that has been authorised, whatever it turns out to ask for — which makes
- * "it did not reach the upstream" the whole of what a refusal means here. A 401 whose body still
- * reached the service would be a leak with a green status code.
+ * <p>The stand-in services behind this door authenticate nothing themselves: they answer whatever
+ * arrives. (A real qits service validates the bearer it is sent; the edge asserts no identity for
+ * it, qits-1373.) So in this catalogue a request that reaches an upstream is a request the edge let
+ * through, whatever it turns out to ask for — which makes "it did not reach the upstream" the whole
+ * of what a refusal means here. A 401 whose body still reached the service would be a leak with a
+ * green status code.
  *
  * <p><b>{@code assertNoEdgesTo} pays here, and it only pays because the far side is UP.</b> All
  * three services and the identity provider are running and answering throughout this story — the
@@ -82,9 +83,8 @@ public class SessionlessWallIT {
       category = StoryTarget.CATEGORY)
   @UserStoryDescription(
       """
-      Behind this door every service believes `X-Qits-User` without checking it and has no
-      authentication of its own. So the only thing a refusal can mean here is that the request
-      never arrived — a 401 whose body had already reached the service would be a leak wearing a
+      The services behind this door in this story answer whatever arrives and check nothing
+      themselves. So the only thing a refusal can mean here is that the request never arrived — a 401 whose body had already reached the service would be a leak wearing a
       status code.
 
       Four callers with nothing to offer arrive, and each is refused in the shape it can act on.
@@ -240,8 +240,8 @@ public class SessionlessWallIT {
     story
         .note(
             "four refusals, four services up and answering, and NOTHING left this process — which"
-                + " is what a refusal has to mean when every service behind the door believes"
-                + " X-Qits-User without checking it")
+                + " is what a refusal has to mean when the services behind the door answer"
+                + " whatever arrives")
         .as("not-one-arrow-leaves-the-edge");
   }
 
