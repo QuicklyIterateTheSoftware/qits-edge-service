@@ -235,7 +235,7 @@ public class EdgeSessions {
     return config.loginPath();
   }
 
-  /** The one browser credential machine vhosts must remove before proxying. */
+  /** The one browser credential the platform's app vhosts must remove before proxying. */
   public String cookieName() {
     return config.cookieName();
   }

@@ -185,15 +185,12 @@ class HostEnvironmentsTest {
   }
 
   @Test
-  void aNameOutsideTheDomainIsReadAsAMachineNameRatherThanAnsweredAsADoor() {
-    // It used to be the apex reading — a door, which serves nothing — and that took the platform's
-    // own machine vhosts down with it, because they are docker aliases of this container and are
-    // deliberately not under the public domain. A name outside the domain is now
-    // `<app>[.<env>].<machine-suffix>`: this edge's configured application set is the only thing it
-    // can reach, and a leftmost label nothing configures is a 404 rather than a door.
+  void aNameOutsideTheDomainIsAFourOhFourAndNotAnApplication() {
+    // There is no machine-name reading any more (qits-1433): a name of more than one label outside
+    // the stated domain reaches nothing — not even a configured application label in front of it.
     assertEquals(
-        Route.app("dev", "registry", null), EDGE.route("registry.dev.example.com", PROJECTS));
-    assertEquals(Reading.UNKNOWN_MACHINE_NAME, EDGE.route("example.com", PROJECTS).reading());
+        Reading.OUTSIDE_DOMAIN, EDGE.route("registry.dev.example.com", PROJECTS).reading());
+    assertEquals(Reading.OUTSIDE_DOMAIN, EDGE.route("example.com", PROJECTS).reading());
     // One label carries no app label at all, so those two stay doors — see below.
     assertEquals(Route.apex("prod"), EDGE.route("qits-platform-edge", PROJECTS));
     assertEquals(Route.apex("prod"), EDGE.route("localhost", PROJECTS));
@@ -488,114 +485,54 @@ class HostEnvironmentsTest {
         EDGE.route("dev.landing.wohlben.eu", projects, NOWHERE));
   }
 
-  // --- machine names: the platform's own aliases, outside the stated domain ----------------------
+  // --- names outside the stated domain: the retired machine names ------------------------------
 
   /**
-   * The live estate's own application set, against the live stated domain. The four machine vhosts
-   * below are all configured entries of it — {@code registry}, {@code mirror} and {@code githost} —
-   * because that is what a machine name is read against.
+   * The live estate's own application set, against the live stated domain. {@code registry}, {@code
+   * mirror} and {@code githost} are configured — the labels the machine names used to reach.
    */
   private static final HostEnvironments MACHINE =
       HostEnvironments.of(
           List.of("prod", "dev"), "prod", List.of("registry", "mirror", "githost"), "wohlben.eu");
 
   @Test
-  void theFourMachineVhostsTheBootstrapRendersReachTheirApplications() {
-    // Named one by one, because these four ARE the platform's own build and deploy path: every
-    // image
-    // reference is `registry.dev.localhost:8080/qits/<app>:<ver>`, every maven build resolves
-    // through `mirror.dev.localhost:8080`, and a container clones from `githost.dev.localhost:8080`
-    // or, over the oauth2 transport that turns git's Basic into a Bearer,
-    // `githost.dev.internal:8080`.
-    // qits-bootstrap-cli's ComposeTemplate renders them as docker network aliases of this
-    // container,
-    // so none of them is under the public domain — and when a name outside the domain was answered
-    // as
-    // the apex, all four answered 404 at once and nothing on the platform could build or deploy.
-    assertEquals(
-        Route.app("dev", "registry", null), MACHINE.route("registry.dev.localhost:8080", PROJECTS));
-    assertEquals(
-        Route.app("dev", "mirror", null), MACHINE.route("mirror.dev.localhost:8080", PROJECTS));
-    assertEquals(
-        Route.app("dev", "githost", null), MACHINE.route("githost.dev.localhost:8080", PROJECTS));
-    assertEquals(
-        Route.app("dev", "githost", null), MACHINE.route("githost.dev.internal:8080", PROJECTS));
-    // Every one of them a routed application vhost, gated like any other — and inside no project,
-    // so
-    // nothing composes a public application address out of one.
+  void theRetiredMachineNamesAnswerFourOhFourLikeAnyNameOutsideTheDomain() {
+    // qits-1433: the four machine vhosts the bootstrap used to render — and every other spelling
+    // the machine reading accepted — are names outside the domain, and a name outside the domain
+    // reaches nothing: not the configured application its leftmost label spells, not a deployment
+    // that published that label, and not a door.
     for (String host :
         List.of(
             "registry.dev.localhost:8080",
             "mirror.dev.localhost:8080",
             "githost.dev.localhost:8080",
-            "githost.dev.internal:8080")) {
-      assertTrue(MACHINE.route(host, PROJECTS).toApp(), host);
-      assertFalse(MACHINE.route(host, PROJECTS).toDoor(), host);
-      assertNull(MACHINE.route(host, PROJECTS).project(), host);
+            "githost.dev.internal:8080",
+            "registry.prod.localhost",
+            "mirror.localhost:8080",
+            "githost.internal",
+            "mirror.dev",
+            "registry.dev.qits-platform-edge.some.alias",
+            "ci.dev.localhost:8080",
+            "nosuchapp.localhost",
+            "landing.localhost",
+            "landing.dev.internal",
+            "example.com")) {
+      for (Route route :
+          List.of(MACHINE.route(host, PROJECTS), MACHINE.route(host, PROJECTS, EVERYWHERE))) {
+        assertEquals(Reading.OUTSIDE_DOMAIN, route.reading(), host);
+        assertFalse(route.toDoor(), host);
+        assertFalse(route.toApp(), host);
+        assertNull(route.app(), host);
+        assertNull(route.unknownApp(), host);
+        assertNull(route.project(), host);
+      }
     }
   }
 
   @Test
-  void aMachineNameStatesItsEnvironmentOrTakesTheDefault() {
-    // The env label is what keeps the tiers apart, exactly as it does under the domain.
-    assertEquals(
-        Route.app("prod", "registry", null),
-        MACHINE.route("registry.prod.localhost:8080", PROJECTS));
-    // With no env label the second label IS the suffix, and the application is served in the
-    // default
-    // environment — which is right for a platform service deployed once, and is the same default an
-    // env-less project's applications get.
-    assertEquals(
-        Route.app("prod", "mirror", null), MACHINE.route("mirror.localhost:8080", PROJECTS));
-    assertEquals(Route.app("prod", "githost", null), MACHINE.route("githost.internal", PROJECTS));
-    // A suffix spelled like an environment is still the suffix: an env label is read only where
-    // something follows it, so `mirror.dev` is the mirror on a host called `dev`, not dev's mirror.
-    assertEquals(Route.app("prod", "mirror", null), MACHINE.route("mirror.dev", PROJECTS));
-    // The suffix itself is never enumerated — any alias somebody gives this container works.
-    assertEquals(
-        Route.app("dev", "registry", null),
-        MACHINE.route("registry.dev.qits-platform-edge.some.alias", PROJECTS));
-  }
-
-  @Test
-  void aMachineNameWhoseLeftmostLabelIsNoApplicationIsAFourOhFour() {
-    // Not a door. A door serves nothing and says so, which is the answer that hid this whole class
-    // of failure; a machine name that reaches nothing is a name that is wrong, and the 404 names
-    // it.
-    for (String host : List.of("ci.dev.localhost:8080", "nosuchapp.localhost", "example.com")) {
-      Route route = MACHINE.route(host, PROJECTS);
-      assertEquals(Reading.UNKNOWN_MACHINE_NAME, route.reading(), host);
-      assertFalse(route.toDoor(), host);
-      assertFalse(route.toApp(), host);
-      assertNull(route.app(), host);
-      assertNull(route.project(), host);
-    }
-    assertEquals(
-        "ci",
-        MACHINE.route("ci.dev.localhost:8080", PROJECTS).unknownApp(),
-        "carried so the 404 can name what it looked for");
-    assertNull(
-        MACHINE.route(".dev.localhost", PROJECTS).unknownApp(),
-        "and laundered, because it came off the wire");
-  }
-
-  @Test
-  void theReservedLandingLabelIsNoMachineNameEither() {
-    // `landing` means a project's root. A name outside the domain is inside no project, so there is
-    // no root for it to mean — and it is a 404 rather than a door, whoever published the label.
-    for (String host : List.of("landing.localhost", "landing.dev.localhost", "landing.internal")) {
-      Route route = MACHINE.route(host, PROJECTS, EVERYWHERE);
-      assertEquals(Reading.UNKNOWN_MACHINE_NAME, route.reading(), host);
-      assertFalse(route.toDoor(), host);
-      assertFalse(route.toApp(), host);
-    }
-  }
-
-  @Test
-  void aSingleLabelMachineNameIsADoorLikeTheApex() {
+  void aSingleLabelNameIsADoorLikeTheApex() {
     // This container's own service alias, and a name a client shortened to one label. There is no
-    // app label in either — a machine name is `<app>` in front of a suffix and this is only the
-    // suffix — so there is nothing to route and the door is the honest answer.
+    // position in either, so there is nothing to route and the door is the honest answer.
     for (String host : List.of("localhost", "internal", "qits-platform-edge", "registry")) {
       assertEquals(Route.apex("prod"), MACHINE.route(host, PROJECTS), host);
       assertTrue(MACHINE.route(host, PROJECTS).toDoor(), host);
@@ -603,7 +540,7 @@ class HostEnvironmentsTest {
   }
 
   @Test
-  void theApexAnAddressAndAMissingHostStayDoorsBesideTheMachineReading() {
+  void theApexAnAddressAndAMissingHostStayDoors() {
     // Load-bearing and unchanged: this is how the platform is reached before DNS exists, so a
     // bootstrap curling the host's own port must never be read as an application name.
     assertEquals(Route.apex("prod"), MACHINE.route("wohlben.eu", PROJECTS));
@@ -613,9 +550,9 @@ class HostEnvironmentsTest {
     assertEquals(Route.apex("prod"), MACHINE.route(null, PROJECTS));
     assertEquals(Route.apex("prod"), MACHINE.route("", PROJECTS));
     assertEquals(Route.apex("prod"), MACHINE.route("   ", PROJECTS));
-    // And an address literal is refused the machine reading even when its own labels are spelled
-    // like a configured application and an environment: a label may legally be all digits, so the
-    // literal check has to come first or `127.0.0.1` routes.
+    // An address literal stays a door even when its own labels are spelled like a configured
+    // application and an environment: a label may legally be all digits, so the literal check has
+    // to come first.
     HostEnvironments numeric =
         HostEnvironments.of(List.of("prod", "0"), "prod", List.of("127"), "wohlben.eu");
     assertEquals(Route.apex("prod"), numeric.route("127.0.0.1", PROJECTS));
@@ -623,23 +560,22 @@ class HostEnvironmentsTest {
   }
 
   @Test
-  void theMachineReadingReachesNothingUnderTheStatedDomain() {
-    // The separate reading is for names OUTSIDE the domain, and that is the whole of its reach.
-    // Under the domain every tie-break the positional grammar retired stays retired: the project
-    // label is mandatory even where the leftmost label is a configured application spelled exactly
-    // as
-    // a machine vhost is, so `registry.dev.wohlben.eu` is still the 404 it became.
+  void thePublicNamesAreWhatReachTheByteplaneNow() {
+    // What replaced the machine names: the platform project's own labels under the stated domain,
+    // served from code before the project projection has read `qits` (qits-1403).
+    assertEquals(
+        Route.app("prod", "registry", "qits"), MACHINE.route("registry.qits.wohlben.eu", Map.of()));
+    assertEquals(
+        Route.app("prod", "mirror", "qits"), MACHINE.route("mirror.qits.wohlben.eu:443", Map.of()));
+    assertEquals(
+        Route.app("prod", "githost", "qits"), MACHINE.route("githost.qits.wohlben.eu", Map.of()));
+    // And under the domain the positional grammar is unchanged: the project label is mandatory.
     assertEquals(
         Reading.UNKNOWN_PROJECT, MACHINE.route("registry.dev.wohlben.eu", PROJECTS).reading());
-    assertEquals("dev", MACHINE.route("registry.dev.wohlben.eu", PROJECTS).project());
     assertEquals(
         Route.app("dev", "registry", "someproject"),
         MACHINE.route("registry.dev.someproject.wohlben.eu", PROJECTS));
     assertEquals(Route.projectDoor("prod", "qits"), MACHINE.route("qits.wohlben.eu", PROJECTS));
-    assertEquals(Route.apex("prod"), MACHINE.route("wohlben.eu", PROJECTS));
-    assertEquals(
-        Route.unreadable("prod", "someproject"),
-        MACHINE.route("registry.staging.someproject.wohlben.eu", PROJECTS));
     assertEquals(
         Route.reservedLabel("prod", "qits"),
         MACHINE.route("landing.qits.wohlben.eu", PROJECTS, EVERYWHERE));

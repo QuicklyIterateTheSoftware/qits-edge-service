@@ -44,15 +44,15 @@ import org.jboss.logging.Logger;
  * on every service host.
  *
  * <p><b>A name reaches a service two ways now.</b> {@link PlatformApps} is the first, and it is
- * code — the machine vhosts, and the auth attributes that go with them. The projection is the
- * other: a deployment publishes the public name its service answers to, and {@code
- * <app>.<env>.<domain>} then serves that service's SPA at {@code /} and every wire route it owns.
- * They are the same kind of vhost, so a request to either is gated per request rather than per
- * plane: a machine credential, then a browser session, then the reads the deployment opened. Either
- * way the hostname alone picks the application: a path on a service's name is resolved among that
- * service's own routes only, and a call to another application is a cross-origin call to that
- * application's own name, whose CORS the edge answers — see {@link #upstreamOf} and {@link
- * EdgeCors}.
+ * code — the platform's own app labels ({@code registry.qits.<domain>} and the rest), and the auth
+ * attributes that go with them. The projection is the other: a deployment publishes the public name
+ * its service answers to, and {@code <app>.<env>.<domain>} then serves that service's SPA at {@code
+ * /} and every wire route it owns. They are the same kind of vhost, so a request to either is gated
+ * per request rather than per plane: a machine credential, then a browser session, then the reads
+ * the deployment opened. Either way the hostname alone picks the application: a path on a service's
+ * name is resolved among that service's own routes only, and a call to another application is a
+ * cross-origin call to that application's own name, whose CORS the edge answers — see {@link
+ * #upstreamOf} and {@link EdgeCors}.
  *
  * <p><b>A door serves nothing, and there are three of them.</b> The apex, a project's own name
  * {@code <project>.<domain>}, and an environment's name inside a project {@code
@@ -585,11 +585,10 @@ public class EdgeRouter {
     }
     if (named.reading() == HostEnvironments.Reading.UNREADABLE
         || named.reading() == HostEnvironments.Reading.RESERVED_LABEL
-        || named.reading() == HostEnvironments.Reading.UNKNOWN_MACHINE_NAME) {
-      // The machine-name miss belongs here and not in the projection join below: a name outside the
-      // stated domain is one of this container's own aliases, so the configured application set is
-      // the whole of what it may reach and a published browser host is a public name rather than an
-      // alias. It carries its label only so the answer can name it.
+        || named.reading() == HostEnvironments.Reading.OUTSIDE_DOMAIN) {
+      // A name outside the stated domain belongs here and not in the projection join below: there
+      // is no machine-name reading any more (qits-1433), so nothing — configured or published —
+      // is reached by one.
       unreadable(request, named);
       return;
     }
@@ -854,8 +853,8 @@ public class EdgeRouter {
     HostEnvironments.Route named = names.route(host, projects, landingEnvironments);
     if (named.reading() != HostEnvironments.Reading.APP
         && named.reading() != HostEnvironments.Reading.UNKNOWN_APP) {
-      // Only an application position names an application. A machine name's label is refused
-      // here as it is by the router, before any join: it is an alias, never a page's address.
+      // Only an application position names an application. A name outside the domain is refused
+      // here as it is by the router, before any join.
       return null;
     }
     Target target = target(named, published);
@@ -1047,16 +1046,16 @@ public class EdgeRouter {
 
   /** Why a name with a readable project label is still not a name. */
   static String unreadableBody(HostEnvironments.Route named, String domain) {
-    if (named.reading() == HostEnvironments.Reading.UNKNOWN_MACHINE_NAME) {
+    if (named.reading() == HostEnvironments.Reading.OUTSIDE_DOMAIN) {
       // Outside the domain there is no project tier to be missing, so the sentence about one would
-      // be a lie. What this name got wrong is its leftmost label: it is an application this
-      // deployment does not configure. The label is laundered before it is echoed, exactly as
-      // unknownProjectBody's and unknownAppBody's are, because it came off the wire.
-      return (named.unknownApp() == null ? "That label" : "`" + named.unknownApp() + "`")
-          + " is not an application on this platform. This name is outside `"
+      // be a lie. What this name got wrong is the domain itself, and nothing off the wire is
+      // echoed.
+      return "This name is outside `"
           + domain
-          + "`, so it is read as `<app>[.<env>].<machine-suffix>` — the leftmost label is an"
-          + " application of this deployment, and this one is not one.\n";
+          + "`, and this edge serves no name outside it: every name is `<app>[.<env>].<project>."
+          + domain
+          + "`. Machine names such as `registry.<env>.localhost` are retired — use the public"
+          + " name.\n";
     }
     if (named.reading() == HostEnvironments.Reading.RESERVED_LABEL) {
       // `landing` means the project's root, which is `<project>.<domain>` — so the label is never a

@@ -38,7 +38,7 @@ renamed_from: qits-platform-edge
 # trying to place, and the door comes back on the new service within seconds. A rerun of the deploy
 # phase afterwards records the ACTIVE row.
 #
-# AND THE PREDECESSOR CANNOT GO FIRST. It fronts `registry.dev.localhost`, which is what the docker
+# AND THE PREDECESSOR CANNOT GO FIRST. It fronts `registry.qits.<domain>`, which is what the docker
 # daemon pulls every image through, and the deployer runs an explicit `docker pull` whose failure is
 # a FAILED deployment with no local-image fallback. Stop the edge before the image is on the host and
 # the successor's own pull fails. Creating the service first is what puts the image there.
@@ -108,9 +108,9 @@ stop_grace_period: 10m
 # A different name would be an empty volume, and an edge on an empty one has no certificate to serve
 # and orders a new one against Let's Encrypt's weekly limit. The deployer drops the config mount of
 # the same target, and a live service already mounting it is updated in place, not recreated.
-# The host ports and the extra wire aliases are declared below (qits-765); `${QITS_ENVIRONMENT}` is
-# the deployment's environment, so in dev they are registry.dev.localhost and so on; `${QITS_PORT}`
-# is the install's host HTTP port, which the deployer holds (default 8080).
+# The host ports are declared below (qits-765); `${QITS_PORT}` is the install's host HTTP port, which
+# the deployer holds (default 8080). NO extra wire aliases any more (qits-1433): the edge answers no
+# machine name — `registry.<env>.localhost`, `githost.<env>.internal` and the rest are a 404 like
+# any name outside the domain — and every client dials `<app>.qits.<domain>`.
 volumes: private:letsencrypt:/work/.letsencrypt
 publishes: ${QITS_PORT}:8080, 443:8443
-aliases: registry.${QITS_ENVIRONMENT}.localhost, mirror.${QITS_ENVIRONMENT}.localhost, githost.${QITS_ENVIRONMENT}.localhost, githost.${QITS_ENVIRONMENT}.internal

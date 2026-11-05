@@ -130,9 +130,7 @@ A `Host` name selects an environment, and optionally a project and an applicatio
 | `example.com`               | the **default** environment's door — the apex, and the one name with no environment label |
 | `localhost`, `127.0.0.1`, `[::1]` | the **default** door — one label, or an address |
 | no `Host` at all            | the **default** door                                |
-| `registry.dev.localhost`, `githost.dev.internal` | dev's registry and git host — a **machine name**, outside the domain |
-| `mirror.localhost`          | the mirror in the **default** environment — a machine name with no env label |
-| `ci.dev.localhost`, `ci` being published rather than configured | **404** — a machine name reaches configured applications only |
+| `registry.dev.localhost`, `githost.dev.internal`, `mirror.localhost` | **404** — a name outside the domain; the machine-name reading is retired (qits-1433) |
 | `ci.dev.example.com`, published by a deployment | `dev`'s ci service — its SPA at `/` and every route it owns |
 | `mirror.dev.example.com`, `mirror` unconfigured and unpublished | **404** — see below |
 | `registry.example.com`, `acme.example.com`, `ci.acme.example.com`, `staging.example.com` | **404** naming the explicit spelling — see below |
@@ -165,25 +163,17 @@ to the **canonical origin**, which is the platform project's own door (`https://
 derived from the stated domain. Where this edge knows that project, that tier is what the apex
 composes on; where it does not, `GET /` redirects nowhere and it answers the grammar instead.
 
-**A name outside the stated domain is a MACHINE NAME, and it is read rather than refused.** The
-platform's own machine vhosts are docker network aliases of this container — qits-bootstrap-cli's
-`ComposeTemplate` renders `registry.<env>.localhost`, `mirror.<env>.localhost`,
-`githost.<env>.localhost` and `githost.<env>.internal` — and they are deliberately not under the
-public domain: every image reference, every maven resolution and every clone from a container goes
-through one of them. Such a name is read as `<app>[.<env>].<machine-suffix>`, with the leftmost
-label joined against the platform app labels exactly as an app label under the domain is, an optional
-environment label behind it, and a suffix nobody enumerates — `localhost`, `internal`, whatever else
-this container is aliased as. A name outside the domain that was answered as a door instead took
-docker pulls, dependency resolution and container git down together, which is the incident this
-reading exists for.
-
-It is a **separate, explicit** reading and not a revival of the tie-breaks the positional grammar
-retired: under the stated domain the project label stays mandatory and `registry.dev.<domain>` is
-still a 404. A machine name carries **no project** — there is no project tier outside the domain and
-there never can be — so it composes no application address, a leading `landing` label is a 404
-rather than a door, and a leftmost label no *configured* application claims is a 404 that the
-deployment projection is never asked about. A machine name of a single label (`localhost`) carries
-no app label at all and is a door, as an address literal and a missing `Host` are.
+**A name outside the stated domain is a 404, and nothing reads it** (qits-1433). The edge used
+to read such a name as a MACHINE NAME — `<app>[.<env>].<machine-suffix>`, so
+`registry.<env>.localhost`, `mirror.<env>.localhost`, `githost.<env>.localhost` and
+`githost.<env>.internal` reached the platform's registry, mirror and git host — because docker,
+maven and git once dialled those aliases of this container. Nothing does now: every image
+reference, every maven resolution and every clone uses the public names
+(`registry.qits.<domain>` and so on), and the bootstrap pushes its seed images there once the edge
+holds that name's real certificate. So the reading is gone, and such a name is answered as any
+name outside the domain is: a flat **404** that neither the platform app labels nor the deployment
+projection can rescue. A name of a single label (`localhost`, this container's own service alias)
+carries no position at all and is a door, as an address literal and a missing `Host` are.
 
 **A project's slug is a label the edge learns from the event stream.** `EdgeProjects` projects
 qits-projects' `ProjectCreated`/`ProjectDeleted` into the set that both certificate names and these
@@ -204,8 +194,9 @@ single label in front of an environment is: a **published service claims it firs
 what is left, because a slug and a published browser host are the same shape and only the deployment
 projection knows the second set.
 
-**A name reaches a service two ways.** The platform app labels are the first — the machine vhosts,
-and the auth attributes that go with them, in code (`PlatformApps`). The deployment projection is the other: a service
+**A name reaches a service two ways.** The platform app labels are the first — `registry`,
+`mirror`, `githost` and `idp` under the platform project, and the auth attributes that go with them,
+in code (`PlatformApps`). The deployment projection is the other: a service
 publishes the name it answers to, and that name then serves its SPA at `/` and every wire route it
 owns. The two are the same kind of vhost, so everything below treats them alike.
 
@@ -515,7 +506,7 @@ gives every service on qits-net:
 | `githost` | `qits-githost` | `dev-qits-githost:8080` |
 | `idp` | `qits-idp` | `dev-qits-idp:8080` |
 
-`idp` joined the three machine vhosts in qits-1403 so its name answers before the deployment
+`idp` joined the three byte-plane labels in qits-1403 so its name answers before the deployment
 catch-up ends (see *Startup is a rebuild*). Its gate is the one it had as a published host — the
 anonymous prefixes (`/idp/`, so the login page and `/idp/jwks`) on its own name, the session gate
 for a cookie, the ordinary service-vhost gate off its route — with one addition: **under idp's own

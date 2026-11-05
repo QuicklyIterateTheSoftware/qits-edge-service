@@ -5,12 +5,12 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The platform's own machine vhosts, and where each one goes. This is code, not configuration.
+ * The platform's own app labels, and where each one goes. This is code, not configuration.
  *
- * <p>An {@code $app} label here — {@code registry.dev.<domain>} — names a platform application, and
- * every platform application answers at {@code <env>-<application>} on qits-net, port 8080. That
- * address is how the platform works, not something one installation decides. So neither the label
- * set nor the alias is configurable. The edge used to read both from {@code
+ * <p>An {@code $app} label here — {@code registry.qits.<domain>} — names a platform application,
+ * and every platform application answers at {@code <env>-<application>} on qits-net, port 8080.
+ * That address is how the platform works, not something one installation decides. So neither the
+ * label set nor the alias is configurable. The edge used to read both from {@code
  * qits.edge.apps.<app>.host-pattern} and {@code audience-pattern}, and the live store held six
  * entries spelling the same rule. One of them named a tier that no longer exists ({@code
  * {env}-qits-platform-mirror}). The owner's ruling (2026-10-03, qits-528): "it should be code. its

@@ -42,9 +42,9 @@ class EdgeRouterNamesTest {
 
     assertTrue(EdgeRouter.servedBeforeCatchUp(names.route("idp.qits.wohlben.eu", projects)));
     assertTrue(EdgeRouter.servedBeforeCatchUp(names.route("registry.qits.wohlben.eu", projects)));
-    assertTrue(
+    assertFalse(
         EdgeRouter.servedBeforeCatchUp(names.route("githost.dev.localhost:8080", projects)),
-        "a machine name of a platform label too");
+        "a retired machine name is no application position (qits-1433)");
 
     assertFalse(
         EdgeRouter.servedBeforeCatchUp(names.route("ci.dev.acme.wohlben.eu", projects)),
