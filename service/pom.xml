@@ -86,7 +86,7 @@
         <qits.deployments-frontend-pacts-qits-edge-service.version>2026.1106.201642</qits.deployments-frontend-pacts-qits-edge-service.version>
         <qits.mirror-frontend-pacts-qits-edge-service.version>2026.1106.203226</qits.mirror-frontend-pacts-qits-edge-service.version>
         <qits.observability-frontend-pacts-qits-edge-service.version>2026.1106.181306</qits.observability-frontend-pacts-qits-edge-service.version>
-        <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1106.172620</qits.orchestrator-frontend-pacts-qits-edge-service.version>
+        <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1106.203358</qits.orchestrator-frontend-pacts-qits-edge-service.version>
         <qits.system-frontend-pacts-qits-edge-service.version>2026.1106.181314</qits.system-frontend-pacts-qits-edge-service.version>
         <qits.idp-frontend-pacts-qits-edge-service.version>2026.1106.202236</qits.idp-frontend-pacts-qits-edge-service.version>
         <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
