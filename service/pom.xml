@@ -88,7 +88,7 @@
         <qits.observability-frontend-pacts-qits-edge-service.version>2026.1108.174507</qits.observability-frontend-pacts-qits-edge-service.version>
         <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1109.4958</qits.orchestrator-frontend-pacts-qits-edge-service.version>
         <qits.system-frontend-pacts-qits-edge-service.version>2026.1109.4601</qits.system-frontend-pacts-qits-edge-service.version>
-        <qits.idp-frontend-pacts-qits-edge-service.version>2026.1108.174914</qits.idp-frontend-pacts-qits-edge-service.version>
+        <qits.idp-frontend-pacts-qits-edge-service.version>2026.1109.204929</qits.idp-frontend-pacts-qits-edge-service.version>
         <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
         <qits.pact-consumer.version>2026.1106.507</qits.pact-consumer.version>
 
