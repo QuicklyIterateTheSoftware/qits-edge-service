@@ -309,7 +309,7 @@ public class EdgeRouter {
         HostEnvironments.of(
             config.environments(),
             config.defaultEnvironment(),
-            PlatformApps.labels(),
+            platformLabels(config.exposure()),
             domain(config.domain()));
     ordinary = pool(UpstreamPools.ORDINARY);
     stream = pool(UpstreamPools.STREAM);
@@ -492,6 +492,17 @@ public class EdgeRouter {
       }
     }
     return UpstreamPools.Owner.guess(upstream, hostEnvironments.environments());
+  }
+
+  /**
+   * The app labels this edge answers from code: {@link PlatformApps}' on a public edge, none on a
+   * private one (epic qits-1976). With none, {@code registry.qits.<domain>} reads as an unknown app
+   * like any other name, reaches only what the projection holds for it, and {@link
+   * #servedBeforeCatchUp} — which asks the reading — never holds: the private edge dials
+   * qits-events and idp on their internal aliases and has no catch-up that waits for itself.
+   */
+  static Set<String> platformLabels(ExposureClass exposure) {
+    return exposure.servesPlatformApps() ? PlatformApps.labels() : Set.of();
   }
 
   /** Where an unmatched Host name goes. */

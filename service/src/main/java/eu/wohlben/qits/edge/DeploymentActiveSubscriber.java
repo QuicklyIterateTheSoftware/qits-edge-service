@@ -25,6 +25,9 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
    * cross-repository JSON and additions must not force the edge to wait for a Maven release.
    * Missing {@code endpoints} means an older event and is deliberately ignored; an explicit empty
    * array is a real snapshot that removes the application's old routes.
+   *
+   * <p>{@code exposure} is {@code public}, {@code private} or {@code both}, and absent on every
+   * frame written before epic qits-1976 — which reads as {@code public}; see {@link ExposureClass}.
    */
   record DeploymentActivePayload(
       String applicationName,
@@ -32,7 +35,8 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
       String browserHost,
       String apiDocsPath,
       List<EndpointPayload> endpoints,
-      List<NavigationPayload> navigation) {}
+      List<NavigationPayload> navigation,
+      String exposure) {}
 
   /**
    * The canonical endpoint shape published by qits-deployments. Unknown future fields are ignored.
@@ -78,18 +82,35 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
     return true;
   }
 
+  /**
+   * One frame into the projection.
+   *
+   * <p><b>A frame outside this edge's class is a withdrawal, never a skip.</b> It is stored as an
+   * empty snapshot — no endpoint, no host, no navigation — through the same {@link
+   * EdgeRoutes#replace} an explicit empty {@code endpoints} array, a retirement, goes through. So a
+   * deployment that changes class leaves the edge it left exactly as it would by being retired, and
+   * the frame-time ordering still holds: a later frame back inside the class restores it.
+   */
   @Override
   public void onFrame(EventFrame frame) {
     DeploymentActivePayload active = decode(frame);
-    if (active == null || active.endpoints() == null) {
+    if (active == null) {
       return;
     }
     try {
+      boolean kept = config.exposure().keeps(active.exposure());
+      if (kept && active.endpoints() == null) {
+        return;
+      }
       List<String> environments =
           active.environmentName() == null || active.environmentName().isBlank()
               ? config.environments()
               : List.of(active.environmentName());
       for (String environment : environments) {
+        if (!kept) {
+          withdraw(frame, active, environment);
+          continue;
+        }
         List<EdgeEndpoint> endpoints = new ArrayList<>();
         for (EndpointPayload endpoint : active.endpoints()) {
           if (endpoint == null || endpoint.upstreamPort() == null) {
@@ -130,6 +151,26 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
     }
   }
 
+  private void withdraw(EventFrame frame, DeploymentActivePayload active, String environment) {
+    boolean replaced =
+        routes.replace(
+            environment,
+            active.applicationName(),
+            frame.id(),
+            frame.occurredAt(),
+            new EdgeRoutes.Snapshot(List.of(), null, null, List.of()));
+    if (replaced) {
+      LOG.infof(
+          "withdrew %s in %s from DeploymentActive %s: its exposure is %s, outside this %s edge's"
+              + " class",
+          active.applicationName(),
+          environment,
+          frame.id(),
+          ExposureClass.declared(active.exposure()),
+          config.exposure().name().toLowerCase(Locale.ROOT));
+    }
+  }
+
   /**
    * The public name this application asked for, checked against everything it must not collide
    * with.
@@ -140,7 +181,9 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
    * would become unreachable — and a host that is already a platform app vhost ({@link
    * PlatformApps}) for a DIFFERENT service. The last one is a match rather than a ban: {@code
    * registry} is both a platform vhost and the name qits-artifacts publishes, and they are the same
-   * service exactly when the platform's derived address is the one the deployment published.
+   * service exactly when the platform's derived address is the one the deployment published. Only
+   * on a public edge: a private one serves no platform label ({@link ExposureClass}), so there such
+   * a host is an ordinary name.
    */
   private String browserHost(
       DeploymentActivePayload active, String environment, List<EdgeEndpoint> endpoints) {
@@ -163,7 +206,7 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
                 + " environment would stop being reachable by name.");
       }
     }
-    if (PlatformApps.contains(host)) {
+    if (config.exposure().servesPlatformApps() && PlatformApps.contains(host)) {
       Upstream pattern = EdgeRouter.appUpstream(host, environment, config.apps());
       Upstream published = endpoints.isEmpty() ? null : endpoints.get(0).upstream();
       if (published == null

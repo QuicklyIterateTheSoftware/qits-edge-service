@@ -2105,6 +2105,75 @@ class EdgeRoutingTest {
     assertNull(routes.resolve("dev", "qits-artifacts", "/artifacts/api/files"));
   }
 
+  // --- the exposure class (epic qits-1976); this suite is a PUBLIC edge
+  // ----------------------------
+
+  @Test
+  void aPublicEdgeServesPublicAndBothDeployments() {
+    Instant at = Instant.now();
+    deployments.onFrame(exposedCi("public", at));
+    assertNotNull(routes.serviceHost("dev", "ci"));
+    deployments.onFrame(exposedCi("both", at.plusMillis(1)));
+    assertNotNull(routes.serviceHost("dev", "ci"));
+    assertNotNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
+  }
+
+  @Test
+  void aPrivateFrameWithdrawsTheVhostFromThePublicEdge() {
+    Instant at = Instant.now();
+    deployments.onFrame(exposedCi(null, at));
+    assertNotNull(routes.serviceHost("dev", "ci"));
+
+    // Stored, not skipped: the same empty snapshot a retirement is, so the host, the route and the
+    // navigation row all go — and the name is a 404 like any other nobody claims.
+    deployments.onFrame(exposedCi("private", at.plusMillis(1)));
+    assertNull(routes.serviceHost("dev", "ci"));
+    assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
+    assertTrue(
+        routes.navigation("dev").stream()
+            .noneMatch(entry -> "qits-ci".equals(entry.application())));
+    assertEquals(404, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
+
+    // Back inside the class, a later frame restores it: the frame-time order still decides.
+    deployments.onFrame(exposedCi("both", at.plusMillis(2)));
+    assertNotNull(routes.serviceHost("dev", "ci"));
+  }
+
+  @Test
+  void anUnknownExposureChangesNothing() {
+    Instant at = Instant.now();
+    deployments.onFrame(exposedCi("public", at));
+    deployments.onFrame(exposedCi("internal", at.plusMillis(1)));
+    assertNotNull(routes.serviceHost("dev", "ci"), "a typo neither publishes nor withdraws");
+  }
+
+  /** ci's flipped snapshot with an exposure — absent when null — at a stated frame time. */
+  private eu.wohlben.qits.eventstream.control.EventFrame exposedCi(String exposure, Instant at) {
+    JsonObject payload =
+        new JsonObject()
+            .put("applicationName", "qits-ci")
+            .put("environmentName", "dev")
+            .put("browserHost", "ci")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev"))))
+            .put(
+                "navigation",
+                new io.vertx.core.json.JsonArray().add(placement("services.details", "CI", 2)));
+    if (exposure != null) {
+      payload.put("exposure", exposure);
+    }
+    return new eu.wohlben.qits.eventstream.control.EventFrame(
+        java.util.UUID.randomUUID().toString(),
+        "DeploymentActive",
+        at,
+        payload.encode(),
+        null,
+        null,
+        null);
+  }
+
   /**
    * qits-artifacts as it is published after the flip: a primary route, a wire route, the public
    * name {@code registry} — which is also its CONFIGURED vhost, so the two have to agree — and one

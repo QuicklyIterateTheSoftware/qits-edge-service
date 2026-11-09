@@ -5,6 +5,7 @@ import io.smallrye.config.WithDefault;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * The edge's whole configuration surface: which environments exist and which one is the fallback.
@@ -71,6 +72,40 @@ public interface EdgeConfig {
    */
   @WithDefault("prod")
   String defaultEnvironment();
+
+  /**
+   * Which deployments this edge serves, {@code QITS_EDGE_EXPOSURE} — see {@link ExposureClass}.
+   * {@code public} is the edge every installation had before epic qits-1976; {@code private} is the
+   * second deployment of the same image, behind the WireGuard tunnel.
+   */
+  @WithDefault("public")
+  ExposureClass exposure();
+
+  /** Which connections the listener accepts at all — see {@link ListenerAllowList}. */
+  Listen listen();
+
+  interface Listen {
+
+    /**
+     * The local addresses a connection may arrive on, as CIDR blocks. Absent or empty accepts every
+     * connection; set, a connection outside them is closed before routing, and the loopback is
+     * always added. The private edge states {@code 100.96.0.0/24,10.231.0.0/20}.
+     */
+    Optional<List<String>> allowedLocalCidrs();
+  }
+
+  /** The private edge's per-request line — see {@link eu.wohlben.qits.edge.PeerLog}. */
+  PeerLogConfig peerLog();
+
+  interface PeerLogConfig {
+
+    /**
+     * The private overlay, {@code qits-private}: a remote inside it is logged as {@code
+     * peer=overlay}. It is the same block the private edge's allow-list admits.
+     */
+    @WithDefault("10.231.0.0/20")
+    String overlayCidr();
+  }
 
   /**
    * Address overrides for the platform's own app vhosts, keyed by the {@code $app} label. Which
