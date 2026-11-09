@@ -1,0 +1,63 @@
+# The PRIVATE EDGE, qits-edge-private: the variant `deployments.yml` names with `variants: private`
+# (epic qits-1976). The deployer reads this file at the same sha as the main one and deploys it as an
+# application of its own, from the same release, with QITS_VARIANT=private in its container. That
+# variable is everything the edge needs to know: its exposure class, the tunnel, the DNS responder,
+# the listener allow-list, ports 80/443 and the certificate paths are derived from it in code
+# (PrivateVariantConfigSource), so this file declares no settings and there are none to set.
+#
+# THE NAME IS THE APPLICATION, not the image: the swarm service, the wire alias, the container, the
+# databases and the private volume all hang off it, and none of them may collide with the public
+# edge's.
+application: qits-edge-private
+
+# THE SAME IMAGE as the public edge, qits/qits-edge:<version>. The entrypoint is what tells the two
+# apart: with QITS_VARIANT=private it brings up wg0 as root first, and either way runs the edge as
+# uid 1001.
+image: qits-edge
+
+# BOTH NETWORKS. qits-net for egress only — its PostgreSQL, qits-events, idp's internal alias — and
+# qits-private to reach private upstreams. Being on qits-net gives nothing there a way in: the
+# listener closes every connection whose local address is outside 100.96.0.0/24 (wg0) and
+# 10.231.0.0/20 (qits-private), loopback aside. No `host:` and no routes, so neither edge serves a
+# vhost for this application itself.
+exposure: both
+
+# Its own databases, never the public edge's: `edge` holds the snapshots this edge keeps (private and
+# both), `eventstream` its claim ledger and watermark — a fresh database rebuilds from the epoch. The
+# idp client is its own too, dev-qits-edge-private.
+resources: postgresql:edge:qits_edge_private, postgresql:eventstream:qits_edge_private_eventstream, idp:client
+
+# A COMMAND, not a path, because HTTP listens on port 80 here rather than the image's 8080 (a peer
+# dials https://<app>.qits.<domain> with no port). Loopback is always inside the allow-list. curl is
+# the same ubi-minimal curl the public edge's health probe already uses.
+health_cmd: curl -fsS http://localhost:80/q/health/ready || exit 1
+
+# HOST MODE, unlike the public edge's ingress: the routing mesh would SNAT the peer's UDP, so
+# WireGuard would learn the mesh as every peer's endpoint and answer it rather than the peer.
+publish_mode: host
+
+# STOP-FIRST, because a host-mode port has one binder: under the default start-first the successor
+# task sits Pending while the predecessor holds 47812/udp, and a one-node swarm deadlocks — measured
+# on qits-platform-mirror's 2026.813.163303 deploy (see deployments.yml). A tunnel restart is seconds
+# of peers retransmitting their handshake.
+update_order: stop-first
+
+# wireguard-go needs NET_ADMIN to create the TUN and configure wg0. Only the root init helper and
+# wireguard-go hold it: the edge drops to uid 1001 and so to no capabilities at all.
+cap_add: NET_ADMIN
+
+# The WireGuard UDP port and nothing else. HTTP and HTTPS are NOT published: they are served on wg0
+# and qits-private only, and DNS on 100.96.0.1:53 inside the tunnel.
+publishes: 47812:47812/udp
+
+# `private:wireguard` is this application's own volume, qits-edge-private-wireguard: the edge's
+# WireGuard private key, generated on first start. Losing it changes the public key every peer has
+# configured. `shared:qits-edge-letsencrypt` is the PUBLIC edge's certificate volume, read-only: this
+# edge orders nothing and serves the certificate the public edge renews, which Quarkus' TLS registry
+# reloads. Two ACME writers on one account directory would spend Let's Encrypt's weekly duplicate
+# limit twice — the deployer refuses it mounted read-write.
+volumes: private:wireguard:/work/.wireguard, shared:qits-edge-letsencrypt:/work/.letsencrypt:ro
+
+# The public edge's ten minutes, for the same reason: let transfers in flight finish. Its drain
+# bound, quarkus.shutdown.timeout (9m30s), is the same image's and stays just under this.
+stop_grace_period: 10m

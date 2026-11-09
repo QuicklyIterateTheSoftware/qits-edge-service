@@ -37,9 +37,12 @@ import io.netty.handler.codec.dns.TcpDnsResponseDecoder;
 import io.netty.util.ReferenceCountUtil;
 import java.net.Inet4Address;
 import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -54,10 +57,12 @@ class TunnelDnsTest {
 
   private final AtomicBoolean ready = new AtomicBoolean(true);
 
+  private final AtomicReference<Inet4Address> publicAddress = new AtomicReference<>(PUBLIC);
+
   private final TunnelDns.Answers answers =
       new TunnelDns.Answers(
           "wohlben.eu",
-          PUBLIC,
+          publicAddress::get,
           30,
           ready::get,
           name ->
@@ -152,6 +157,76 @@ class TunnelDnsTest {
   @Test
   void aNameTheRouterCannotSayYetIsServfail() {
     assertEquals(DnsResponseCode.SERVFAIL, ask("late.wohlben.eu", DnsRecordType.A).code());
+  }
+
+  @Test
+  void withNoPublicAddressKnownAnUnroutedNameIsServfail() {
+    publicAddress.set(null);
+    for (String name : new String[] {"nope.wohlben.eu", "wohlben.eu"}) {
+      DnsResponse response = ask(name, DnsRecordType.A);
+      assertEquals(DnsResponseCode.SERVFAIL, response.code(), name);
+      assertEquals(0, response.count(DnsSection.ANSWER));
+    }
+    assertArrayEquals(
+        LOCAL.getAddress(),
+        address(ask("ci.dev.acme.wohlben.eu", DnsRecordType.A)),
+        "a routed name needs no public address");
+    assertEquals(
+        DnsResponseCode.NOERROR, ask("nope.wohlben.eu", DnsRecordType.AAAA).code(), "nor AAAA");
+  }
+
+  @Test
+  void thePublicAddressIsTheApexLookedUpAndKeptAcrossAFailedLookup() {
+    List<String> asked = new ArrayList<>();
+    AtomicReference<Inet4Address> resolves = new AtomicReference<>();
+    TunnelDns.PublicAddress apex =
+        new TunnelDns.PublicAddress(
+            "wohlben.eu",
+            null,
+            name -> {
+              asked.add(name);
+              return resolves.get();
+            });
+    assertNull(apex.get(), "nothing known before the first lookup");
+    apex.refresh();
+    assertNull(apex.get(), "nothing resolved, nothing known");
+    resolves.set(PUBLIC);
+    apex.refresh();
+    assertEquals(PUBLIC, apex.get());
+    resolves.set(null);
+    apex.refresh();
+    assertEquals(PUBLIC, apex.get(), "a failed lookup keeps the last address");
+    Inet4Address moved = TunnelDns.ipv4("203.0.113.8");
+    resolves.set(moved);
+    apex.refresh();
+    assertEquals(moved, apex.get());
+    assertEquals(List.of("wohlben.eu", "wohlben.eu", "wohlben.eu", "wohlben.eu"), asked);
+  }
+
+  @Test
+  void aStatedPublicAddressIsNeverLookedUp() {
+    TunnelDns.PublicAddress stated =
+        new TunnelDns.PublicAddress(
+            "wohlben.eu",
+            PUBLIC,
+            name -> {
+              throw new AssertionError("looked up " + name);
+            });
+    stated.refresh();
+    assertEquals(PUBLIC, stated.get());
+  }
+
+  @Test
+  void aThrowingResolverIsAFailedLookup() {
+    TunnelDns.PublicAddress apex =
+        new TunnelDns.PublicAddress(
+            "wohlben.eu",
+            null,
+            name -> {
+              throw new IllegalStateException("resolver down");
+            });
+    apex.refresh();
+    assertNull(apex.get());
   }
 
   @Test

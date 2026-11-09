@@ -27,9 +27,10 @@ public interface TunnelDnsConfig {
   int port();
 
   /**
-   * The public edge's IPv4 address, {@code QITS_PUBLIC_IP}: the answer for every in-zone name this
-   * edge does not route itself. Required when {@link #enabled()}; blank, the responder refuses to
-   * start rather than answer anything with nothing.
+   * The public edge's IPv4 address — the answer for every in-zone name this edge does not route
+   * itself — as an OVERRIDE. Unset, which is the normal case, the responder looks it up: the zone
+   * apex's A record, at start and every five minutes ({@link TunnelDns.PublicAddress}). Set, it
+   * must be an IPv4 literal and is used as is.
    */
   Optional<String> publicAddress();
 

@@ -1,0 +1,7 @@
+# The private edge's static WireGuard peers, one `name:base64PublicKey:tunnelIp` per line; lines
+# starting with # are ignored. Read only by a PRIVATE edge, and only while
+# qits.edge.wireguard.peers is unset (WireguardPeers).
+#
+# TEMPORARY, until qits-1977 registers peers live. The one entry is the proof peer of epic
+# qits-1976; remove it by deleting its line, or this whole file, and releasing.
+proof-workspace:95pJhHSoEe/esnOiCdHvLmFIMzADJiaoQSZ6WcMJvwM=:100.96.0.2
