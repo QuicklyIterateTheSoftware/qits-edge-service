@@ -194,6 +194,13 @@
             <artifactId>quarkus-opentelemetry</artifactId>
         </dependency>
         <dependency>
+            <!-- The private edge's tunnel DNS responder (TunnelDns, epic qits-1976): netty's DNS
+                 codec over UDP and TCP. Already on the classpath through Vert.x's resolver; stated
+                 because this code uses it directly. Version managed by the platform BOM. -->
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-dns</artifactId>
+        </dependency>
+        <dependency>
             <!-- Durable live delivery plus the catch-up log reader. The edge is rebuilt or moved
                  independently of deployments, so its routing projection must recover missed events. -->
             <groupId>eu.wohlben.qits</groupId>

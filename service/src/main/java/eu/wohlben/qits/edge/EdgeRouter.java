@@ -133,7 +133,8 @@ public class EdgeRouter {
    */
   @Inject ProjectSansBootstrap projectSans;
 
-  private HostEnvironments hostEnvironments;
+  /** Read off the event loop too, by the tunnel DNS responder — see {@link #reach}. */
+  private volatile HostEnvironments hostEnvironments;
 
   /** One reusable pair of proxies per platform application vhost, per environment. */
   private final Map<String, Proxies> appProxies = new java.util.LinkedHashMap<>();
@@ -804,6 +805,70 @@ public class EdgeRouter {
   }
 
   /**
+   * What the tunnel DNS responder ({@code eu.wohlben.qits.edge.dns.TunnelDns}) needs to know about
+   * a name: whether a request to it would be routed to a snapshot this edge holds, or whether that
+   * cannot be said yet.
+   */
+  public enum Reach {
+
+    /**
+     * The routes view is not ready — the same barrier that holds {@code /q/health/ready} down — or
+     * the name carries a project label the project log has not been read through, which the router
+     * answers 503 for. Nothing may be concluded about the name.
+     */
+    CATCHING_UP,
+
+    /** A request to the name is routed to a published service this edge holds a snapshot of. */
+    SNAPSHOT,
+
+    /** Anything else: a door, an unknown label, a name nothing here publishes. */
+    ELSEWHERE
+  }
+
+  /** Whether {@link #reach} can answer at all: the router is built and the projection caught up. */
+  public boolean ready() {
+    return hostEnvironments != null && projectionBootstrap.authoritative();
+  }
+
+  /**
+   * {@link Reach} for one name, read exactly as a request with that Host would be: the same {@link
+   * HostEnvironments#route} reading against the same project and landing sets, then {@link
+   * #routesToSnapshot}.
+   */
+  public Reach reach(String host) {
+    HostEnvironments names = hostEnvironments;
+    if (names == null || !projectionBootstrap.authoritative()) {
+      return Reach.CATCHING_UP;
+    }
+    HostEnvironments.Route named =
+        names.route(host, projects.projects(), routes.landingEnvironments());
+    if (named.reading() == HostEnvironments.Reading.UNKNOWN_PROJECT
+        && !projectSans.authoritative()) {
+      return Reach.CATCHING_UP;
+    }
+    return routesToSnapshot(named, routes::serviceHost) ? Reach.SNAPSHOT : Reach.ELSEWHERE;
+  }
+
+  /**
+   * Whether this reading is routed to a service a deployment published — the join {@link
+   * #target(HostEnvironments.Route)} makes for a request, and a published host behind it. A
+   * platform label nothing published is a service the router reaches from code, not a snapshot, so
+   * it is not one here. Static so it is asserted without a boot.
+   *
+   * @param published environment and label to the service publishing that name — {@link
+   *     EdgeRoutes#serviceHost}
+   */
+  static boolean routesToSnapshot(
+      HostEnvironments.Route named, BiFunction<String, String, EdgeRoutes.ServiceHost> published) {
+    if (named.reading() != HostEnvironments.Reading.APP
+        && named.reading() != HostEnvironments.Reading.UNKNOWN_APP) {
+      return false;
+    }
+    Target target = target(named, published);
+    return target != null && target.host() != null;
+  }
+
+  /**
    * The application whose page this request comes from, asserted as {@link EdgeHeaders#CALLER} — or
    * null, and nothing is asserted.
    *
@@ -889,7 +954,7 @@ public class EdgeRouter {
    *
    * <p>Static so it can be asserted without a boot; see {@code EdgeRouterNamesTest}.
    */
-  static String domain(String stated) {
+  public static String domain(String stated) {
     return EnvironmentAuthority.name(stated);
   }
 
