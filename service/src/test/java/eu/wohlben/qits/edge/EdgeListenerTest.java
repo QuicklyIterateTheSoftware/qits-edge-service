@@ -93,11 +93,54 @@ class EdgeListenerTest {
     }
   }
 
+  @Test
+  void theLoopbackHealthCheckWritesNoPeerLine() throws Exception {
+    List<String> lines = new CopyOnWriteArrayList<>();
+    java.util.logging.Logger logger = java.util.logging.Logger.getLogger(PeerLog.CATEGORY);
+    Handler capture =
+        new Handler() {
+          @Override
+          public void publish(LogRecord record) {
+            lines.add(record.getMessage());
+          }
+
+          @Override
+          public void flush() {}
+
+          @Override
+          public void close() {}
+        };
+    logger.addHandler(capture);
+    try {
+      List<String> routed = new CopyOnWriteArrayList<>();
+      int port =
+          serve(
+              ListenerAllowList.of(List.of()),
+              new PeerLog(List.of(), Cidr.parse("10.231.0.0/20")),
+              routed,
+              false);
+      assertTrue(exchange(port).startsWith("HTTP/1.1 200"), "the health check is still served");
+      Thread.sleep(150);
+      assertEquals(List.of(), lines);
+    } finally {
+      logger.removeHandler(capture);
+    }
+  }
+
   private int serve(ListenerAllowList allowed, PeerLog peerLog, List<String> routed)
+      throws Exception {
+    return serve(allowed, peerLog, routed, true);
+  }
+
+  private int serve(
+      ListenerAllowList allowed, PeerLog peerLog, List<String> routed, boolean logLoopback)
       throws Exception {
     vertx = Vertx.vertx();
     Router router = Router.router(vertx);
-    router.route().order(EdgeListener.ROUTE_ORDER).handler(EdgeListener.handler(allowed, peerLog));
+    router
+        .route()
+        .order(EdgeListener.ROUTE_ORDER)
+        .handler(EdgeListener.handler(allowed, peerLog, logLoopback));
     router
         .route()
         .handler(

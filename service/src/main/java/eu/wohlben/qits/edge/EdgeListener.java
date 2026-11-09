@@ -62,7 +62,7 @@ public class EdgeListener {
     if (allowed.any() && peerLog == null) {
       return;
     }
-    router.route().order(ROUTE_ORDER).handler(handler(allowed, peerLog));
+    router.route().order(ROUTE_ORDER).handler(handler(allowed, peerLog, false));
   }
 
   /**
@@ -70,8 +70,11 @@ public class EdgeListener {
    * same one in a test.
    *
    * @param peerLog null on a public edge, which writes no peer line
+   * @param logLoopback whether a loopback caller gets a peer line: never in production, where the
+   *     loopback is the deployer's health check every few seconds and never a peer
    */
-  static Handler<RoutingContext> handler(ListenerAllowList allowed, PeerLog peerLog) {
+  static Handler<RoutingContext> handler(
+      ListenerAllowList allowed, PeerLog peerLog, boolean logLoopback) {
     return rc -> {
       HttpServerRequest request = rc.request();
       HttpConnection connection = request.connection();
@@ -86,8 +89,9 @@ public class EdgeListener {
           return;
         }
       }
-      if (peerLog != null) {
-        logOnce(rc, peerLog, hostAddress(connection.remoteAddress()));
+      String remote = hostAddress(connection.remoteAddress());
+      if (peerLog != null && (logLoopback || !ListenerAllowList.loopback(remote))) {
+        logOnce(rc, peerLog, remote);
       }
       rc.next();
     };

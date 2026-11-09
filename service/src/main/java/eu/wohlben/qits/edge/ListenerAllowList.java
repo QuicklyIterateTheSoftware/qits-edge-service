@@ -77,6 +77,12 @@ final class ListenerAllowList {
     return false;
   }
 
+  /** Whether an address literal is on the loopback: the in-container health check's caller. */
+  static boolean loopback(String hostAddress) {
+    java.net.InetAddress address = Cidr.literal(hostAddress);
+    return LOOPBACK.stream().anyMatch(block -> block.contains(address));
+  }
+
   @Override
   public String toString() {
     return any() ? "any" : allowed.toString();
