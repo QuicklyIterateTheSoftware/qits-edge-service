@@ -244,6 +244,58 @@ What the door answers is:
 There is no gate on the door, because there is nothing behind it to gate: a session cookie and a
 machine token are both answered `404` like any other request.
 
+### The exposure class, and the listener in front of it
+
+One image runs as two edges (epic qits-1976). **`qits.edge.exposure`** (`QITS_EDGE_EXPOSURE`) is
+`public` — every edge before the epic, and the default — or `private`, the second deployment behind
+the WireGuard tunnel. An edge is never `both`; a deployment may be, and `DeploymentActive.exposure`
+carries which:
+
+| deployment declares | public edge | private edge |
+| --- | --- | --- |
+| `public`, or nothing (every frame written before the field) | served | withdrawn |
+| `private` | withdrawn | served |
+| `both` | served | served |
+
+**Withdrawn is stored, not skipped.** A frame outside the edge's class goes through the same
+`EdgeRoutes.replace` an explicit empty `endpoints` array does — no route, no host, no navigation —
+so a deployment that changes class leaves the edge it left exactly as a retirement would, and a later
+frame back inside the class restores it by the usual frame-time order. An exposure that is none of
+the three is an unusable frame and changes nothing. Navigation follows on its own, because it is
+built from the snapshots each edge holds.
+
+**The platform app labels are public-edge code.** On a private edge `registry`, `mirror`, `githost`
+and `idp` are ordinary unknown names — a 404 unless a private or `both` deployment publishes one —
+and the qits-1403 exception that answers them before the catch-up does not apply: the private edge
+dials qits-events and idp on their internal aliases and never waits for itself.
+
+**The listener allow-list.** `qits.edge.listen.allowed-local-cidrs` lists the LOCAL addresses a
+connection may arrive on — the interface it reached, not the caller. Empty, the default, accepts
+everything. Set, a connection outside every block is closed with nothing written back, by
+`EdgeListener`: the first route on the router (`Integer.MIN_VALUE`), ahead of `/q`, the edge's
+catch-all and every WebSocket upgrade it splices. Quarkus exposes no connection handler, so this is
+the earliest hook there is: the TLS handshake and the request head have been read, nothing else has.
+`127.0.0.0/8` and `::1` are always admitted, because the deployer's health check is `curl
+http://localhost…` inside the container, and an IPv4-mapped address (`::ffff:100.96.0.2`) is read
+as its IPv4 address. A refusal is logged at DEBUG. The private edge states
+`100.96.0.0/24,10.231.0.0/20` — the tunnel and the `qits-private` overlay — which is what keeps a
+public service on `qits-net`, where the private edge only dials out, from walking in.
+
+**The peer log.** On a private edge every request this process answers or proxies writes one INFO
+line on the logger `eu.wohlben.qits.edge.peer`:
+
+    peer=proof-workspace ip=100.96.0.2 method=GET host=ci.dev.acme.example.com path=/ci/api/runs status=200
+
+`peer` is the name a tunnel address is configured under in `qits.edge.wireguard.peers`, `overlay`
+for a remote inside `qits.edge.peer-log.overlay-cidr`, and `unknown` otherwise. The address is the
+socket's, never `X-Forwarded-For`, which the edge documents as untrusted. Values off the wire are
+percent-encoded where they could end the line or forge a field. A public edge writes none.
+
+**The forwarding guard.** On a private edge the readiness check `edge forwarding guard` reads
+`/proc/sys/net/ipv4/ip_forward`: anything but `0` is DOWN with the reason, because the tunnel must
+never route a peer onward. A file that cannot be read is UP with a note. A public edge reports UP
+without checking.
+
 ## What it does not do — the non-goals, on purpose
 
 - **No hand-maintained path table.** Direct prefixes are deployment facts consumed from the durable
@@ -458,6 +510,10 @@ a file.
 | `qits.edge.environments` | `QITS_EDGE_ENVIRONMENTS` | `prod` | The routable environment names, comma separated |
 | `qits.edge.default-environment` | `QITS_EDGE_DEFAULT_ENVIRONMENT` | `prod` | Where the apex and every unmatched host go. **Must be in the list** |
 | `qits.edge.apps.<app>.hosts.<env>` | `QITS_EDGE_APPS_<APP>_HOSTS_<ENV>` | — | A local process's or a suite's override of one **platform** label in one environment, `host` or `host:port`. It cannot add a label; a live deployment sets none |
+| `qits.edge.exposure` | `QITS_EDGE_EXPOSURE` | `public` | Which deployments this edge serves, `public` or `private` — see *The exposure class* |
+| `qits.edge.listen.allowed-local-cidrs` | `QITS_EDGE_LISTEN_ALLOWED_LOCAL_CIDRS` | — (any) | Local addresses a connection may arrive on, as CIDR blocks; set, anything else is closed before routing and the loopback is always added |
+| `qits.edge.wireguard.peers` | `QITS_EDGE_WIREGUARD_PEERS` | — | Static peers, `name:base64PublicKey:tunnelIp` comma separated; names the caller in the private edge's peer log. A malformed entry is dropped with a WARN |
+| `qits.edge.peer-log.overlay-cidr` | `QITS_EDGE_PEER_LOG_OVERLAY_CIDR` | `10.231.0.0/20` | The `qits-private` overlay; a remote inside it is `peer=overlay` |
 | `qits.edge.projection.catchup.required` | `QITS_EDGE_PROJECTION_CATCHUP_REQUIRED` | `true` | Requires a complete deployment-history rebuild before the edge is ready; turn off only in an intentionally offline test/dev setup |
 | `qits.edge.projection.catchup.retry` | `QITS_EDGE_PROJECTION_CATCHUP_RETRY` | `PT1S` | Delay before retrying an incomplete, failed, or unavailable deployment-history read |
 | `qits.edge.shutdown.linger` | `QITS_EDGE_SHUTDOWN_LINGER` | `10s` | How long the process stays alive after the HTTP drain so the kernel can send what the last responses queued; with `quarkus.shutdown.timeout` it must stay under the 10m stop grace (qits-1170) |
