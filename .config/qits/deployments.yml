@@ -115,3 +115,10 @@ stop_grace_period: 10m
 # any name outside the domain — and every client dials `<app>.qits.<domain>`.
 volumes: private:letsencrypt:/work/.letsencrypt
 publishes: ${QITS_PORT}:8080, 443:8443
+
+# A SECOND APPLICATION FROM THIS SAME IMAGE AND RELEASE (epic qits-1976): `deployments.private.yml`
+# deploys qits-edge-private, the edge behind the WireGuard tunnel. The deployer reads that file at
+# the same sha, deploys it beside this one, and tells its container QITS_VARIANT=private — the one
+# fact the image derives the whole private edge from (PrivateVariantConfigSource). This application
+# gets no QITS_VARIANT and is unchanged.
+variants: private

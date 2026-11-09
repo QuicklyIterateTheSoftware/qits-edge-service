@@ -22,3 +22,8 @@ target-ide
 # editing this Dockerfile or the README does not bust the `COPY . .` layer.
 *.md
 docker
+# …except the two things the image itself carries from it: the entrypoint and the init helper's Go
+# source (the `wireguard` stage builds it). Editing either does bust the build stage's `COPY . .`,
+# which is the price of keeping that COPY a whole-tree one.
+!docker/entrypoint.sh
+!docker/edge-init

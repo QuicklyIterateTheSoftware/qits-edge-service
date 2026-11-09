@@ -286,7 +286,7 @@ line on the logger `eu.wohlben.qits.edge.peer`:
 
     peer=proof-workspace ip=100.96.0.2 method=GET host=ci.dev.acme.example.com path=/ci/api/runs status=200
 
-`peer` is the name a tunnel address is configured under in `qits.edge.wireguard.peers`, `overlay`
+`peer` is the name a tunnel address is configured under (see *The private edge* below), `overlay`
 for a remote inside `qits.edge.peer-log.overlay-cidr`, and `unknown` otherwise. The address is the
 socket's, never `X-Forwarded-For`, which the edge documents as untrusted. Values off the wire are
 percent-encoded where they could end the line or forge a field. A public edge writes none.
@@ -295,6 +295,82 @@ percent-encoded where they could end the line or forge a field. A public edge wr
 `/proc/sys/net/ipv4/ip_forward`: anything but `0` is DOWN with the reason, because the tunnel must
 never route a peer onward. A file that cannot be read is UP with a note. A public edge reports UP
 without checking.
+
+## The private edge
+
+`qits-edge-private` is a second application from this same image and release:
+`.config/qits/deployments.yml` says `variants: private`, and `.config/qits/deployments.private.yml`
+declares it — `exposure: both`, its own databases, `cap_add: NET_ADMIN`, `publish_mode: host`
+(`update_order: stop-first`, because a host-mode port has one binder), `47812:47812/udp` published
+and nothing else, its own `private:wireguard` volume and the public edge's
+`qits-edge-letsencrypt` read-only.
+
+**No settings: `QITS_VARIANT=private` is the whole configuration.** qits-deployments puts that
+variable in a variant's container and in nothing else, and `PrivateVariantConfigSource` — a
+MicroProfile `ConfigSource` registered in `META-INF/services`, ordinal 275 — derives everything from
+it. Above `application.properties` (250, including any `%prod` line there) and below environment
+variables (300), so one value can still be overridden by hand. It reads the variable at every call,
+never at build or static-init time, so the native image cannot bake the build's (absent) value in.
+Without the variable it is empty and the edge is the public one, unchanged.
+
+| key | private value |
+| --- | --- |
+| `qits.edge.exposure` | `private` |
+| `qits.edge.wireguard.enabled` | `true` |
+| `qits.edge.wireguard.listen-port` | `47812` |
+| `qits.edge.dns.enabled` | `true` |
+| `qits.edge.listen.allowed-local-cidrs` | `100.96.0.0/24,10.231.0.0/20` |
+| `qits.edge.acme.enabled` | `false` — it orders nothing, it serves the public edge's certificate |
+| `quarkus.http.port` / `quarkus.http.ssl-port` | `80` / `443` — a peer dials `https://<app>.qits.<domain>` with no port |
+| `quarkus.tls.key-store.pem.acme.cert` / `.key` | `/work/.letsencrypt/current/lets-encrypt.crt` / `.key` |
+| `quarkus.tls.reload-period` | `1m` — follows the public edge's renewals |
+
+The TLS keys are the public edge's own deployment settings (`QUARKUS_TLS_KEY_STORE_PEM_ACME_CERT`,
+`…_KEY`, `QUARKUS_TLS_RELOAD_PERIOD`) in dotted form: the default TLS configuration's PEM pair named
+`acme`, which the HTTP server uses because it names no `quarkus.http.tls-configuration-name`.
+
+**Addresses.** The tunnel is `100.96.0.0/24`; the edge is `100.96.0.1/24` on `wg0`, MTU 1380; the
+proof peer is `100.96.0.2`. WireGuard listens on UDP **47812**, host mode on `0.0.0.0`. The tunnel
+DNS responder answers on `100.96.0.1:53` (UDP and TCP) for the zone `qits.edge.domain`: a name this
+edge routes gets `100.96.0.1`, every other in-zone name the public edge's address — the zone apex's
+A record, looked up through the container's resolver at start and every five minutes
+(`qits.edge.dns.public-address` overrides it), and SERVFAIL while none is known. Private upstreams
+are reached on `qits-private`, `10.231.0.0/20`.
+
+**Root brings up `wg0`, and nothing else runs as root.** The image starts as root and
+`docker/entrypoint.sh` hands every start to `qits-edge-init` (`docker/edge-init`, Go, built in the
+Dockerfile's `wireguard` stage beside wireguard-go `0.0.20250522`). With `QITS_VARIANT=private` it
+runs `qits-edge-init --wireguard`, which:
+
+1. refuses to start (exit 1, the reason on stderr) unless `/proc/sys/net/ipv4/ip_forward` is `0` —
+   the tunnel must never route a peer onward;
+2. creates `/dev/net/tun` (`c 10 200`; swarm services have no `--device`);
+3. starts `wireguard-go wg0`, which daemonises and stays root, holding the TUN, and waits up to 10 s
+   for `/var/run/wireguard/wg0.sock`;
+4. gives `wg0` its address (`QITS_EDGE_WIREGUARD_ADDRESS`, default `100.96.0.1/24`), MTU
+   (`QITS_EDGE_WIREGUARD_MTU`, default `1380`) and IFF_UP by ioctl;
+5. chowns the UAPI socket and `/work/.wireguard` to `1001:0`.
+
+Then, on either edge, it drops to uid 1001, gid 0, no supplementary groups — and so no capabilities
+— and execs the edge with the image's historical flags. The public edge therefore runs exactly as it
+did under `USER 1001`. The private edge needs root only for the device: everything after it is the
+UAPI socket, which uid 1001 now owns.
+
+**The edge configures `wg0` itself** (`WireguardDevice`). Its private key is
+`qits.edge.wireguard.key-file` (`/work/.wireguard/private.key`, on the private volume), generated on
+first start (X25519, base64 of the raw 32 bytes, mode 0600) and never overwritten; the public key a
+peer configures is logged at INFO as `wireguard public key: <base64>` on every start. It sends one
+UAPI `set=1` — the key, the listen port, `replace_peers=true` and each peer with its one tunnel
+address as `/32` — and readiness (`edge wireguard device`) is DOWN until that is answered
+`errno=0`, and afterwards whenever `get=1` does not answer, reports another listen port, or `wg0` is
+not up. A changed peer list takes a restart in this slice; qits-1977 sends the same operation live.
+
+**The static peers.** The peer log and the device read one list (`WireguardPeers`):
+`qits.edge.wireguard.peers` (`name:base64PublicKey:tunnelIp`, comma separated) when it is set; else,
+on a private edge only, the classpath file `service/src/main/resources/wireguard/static-peers`, one
+entry per line with `#` comments; else none. That file ships the proof peer,
+`proof-workspace:…:100.96.0.2`, and is **temporary until qits-1977**: remove the peer by deleting its
+line, or the file, and releasing.
 
 ## What it does not do — the non-goals, on purpose
 

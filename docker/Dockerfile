@@ -85,6 +85,29 @@ RUN --mount=type=secret,id=qits-client-id \
 # line. The sbom stage's COPY then fails on a file nothing wrote. The spelling matters too: the bare
 # -DskipNotDeployed=false is silently ignored; only the cyclonedx.-prefixed one reaches the plugin.
 
+# --- stage `wireguard`: the private edge's two Go binaries ----------------------------------------
+# Both are static (CGO_ENABLED=0) and stripped, so they need nothing from the runtime image, and both
+# are only ever run by the private edge (QITS_VARIANT=private) — see README.md, "The private edge":
+#
+#   wireguard-go     userspace WireGuard: swarm can neither load a kernel module nor share a network
+#                    namespace between services, so the tunnel lives in this container. Pinned to
+#                    the tag AND its commit, so a moved tag fails the build instead of changing it.
+#   qits-edge-init   docker/edge-init, ours: as root, brings up wg0 (with --wireguard), then drops to
+#                    uid 1001 and execs the edge. Its one dependency, golang.org/x/sys, is pinned by
+#                    go.sum.
+#
+# `mirror.qits.$QITS_DOMAIN/hub/…` is the same pull-through mirror, pointed at Docker Hub. The module
+# downloads go to the internet (proxy.golang.org) and the clone to git.zx2c4.com.
+FROM mirror.qits.${QITS_DOMAIN}/hub/library/golang:1.25 AS wireguard
+ENV CGO_ENABLED=0
+WORKDIR /src
+RUN git clone --quiet --depth 1 --branch 0.0.20250522 https://git.zx2c4.com/wireguard-go wireguard-go \
+ && test "$(git -C wireguard-go rev-parse HEAD)" = f333402bd9cbe0f3eeb02507bd14e23d7d639280 \
+ && cd wireguard-go \
+ && go build -trimpath -ldflags '-s -w' -o /out/wireguard-go .
+COPY docker/edge-init/ /src/edge-init/
+RUN cd /src/edge-init && go build -trimpath -ldflags '-s -w' -o /out/qits-edge-init .
+
 # --- sbom ----------------------------------------------------------------------------------------
 # The service module's CycloneDX document, exported so the release step can PUT it to the platform's
 # SBOM store. A stage rather than a layer of the runtime image, and BEFORE the runtime stage on
@@ -106,8 +129,23 @@ WORKDIR /work
 COPY --from=build --chown=1001:root /src/service/target/qits-platform-edge /work/qits-platform-edge
 RUN chmod +x /work/qits-platform-edge
 
+# Root-owned and run only by the entrypoint: the private edge's tunnel, and the init helper every
+# edge starts through.
+COPY --from=wireguard /out/wireguard-go /out/qits-edge-init /usr/local/bin/
+COPY docker/entrypoint.sh /work/entrypoint.sh
+RUN chmod 0755 /work/entrypoint.sh /usr/local/bin/wireguard-go /usr/local/bin/qits-edge-init
+
 EXPOSE 8080
-USER 1001
+# ROOT, and only for the entrypoint's first milliseconds. The private edge has to create /dev/net/tun,
+# start wireguard-go and configure wg0, which needs root and NET_ADMIN; `USER 1001` would make that
+# impossible. The edge itself still never runs as root, on either edge: docker/entrypoint.sh hands
+# every start to qits-edge-init, which drops to uid 1001, gid 0, no supplementary groups — and so no
+# capabilities — before it execs the binary. The public edge therefore runs exactly as it did.
+#
+# HOME is stated because docker derives it from USER: under `USER 1001`, which has no passwd entry,
+# it was `/`; under root it would be /root, a directory uid 1001 cannot write.
+USER root
+ENV HOME=/
 
 # The environment list is configuration: pass it as env (QITS_EDGE_ENVIRONMENTS=prod,dev and
 # QITS_EDGE_DEFAULT_ENVIRONMENT=prod) or mount an application.properties next to the binary. The
@@ -120,5 +158,6 @@ USER 1001
 # this JDK property: quarkus.vertx.resolver.cache-negative-time-to-live is inert while
 # quarkus.vertx.use-async-dns stays false (the default), which sets vertx.disableDnsResolver=true
 # and puts every lookup through the JDK's blocking resolver. GraalVM native reads the property at
-# runtime, so the entrypoint is where it belongs.
-ENTRYPOINT ["/work/qits-platform-edge", "-Dquarkus.http.host=0.0.0.0", "-Dnetworkaddress.cache.negative.ttl=0"]
+# runtime, so the entrypoint is where it belongs. docker/entrypoint.sh passes both, verbatim, to
+# every edge.
+ENTRYPOINT ["/work/entrypoint.sh"]

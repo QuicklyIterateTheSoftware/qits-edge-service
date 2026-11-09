@@ -43,16 +43,14 @@ public class EdgeListener {
 
   @Inject EdgeConfig config;
 
-  @Inject WireguardConfig wireguard;
+  @Inject WireguardPeers peers;
 
   void init(@Observes Router router) {
     ListenerAllowList allowed =
         ListenerAllowList.of(config.listen().allowedLocalCidrs().orElse(List.of()));
     PeerLog peerLog =
         config.exposure() == ExposureClass.PRIVATE
-            ? new PeerLog(
-                WireguardPeers.parse(wireguard.peers().orElse(null), LOG::warn),
-                Cidr.parse(config.peerLog().overlayCidr()))
+            ? new PeerLog(peers.peers(), Cidr.parse(config.peerLog().overlayCidr()))
             : null;
     LOG.infof(
         "a %s edge: local addresses %s, peer log %s",

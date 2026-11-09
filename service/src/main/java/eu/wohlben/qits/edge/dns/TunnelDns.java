@@ -47,10 +47,15 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.UnknownHostException;
+import java.time.Duration;
 import java.util.Locale;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import org.jboss.logging.Logger;
 
 /**
@@ -65,12 +70,19 @@ import org.jboss.logging.Logger;
  * therefore reaches a private service through the tunnel and everything else the way the rest of
  * the internet does.
  *
+ * <p><b>The public address is looked up, not configured</b> ({@link PublicAddress}): the zone
+ * apex's A record, resolved through this container's own resolver at start and every {@link
+ * #REFRESH} — the address public DNS sends everyone to. {@code qits.edge.dns.public-address}, when
+ * set, is used instead and never looked up. A failed lookup keeps the last address known; while
+ * none is known, every in-zone name this edge does not route is SERVFAIL rather than a guess.
+ *
  * <ul>
  *   <li>A record type other than A for an in-zone name: NOERROR with no answer — this edge has no
  *       IPv6 and no other records, and saying NXDOMAIN would deny the A record too.
  *   <li>A name outside the zone: REFUSED. This is not a recursive resolver.
  *   <li>A query with other than one question: FORMERR. A packet the codec cannot read at all is
  *       dropped: there is no header to answer it under.
+ *   <li>An in-zone name this edge does not route, while no public address is known: SERVFAIL.
  *   <li>Until the routes view is ready — the same head-reached condition {@code /q/health/ready}
  *       reports — every query is SERVFAIL, so a private name that has not been read yet is never
  *       sent to the public address.
@@ -86,6 +98,9 @@ public class TunnelDns {
 
   private static final Logger LOG = Logger.getLogger(TunnelDns.class);
 
+  /** How often the apex is looked up again. */
+  static final Duration REFRESH = Duration.ofMinutes(5);
+
   @Inject TunnelDnsConfig config;
 
   @Inject EdgeConfig edge;
@@ -94,21 +109,23 @@ public class TunnelDns {
 
   private volatile Server server;
 
+  private volatile ScheduledExecutorService refresher;
+
   void start(@Observes StartupEvent ignored) {
     if (!config.enabled()) {
       return;
     }
     String zone = EdgeRouter.domain(edge.domain());
-    Inet4Address publicAddress = ipv4(config.publicAddress().orElse(null));
-    if (publicAddress == null) {
+    String stated = config.publicAddress().filter(value -> !value.isBlank()).orElse(null);
+    Inet4Address override = ipv4(stated);
+    if (stated != null && override == null) {
       LOG.errorf(
-          "the tunnel DNS responder is NOT started: qits.edge.dns.public-address (QITS_PUBLIC_IP)"
-              + " must be the public edge's IPv4 address, and it is `%s`. Every in-zone name this"
-              + " edge does not route is answered with it, so there is nothing to answer without"
-              + " it.",
-          config.publicAddress().orElse(""));
+          "the tunnel DNS responder is NOT started: qits.edge.dns.public-address, when set, must"
+              + " be an IPv4 literal, and it is `%s`",
+          stated);
       return;
     }
+    PublicAddress publicAddress = new PublicAddress(zone, override, TunnelDns::resolveIpv4);
     Inet4Address bind = ipv4(config.bind());
     if (bind == null) {
       LOG.errorf(
@@ -139,16 +156,30 @@ public class TunnelDns {
           config.port());
       return;
     }
+    // At once, then every REFRESH, off the event loop: the JDK lookup blocks.
+    if (override == null) {
+      ScheduledExecutorService schedule =
+          Executors.newSingleThreadScheduledExecutor(
+              new DefaultThreadFactory("edge-tunnel-dns-apex", true));
+      schedule.scheduleWithFixedDelay(
+          publicAddress::refresh, 0, REFRESH.toSeconds(), TimeUnit.SECONDS);
+      refresher = schedule;
+    }
     LOG.infof(
         "tunnel DNS responder on %s:%d (UDP and TCP): zone %s, public address %s, ttl %ds",
         bind.getHostAddress(),
         config.port(),
         zone,
-        publicAddress.getHostAddress(),
+        override != null ? override.getHostAddress() : "the A record of " + zone + ", looked up",
         config.ttl().toSeconds());
   }
 
   void stop(@Observes ShutdownEvent ignored) {
+    ScheduledExecutorService schedule = refresher;
+    if (schedule != null) {
+      refresher = null;
+      schedule.shutdownNow();
+    }
     Server running = server;
     if (running != null) {
       server = null;
@@ -169,6 +200,77 @@ public class TunnelDns {
     }
   }
 
+  /** The first IPv4 address {@code name} resolves to through the JDK resolver, or null. */
+  static Inet4Address resolveIpv4(String name) {
+    try {
+      for (InetAddress address : InetAddress.getAllByName(name)) {
+        if (address instanceof Inet4Address v4) {
+          return v4;
+        }
+      }
+    } catch (UnknownHostException | SecurityException unresolved) {
+      // null: the caller keeps what it knew
+    }
+    return null;
+  }
+
+  /**
+   * The public edge's address: the stated override, or the zone apex's A record as last looked up.
+   * A lookup that finds nothing keeps the previous answer, because the public edge's address does
+   * not vanish when a resolver hiccups.
+   */
+  static final class PublicAddress implements Supplier<Inet4Address> {
+
+    private final String zone;
+    private final Function<String, Inet4Address> resolver;
+    private final AtomicReference<Inet4Address> current = new AtomicReference<>();
+    private final boolean fixed;
+
+    /**
+     * @param override the stated address, or null to look the apex up
+     * @param resolver a name to its IPv4 address, or null when it has none
+     */
+    PublicAddress(String zone, Inet4Address override, Function<String, Inet4Address> resolver) {
+      this.zone = zone;
+      this.resolver = resolver;
+      this.fixed = override != null;
+      current.set(override);
+    }
+
+    @Override
+    public Inet4Address get() {
+      return current.get();
+    }
+
+    /** Look the apex up again; a no-op with an override. */
+    void refresh() {
+      if (fixed) {
+        return;
+      }
+      Inet4Address found;
+      try {
+        found = resolver.apply(zone);
+      } catch (RuntimeException failed) {
+        found = null;
+      }
+      Inet4Address before = current.get();
+      if (found == null) {
+        if (before == null) {
+          LOG.warnf(
+              "the zone apex %s has no A record this container can resolve: in-zone names this"
+                  + " edge does not route answer SERVFAIL until it does",
+              zone);
+        }
+        return;
+      }
+      if (!found.equals(before)) {
+        current.set(found);
+        LOG.infof(
+            "tunnel DNS public address is %s, the A record of %s", found.getHostAddress(), zone);
+      }
+    }
+  }
+
   /** What the router says about one in-zone name, in this responder's terms. */
   enum Reach {
     /** Nothing may be said yet: SERVFAIL. */
@@ -183,12 +285,13 @@ public class TunnelDns {
    * The whole answer logic, free of sockets so it is asserted with constructed queries.
    *
    * @param zone the stated domain, normalised — {@link EdgeRouter#domain}
+   * @param publicAddress the public edge's address now, null while none is known
    * @param ready whether the routes view is ready; false answers every query SERVFAIL
    * @param reach a normalised in-zone name to what the router says about it
    */
   record Answers(
       String zone,
-      Inet4Address publicAddress,
+      Supplier<Inet4Address> publicAddress,
       long ttlSeconds,
       BooleanSupplier ready,
       Function<String, Reach> reach) {
@@ -228,7 +331,10 @@ public class TunnelDns {
         if (said == Reach.CATCHING_UP) {
           return code(response, DnsResponseCode.SERVFAIL);
         }
-        answer = said == Reach.HERE ? local : publicAddress;
+        answer = said == Reach.HERE ? local : publicAddress.get();
+        if (answer == null) {
+          return code(response, DnsResponseCode.SERVFAIL);
+        }
       }
       response.setAuthoritativeAnswer(true).setCode(DnsResponseCode.NOERROR);
       if (answer != null) {
