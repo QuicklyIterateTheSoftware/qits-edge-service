@@ -178,6 +178,15 @@
             <artifactId>quarkus-smallrye-health</artifactId>
         </dependency>
         <dependency>
+            <!-- The API document (qits-1926): the edge's two own operations, /main-navigation and
+                 /upstream-pools, declared in META-INF/openapi.yaml because they are Vert.x routes
+                 no annotation describes. docs/openapi.yml is its committed copy
+                 (OpenApiSchemaExportTest), which the platform's coverage check matches the golden
+                 masters against. Served in dev and test only: see application.properties. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-openapi</artifactId>
+        </dependency>
+        <dependency>
             <!-- OTLP export to qits-observability. The extension is what instruments the process;
                  the endpoint and protocol in application.properties are what make it arrive, since
                  the defaults are gRPC to localhost:4317 and the receiver speaks HTTP/protobuf. -->

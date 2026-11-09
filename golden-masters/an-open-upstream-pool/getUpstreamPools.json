@@ -1,0 +1,11 @@
+[
+  {
+    "name": "qits-artifacts",
+    "environment": "dev",
+    "origin": "dev-qits-artifacts:8080",
+    "pool": "ordinary",
+    "open": 1,
+    "max": 256,
+    "held": []
+  }
+]

@@ -122,6 +122,16 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
    */
   static final String ISSUER = "https://idp.qits." + DOMAIN;
 
+  /**
+   * An {@code Authorization} value the edge admits on every gated name: a live JWT for the platform
+   * audience, signed by the key this stub idp publishes — what {@code EdgeRoutingTest}'s {@code
+   * token()} sends. Public for the provider states in {@code contracts/}, which sit outside this
+   * package and so outside {@link TestTokens} (qits-1926).
+   */
+  public static String platformBearer() {
+    return "Bearer " + TestTokens.valid(ISSUER, List.of(PLATFORM_AUDIENCE));
+  }
+
   /** The edge's OWN idp client, the one it introspects browser sessions with. */
   static final String EDGE_ID = "an-edge";
 

@@ -24,6 +24,31 @@
           }
         }
       ]
+    },
+    {
+      "name": "an open upstream pool",
+      "slug": "an-open-upstream-pool",
+      "params": {
+        "host": "qits.example.com"
+      },
+      "dependsOn": [],
+      "operations": [
+        {
+          "operationId": "getUpstreamPools",
+          "method": "GET",
+          "path": "/upstream-pools",
+          "status": 200,
+          "file": "an-open-upstream-pool/getUpstreamPools.json",
+          "frozen": {
+            "ids": [],
+            "instants": [],
+            "strings": [
+              "$[*].origin"
+            ],
+            "listFilteredTo": null
+          }
+        }
+      ]
     }
   ]
 }

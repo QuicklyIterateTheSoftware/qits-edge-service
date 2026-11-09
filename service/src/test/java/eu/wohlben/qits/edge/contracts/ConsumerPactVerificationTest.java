@@ -50,10 +50,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
  * X-Forwarded-Proto: https}, before it is sent ({@link EdgeTarget}, {@link
  * ProviderStates#requestHeaders}).
  *
- * <p>Each interaction runs against this {@code @QuarkusTest} application over real HTTP,
- * unauthenticated: {@code /main-navigation} is open. Every {@code @State} method delegates to
- * {@link ProviderStates}; {@link #target} fails an unknown state, and an interaction without {@code
- * comments.references.qits-call} or {@code qits-trigger}.
+ * <p>Each interaction runs against this {@code @QuarkusTest} application over real HTTP. {@code
+ * /main-navigation} is open; {@code /upstream-pools} is not, so for {@code an open upstream pool}
+ * {@link ProviderStates#requestHeaders} also sets a live {@code Authorization} over whatever the
+ * pact's request carries — no consumer pins a pact against it yet. Every {@code @State} method
+ * delegates to {@link ProviderStates}; {@link #target} fails an unknown state, and an interaction
+ * without {@code comments.references.qits-call} or {@code qits-trigger}.
  *
  * <p>It runs in the {@code contract-tests} surefire execution, a JVM of its own: see {@code
  * service/pom.xml}.
@@ -149,5 +151,10 @@ class ConsumerPactVerificationTest {
   @State(ProviderStates.A_PUBLISHED_NAVIGATION)
   Map<String, String> aPublishedNavigation() {
     return states.params(ProviderStates.A_PUBLISHED_NAVIGATION);
+  }
+
+  @State(ProviderStates.AN_OPEN_UPSTREAM_POOL)
+  Map<String, String> anOpenUpstreamPool() {
+    return states.params(ProviderStates.AN_OPEN_UPSTREAM_POOL);
   }
 }

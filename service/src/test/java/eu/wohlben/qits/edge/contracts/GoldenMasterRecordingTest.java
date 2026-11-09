@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.TextNode;
 import eu.wohlben.qits.edge.StubGateways;
 import io.quarkus.test.common.WithTestResource;
 import io.quarkus.test.common.http.TestHTTPResource;
@@ -19,12 +20,14 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.function.UnaryOperator;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
@@ -37,9 +40,14 @@ import org.junit.jupiter.api.Test;
  * golden-masters/<state-slug>/<operationId>.json}; then it renders {@code
  * golden-masters/index.json} in the format qits-projects-service set (format version 1).
  *
- * <p><b>Nothing is frozen.</b> The edge's answers here carry no ids, instants or random tokens: the
- * state fixes every name, so the body is recorded as it is and the index's {@code frozen} lists are
- * empty.
+ * <p><b>Only per-run strings are frozen.</b> The edge's answers here carry no ids or instants: the
+ * state fixes every name. What can differ per run is an address a test stub was given — {@code
+ * getUpstreamPools} names the registry stub's ephemeral {@code 127.0.0.1:<port>} — so a state lists
+ * such strings with the stable value to record instead ({@link ProviderStates#frozenStrings}).
+ * Every string value holding one is rewritten, and its JSONPath ({@code $.a.b}, array elements as
+ * {@code [*]}, in order of first appearance) goes into the index's {@code frozen.strings}, the
+ * format qits-projects-service set: a consumer must not match that value literally. {@code
+ * frozen.ids} and {@code frozen.instants} stay empty.
  *
  * <p>It <b>compares by default</b> and fails with a unified diff per differing file — including a
  * committed {@code .json} no interaction produces any more. {@code -Dgolden.update=true} (or {@code
@@ -71,8 +79,9 @@ class GoldenMasterRecordingTest {
       List<String> sortedKeys) {}
 
   /**
-   * {@code getMainNavigation} has no OpenAPI operation behind it — the edge publishes no document —
-   * so the name is this table's, and renaming it is a contract change all the same.
+   * Each operationId is the one {@code META-INF/openapi.yaml} declares (committed as {@code
+   * docs/openapi.yml}), which is what the platform's coverage check matches these entries against;
+   * renaming one is a contract change on both sides.
    */
   static final List<Interaction> INTERACTIONS =
       List.of(
@@ -82,7 +91,14 @@ class GoldenMasterRecordingTest {
               "GET",
               "/main-navigation",
               200,
-              List.of("$.applications")));
+              List.of("$.applications")),
+          new Interaction(
+              ProviderStates.AN_OPEN_UPSTREAM_POOL,
+              "getUpstreamPools",
+              "GET",
+              "/upstream-pools",
+              200,
+              List.of()));
 
   private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -104,6 +120,8 @@ class GoldenMasterRecordingTest {
     for (Interaction interaction : INTERACTIONS) {
       Map<String, String> params = states.params(interaction.state());
       JsonNode body = sortKeys(call(interaction, params), interaction.sortedKeys());
+      Set<String> frozenStrings = new LinkedHashSet<>();
+      body = freeze(body, "$", states.frozenStrings(interaction.state()), frozenStrings);
       String slug = ProviderStates.slug(interaction.state());
       String file = slug + "/" + interaction.operationId() + ".json";
 
@@ -130,7 +148,8 @@ class GoldenMasterRecordingTest {
       ObjectNode frozen = operation.putObject("frozen");
       frozen.putArray("ids");
       frozen.putArray("instants");
-      frozen.putArray("strings");
+      ArrayNode strings = frozen.putArray("strings");
+      frozenStrings.forEach(strings::add);
       frozen.putNull("listFilteredTo");
       if (indexOperations
               .computeIfAbsent(slug, k -> new TreeMap<>())
@@ -225,6 +244,55 @@ class GoldenMasterRecordingTest {
       object.setAll(sorted);
     }
     return body;
+  }
+
+  /**
+   * The body with every string value that holds one of {@code frozen}'s keys rewritten to hold its
+   * value instead; each rewritten value's path is added to {@code paths}.
+   */
+  private static JsonNode freeze(
+      JsonNode node, String path, Map<String, String> frozen, Set<String> paths) {
+    if (frozen.isEmpty()) {
+      return node;
+    }
+    if (node.isTextual()) {
+      String text = node.asText();
+      String rewritten = text;
+      for (Map.Entry<String, String> entry : frozen.entrySet()) {
+        rewritten = rewritten.replace(entry.getKey(), entry.getValue());
+      }
+      if (rewritten.equals(text)) {
+        return node;
+      }
+      paths.add(path);
+      return TextNode.valueOf(rewritten);
+    }
+    if (node.isArray()) {
+      ArrayNode out = JsonNodeFactory.instance.arrayNode();
+      for (JsonNode element : node) {
+        out.add(freeze(element, path + "[*]", frozen, paths));
+      }
+      return out;
+    }
+    if (node.isObject()) {
+      ObjectNode out = JsonNodeFactory.instance.objectNode();
+      for (Map.Entry<String, JsonNode> field : node.properties()) {
+        out.set(
+            field.getKey(), freeze(field.getValue(), path + key(field.getKey()), frozen, paths));
+      }
+      return out;
+    }
+    return node;
+  }
+
+  private static final Pattern PLAIN_KEY = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+
+  /** One key's path segment: {@code .key}, or {@code ['key']} when it is not a plain name. */
+  private static String key(String key) {
+    if (PLAIN_KEY.matcher(key).matches()) {
+      return "." + key;
+    }
+    return "['" + key.replace("\\", "\\\\").replace("'", "\\'") + "']";
   }
 
   private static void check(Path golden, String actual, boolean update, List<String> failures) {

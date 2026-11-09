@@ -1,6 +1,10 @@
 archetype: java-service
 artifacts:
   - { type: docker, name: qits/qits-edge, sbom: .sbom/sbom.json }
+  # The committed OpenAPI document (qits-1926) — the edge's own two operations, never served in
+  # production — published as `@apidocs/qits-edge` on every release by the composed postlude, as
+  # qits-githost's is (OpenApiSchemaExportTest keeps it current).
+  - { type: docs, name: "@apidocs/qits-edge", path: docs/openapi.yml }
 # The provider golden masters (epic qits-112): the platform packages `golden-masters/` as
 # `eu.wohlben.qits:qits-edge-golden-masters` and `@qits/edge-golden-masters`, each published only
 # when its content changed. `contracts/GoldenMasterRecordingTest` records them.
