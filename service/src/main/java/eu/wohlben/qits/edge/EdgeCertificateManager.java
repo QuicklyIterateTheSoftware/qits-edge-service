@@ -259,6 +259,9 @@ public class EdgeCertificateManager {
             || current.orElseThrow().expiresAt().isBefore(Instant.now().plus(acme.renewBefore()))
             || (acme.mode() == AcmeConfig.Mode.PRODUCTION && staging);
     if (!due) {
+      LOG.infof(
+          "Edge certificate is current: %s, %d names, expires %s",
+          acme.mode(), desired.size(), current.orElseThrow().expiresAt());
       return;
     }
     if (!lease.acquire(Duration.ofMinutes(30))) {

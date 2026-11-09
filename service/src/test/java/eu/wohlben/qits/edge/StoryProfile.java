@@ -3,10 +3,24 @@ package eu.wohlben.qits.edge;
 import eu.wohlben.qits.edge.testdb.EmbeddedPg;
 import eu.wohlben.qits.servicemock.MockService;
 import io.quarkus.test.junit.QuarkusTestProfile;
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.spec.ECGenParameterSpec;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 
 /**
  * <b>One launched qits-edge for the whole story catalogue</b>, and every seam a story moves,
@@ -22,8 +36,8 @@ import java.util.Map;
  * ignored and these stories would prove something other than what they say. Everything that makes
  * this service what it is stays exactly as it ships: the 1088M body ceiling, the one-hour idle
  * timeout that keeps terminals and SSE channels alive, the {@code /q} non-application root, the
- * OTel logging quartet, ACME off, and — above all — the {@code X-Qits-*} strip rule itself and the
- * {@code Cache-Control} rewrite, which are code and not configuration.
+ * OTel logging quartet, and — above all — the {@code X-Qits-*} strip rule itself and the {@code
+ * Cache-Control} rewrite, which are code and not configuration.
  *
  * <h2>What is configured, and why each one</h2>
  *
@@ -64,6 +78,10 @@ import java.util.Map;
  *       properties file carries — with it on, every request answers 503 while a bus that is not
  *       there is waited for. And OTel is dark, like {@code %dev}/{@code %test}: the shipped
  *       exporter points at {@code http://dev-qits-observability:8080}, another qits-net-only name.
+ *   <li><b>The certificate.</b> The image owns ACME and its PEM pair in {@code %prod} (qits-2009),
+ *       and a launched artifact runs {@code %prod}. ACME is switched off, since there is no DNS
+ *       provider or CA to order from, and the key store is pointed at a self-signed pair written
+ *       once per JVM, since the shipped {@code /work/.letsencrypt} paths exist on no test host.
  * </ul>
  *
  * <h2>The deployment projection is seeded, not replayed</h2>
@@ -165,7 +183,71 @@ public class StoryProfile implements QuarkusTestProfile {
     config.put("qits.edge.projection.catchup.required", "false");
     config.put("quarkus.otel.sdk.disabled", "true");
 
+    // The image owns its certificate in %prod (qits-2009), and this is the %prod profile. ACME is
+    // off because there is no Hetzner and no Let's Encrypt here; the PEM pair is a throwaway
+    // self-signed one because the shipped paths under /work/.letsencrypt do not exist on this host.
+    config.put("qits.edge.acme.enabled", "false");
+    Path[] pem = selfSignedPem();
+    config.put("quarkus.tls.key-store.pem.acme.cert", pem[0].toString());
+    config.put("quarkus.tls.key-store.pem.acme.key", pem[1].toString());
+
     return Map.copyOf(config);
+  }
+
+  private static final String PEM_CERT_PROPERTY = "qits.test.userflow-it.pem-cert";
+
+  private static final String PEM_KEY_PROPERTY = "qits.test.userflow-it.pem-key";
+
+  /**
+   * A self-signed certificate and its PKCS#8 key, written once per JVM into a temporary directory.
+   * Parked in the property table for the same reason as the database urls: two classloaders, one
+   * JVM, and the second must name the files the first wrote rather than write another pair.
+   */
+  private static synchronized Path[] selfSignedPem() {
+    String cert = System.getProperty(PEM_CERT_PROPERTY);
+    String key = System.getProperty(PEM_KEY_PROPERTY);
+    if (cert != null && key != null) {
+      return new Path[] {Path.of(cert), Path.of(key)};
+    }
+    try {
+      KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+      generator.initialize(new ECGenParameterSpec("secp256r1"));
+      KeyPair pair = generator.generateKeyPair();
+      X500Name subject = new X500Name("CN=" + StoryTarget.DOMAIN);
+      Instant now = Instant.now();
+      X509CertificateHolder holder =
+          new JcaX509v3CertificateBuilder(
+                  subject,
+                  BigInteger.valueOf(now.toEpochMilli()),
+                  Date.from(now.minus(Duration.ofDays(1))),
+                  Date.from(now.plus(Duration.ofDays(30))),
+                  subject,
+                  pair.getPublic())
+              .build(new JcaContentSignerBuilder("SHA256withECDSA").build(pair.getPrivate()));
+      Path directory = Files.createTempDirectory("qits-edge-story-tls");
+      directory.toFile().deleteOnExit();
+      Path certFile = directory.resolve("lets-encrypt.crt");
+      Path keyFile = directory.resolve("lets-encrypt.key");
+      Files.writeString(certFile, pem("CERTIFICATE", holder.getEncoded()));
+      Files.writeString(keyFile, pem("PRIVATE KEY", pair.getPrivate().getEncoded()));
+      certFile.toFile().deleteOnExit();
+      keyFile.toFile().deleteOnExit();
+      System.setProperty(PEM_CERT_PROPERTY, certFile.toString());
+      System.setProperty(PEM_KEY_PROPERTY, keyFile.toString());
+      return new Path[] {certFile, keyFile};
+    } catch (Exception failure) {
+      throw new IllegalStateException("could not write the story catalogue's PEM pair", failure);
+    }
+  }
+
+  private static String pem(String type, byte[] der) {
+    return "-----BEGIN "
+        + type
+        + "-----\n"
+        + Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.US_ASCII)).encodeToString(der)
+        + "\n-----END "
+        + type
+        + "-----\n";
   }
 
   /**

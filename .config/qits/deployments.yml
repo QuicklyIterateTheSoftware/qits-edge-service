@@ -105,8 +105,9 @@ stop_grace_period: 10m
 # account, every issued generation and the `current` link the TLS PEM paths point into. A private
 # volume is named `<application>-<name>`, so under `application: qits-edge` this is exactly
 # `qits-edge-letsencrypt` — the volume the bootstrap seeded and the live edge already mounts here.
-# A different name would be an empty volume, and an edge on an empty one has no certificate to serve
-# and orders a new one against Let's Encrypt's weekly limit. The deployer drops the config mount of
+# A different name would be an empty volume, and an edge on an empty one does not start at all: the
+# image's %prod PEM paths (qits-2009) name files that are not there, and Quarkus refuses an
+# unreadable key store. Only the bootstrap's placeholder breaks that circle. The deployer drops the config mount of
 # the same target, and a live service already mounting it is updated in place, not recreated.
 # The host ports are declared below (qits-765); `${QITS_PORT}` is the install's host HTTP port, which
 # the deployer holds (default 8080). NO extra wire aliases any more (qits-1433): the edge answers no

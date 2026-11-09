@@ -1053,9 +1053,15 @@ are installed in immutable version directories and an atomic `current` symlink s
 TLS registry reload them without restarting the edge.
 
 `QITS_EDGE_ACME_ENABLED` and `QITS_EDGE_ACME_MODE` are the two keys that decide whether there is a
-certificate to own; the domain is not one of them any more. Set `QITS_EDGE_ACME_MODE=staging` until
-the whole DNS path works, then switch to `production`. A
-non-expiring production certificate is never replaced by staging. `QITS_DNS_HETZNER_TOKEN` is a
+certificate to own; the domain is not one of them any more. The image defaults them to `true` and
+`production` in the `prod` profile (qits-2009), and the TLS key store is an image default as well:
+the PEM pair `/work/.letsencrypt/current/lets-encrypt.crt` / `.key` that the manager installs, with
+a one-minute reload period. An installation states the ACME keys only to turn ACME off
+(`QITS_EDGE_ACME_ENABLED=false`) or to order from staging (`QITS_EDGE_ACME_MODE=staging`, worth it
+until the whole DNS path works); an environment variable overrides any of these defaults. Quarkus
+refuses to start when the PEM files cannot be read, so a variant without a certificate on that path
+must override the key store too. A non-expiring production certificate is never replaced by
+staging. `QITS_DNS_HETZNER_TOKEN` is a
 secret and must be supplied by deployment configuration, never committed or logged. Replicas use a
 database lease so only one of them can place an order or renew at a time.
 
