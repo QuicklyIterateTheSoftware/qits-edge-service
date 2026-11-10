@@ -48,6 +48,7 @@ public class PrivateVariantConfigSource implements ConfigSource {
     values.put("qits.edge.wireguard.enabled", "true");
     values.put("qits.edge.wireguard.listen-port", "47812");
     values.put("qits.edge.dns.enabled", "true");
+    values.put("qits.edge.dns.overlay-cidr", "10.231.0.0/20");
     values.put("qits.edge.listen.allowed-local-cidrs", "100.96.0.0/24,10.231.0.0/20");
     values.put("qits.edge.acme.enabled", "false");
     values.put("quarkus.http.port", "80");

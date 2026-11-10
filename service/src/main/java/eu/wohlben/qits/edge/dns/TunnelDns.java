@@ -1,5 +1,6 @@
 package eu.wohlben.qits.edge.dns;
 
+import eu.wohlben.qits.edge.Cidr;
 import eu.wohlben.qits.edge.EdgeConfig;
 import eu.wohlben.qits.edge.EdgeRouter;
 import io.netty.bootstrap.Bootstrap;
@@ -45,10 +46,17 @@ import jakarta.inject.Inject;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
 import java.net.SocketAddress;
+import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -56,6 +64,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import org.jboss.logging.Logger;
 
 /**
@@ -92,6 +101,21 @@ import org.jboss.logging.Logger;
  * over both UDP and TCP on {@code qits.edge.dns.bind}:{@code qits.edge.dns.port}. Nothing here is
  * looked up reflectively: channels are built by constructor reference and the codec ships its own
  * native-image configuration.
+ *
+ * <p><b>The overlay is served too, one socket per address</b> (qits-1991). A host container on
+ * {@code qits-private} names this edge's swarm VIP there as its first {@code --dns}, and the tunnel
+ * address is not on that network. So with {@code qits.edge.dns.overlay-cidr} set, every IPv4
+ * address of this container inside the block — its task address on the overlay, as swarm attached
+ * it before the entrypoint ran — gets a UDP and a TCP socket of its own, on the same port and with
+ * the same answers, each in a group of its own like the tunnel's. Never the wildcard: netty reads
+ * no {@code IP_PKTINFO}, so a UDP socket on {@code 0.0.0.0} reports the wildcard as the recipient,
+ * {@link #local} falls back to the bind, and a private name would be answered with {@code
+ * 100.96.0.1}, which nothing on the overlay can route. Bound to one concrete address, the address a
+ * query arrived on is the socket's own and the answer is the one the caller can reach. The
+ * addresses are read once at start: a task's address changes only when the task is replaced, and
+ * that is a new process. An overlay address that cannot be bound is logged and skipped, and a block
+ * this container has no address in is a WARN; neither stops the tunnel, which is bound first and
+ * decides alone whether the responder runs.
  */
 @ApplicationScoped
 public class TunnelDns {
@@ -108,6 +132,11 @@ public class TunnelDns {
   @Inject EdgeRouter router;
 
   private volatile Server server;
+
+  private volatile List<Server> overlay = List.of();
+
+  /** This container's IPv4 addresses, the overlay's candidates; a seam so tests choose them. */
+  Supplier<List<Inet4Address>> interfaces = TunnelDns::interfaceAddresses;
 
   private volatile ScheduledExecutorService refresher;
 
@@ -156,6 +185,9 @@ public class TunnelDns {
           config.port());
       return;
     }
+    List<Server> overlaid =
+        listenOverlay(config.overlayCidr(), bind, config.port(), answers, interfaces);
+    overlay = overlaid;
     // At once, then every REFRESH, off the event loop: the JDK lookup blocks.
     if (override == null) {
       ScheduledExecutorService schedule =
@@ -166,9 +198,14 @@ public class TunnelDns {
       refresher = schedule;
     }
     LOG.infof(
-        "tunnel DNS responder on %s:%d (UDP and TCP): zone %s, public address %s, ttl %ds",
+        "tunnel DNS responder on %s:%d%s (UDP and TCP): zone %s, public address %s, ttl %ds",
         bind.getHostAddress(),
         config.port(),
+        overlaid.isEmpty()
+            ? ""
+            : overlaid.stream()
+                .map(each -> each.address().getHostAddress() + ":" + config.port())
+                .collect(Collectors.joining(", ", " and overlay ", "")),
         zone,
         override != null ? override.getHostAddress() : "the A record of " + zone + ", looked up",
         config.ttl().toSeconds());
@@ -180,11 +217,108 @@ public class TunnelDns {
       refresher = null;
       schedule.shutdownNow();
     }
+    List<Server> overlaid = overlay;
+    overlay = List.of();
+    overlaid.forEach(Server::close);
     Server running = server;
     if (running != null) {
       server = null;
       running.close();
     }
+  }
+
+  /**
+   * One UDP and one TCP socket on each of {@code addresses}' members inside {@code stated}, on
+   * {@code port} — see the class comment for why one per address. Unset or blank, the public edge's
+   * case, binds nothing and reads no address. The tunnel's own address is skipped should the block
+   * contain it: it is bound already. Never throws: an unreadable block, an address that cannot be
+   * bound, or a block holding none of this container's addresses is logged, and whatever did bind
+   * is returned.
+   */
+  static List<Server> listenOverlay(
+      Optional<String> stated,
+      Inet4Address tunnel,
+      int port,
+      Answers answers,
+      Supplier<List<Inet4Address>> addresses) {
+    String block = stated.map(String::strip).filter(value -> !value.isEmpty()).orElse(null);
+    if (block == null) {
+      return List.of();
+    }
+    Cidr overlay;
+    try {
+      overlay = Cidr.parse(block);
+    } catch (IllegalArgumentException unreadable) {
+      LOG.errorf(
+          "the tunnel DNS responder does NOT serve the overlay: qits.edge.dns.overlay-cidr must be"
+              + " an address block, and it is `%s`; the tunnel alone is answered",
+          block);
+      return List.of();
+    }
+    List<Inet4Address> inside;
+    try {
+      inside =
+          addresses.get().stream()
+              .filter(overlay::contains)
+              .filter(address -> !address.equals(tunnel))
+              .distinct()
+              .toList();
+    } catch (RuntimeException failed) {
+      LOG.errorf(
+          failed,
+          "the tunnel DNS responder does NOT serve the overlay %s: this container's addresses"
+              + " could not be read; the tunnel alone is answered",
+          overlay);
+      return List.of();
+    }
+    if (inside.isEmpty()) {
+      LOG.warnf(
+          "the tunnel DNS responder does NOT serve the overlay %s: this container has no IPv4"
+              + " address inside it; the tunnel alone is answered",
+          overlay);
+      return List.of();
+    }
+    List<Server> bound = new ArrayList<>();
+    for (Inet4Address address : inside) {
+      try {
+        bound.add(Server.listen(address, port, answers));
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        break;
+      } catch (Exception failed) {
+        LOG.errorf(
+            failed,
+            "the tunnel DNS responder could not bind the overlay address %s:%d (UDP and TCP); it"
+                + " is not served, the tunnel and any other address still are",
+            address.getHostAddress(),
+            port);
+      }
+    }
+    return List.copyOf(bound);
+  }
+
+  /** Every IPv4 address of every interface that is up, as the JDK reads them now. */
+  static List<Inet4Address> interfaceAddresses() {
+    List<Inet4Address> found = new ArrayList<>();
+    try {
+      Enumeration<NetworkInterface> all = NetworkInterface.getNetworkInterfaces();
+      if (all == null) {
+        return List.of();
+      }
+      for (NetworkInterface nic : Collections.list(all)) {
+        if (!nic.isUp()) {
+          continue;
+        }
+        for (InetAddress address : Collections.list(nic.getInetAddresses())) {
+          if (address instanceof Inet4Address v4) {
+            found.add(v4);
+          }
+        }
+      }
+    } catch (SocketException unreadable) {
+      throw new IllegalStateException("the network interfaces could not be read", unreadable);
+    }
+    return found;
   }
 
   /** An IPv4 literal, or null for anything else — never a name, which would mean a lookup. */
@@ -393,7 +527,7 @@ public class TunnelDns {
     }
   }
 
-  /** The two bound sockets and the group they run on. */
+  /** The two bound sockets of one address and the group they run on. */
   record Server(EventLoopGroup group, Channel udp, Channel tcp) implements AutoCloseable {
 
     /**
@@ -431,6 +565,11 @@ public class TunnelDns {
         group.shutdownGracefully(0, 1, TimeUnit.SECONDS);
         throw failed;
       }
+    }
+
+    /** The one concrete address both sockets are bound to. */
+    Inet4Address address() {
+      return (Inet4Address) ((InetSocketAddress) udp.localAddress()).getAddress();
     }
 
     int udpPort() {

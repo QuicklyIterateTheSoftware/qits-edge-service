@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufUtil;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
@@ -23,6 +24,7 @@ import io.netty.handler.codec.dns.DatagramDnsQueryEncoder;
 import io.netty.handler.codec.dns.DatagramDnsResponseDecoder;
 import io.netty.handler.codec.dns.DefaultDnsQuery;
 import io.netty.handler.codec.dns.DefaultDnsQuestion;
+import io.netty.handler.codec.dns.DefaultDnsRawRecord;
 import io.netty.handler.codec.dns.DefaultDnsResponse;
 import io.netty.handler.codec.dns.DnsOpCode;
 import io.netty.handler.codec.dns.DnsQuery;
@@ -39,9 +41,11 @@ import java.net.Inet4Address;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
@@ -342,6 +346,233 @@ class TunnelDnsTest {
       }
     } finally {
       client.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+    }
+  }
+
+  // --- the overlay, one socket per address (qits-1991)
+  // ---------------------------------------------------------------------------------------------
+  //
+  // The second loopback address stands in for the edge's task address on qits-private: Linux
+  // routes all of 127/8 to lo, so 127.0.0.2 is a concrete local address a socket can be bound to
+  // and
+  // asked on, and a socket bound to it must answer it — not the tunnel's — for a routed name.
+
+  private static final Inet4Address TUNNEL = TunnelDns.ipv4("127.0.0.1");
+
+  private static final Inet4Address OVERLAY = TunnelDns.ipv4("127.0.0.2");
+
+  /** TEST-NET-1: never an address of this host, so binding it fails. */
+  private static final Inet4Address NOT_HERE = TunnelDns.ipv4("192.0.2.1");
+
+  @Test
+  void anOverlayAddressAnswersARoutedNameWithItsOwnAddressOverUdpAndTcp() throws Exception {
+    EventLoopGroup client = new NioEventLoopGroup(1);
+    try (TunnelDns.Server tunnel = TunnelDns.Server.listen(TUNNEL, 0, answers)) {
+      List<TunnelDns.Server> overlay =
+          TunnelDns.listenOverlay(
+              Optional.of("127.0.0.2/32"),
+              TUNNEL,
+              0,
+              answers,
+              () -> List.of(TUNNEL, OVERLAY, TunnelDns.ipv4("10.231.0.5")));
+      try {
+        assertEquals(1, overlay.size(), "only the address inside the block is bound");
+        TunnelDns.Server served = overlay.get(0);
+        assertEquals(OVERLAY, served.address());
+
+        String routed = "ci.dev.acme.wohlben.eu";
+        assertArrayEquals(
+            OVERLAY.getAddress(), wireAddress(udp(client, OVERLAY, served.udpPort(), routed)));
+        assertArrayEquals(
+            OVERLAY.getAddress(), wireAddress(tcp(client, OVERLAY, served.tcpPort(), routed)));
+        assertArrayEquals(
+            TUNNEL.getAddress(),
+            wireAddress(udp(client, TUNNEL, tunnel.udpPort(), routed)),
+            "the tunnel's socket still answers its own address");
+        assertArrayEquals(
+            TUNNEL.getAddress(), wireAddress(tcp(client, TUNNEL, tunnel.tcpPort(), routed)));
+        assertArrayEquals(
+            PUBLIC.getAddress(),
+            wireAddress(udp(client, OVERLAY, served.udpPort(), "nope.wohlben.eu")),
+            "an unrouted in-zone name is the public address on the overlay too");
+        DnsResponse outside = udp(client, OVERLAY, served.udpPort(), "example.com");
+        assertEquals(
+            DnsResponseCode.REFUSED,
+            outside.code(),
+            "outside the zone, so docker's resolver asks the next --dns");
+      } finally {
+        overlay.forEach(TunnelDns.Server::close);
+      }
+    } finally {
+      client.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+    }
+  }
+
+  @Test
+  void anUnsetOrBlankOverlayBindsNothingAndReadsNoAddress() {
+    AtomicInteger read = new AtomicInteger();
+    for (Optional<String> stated : List.of(Optional.<String>empty(), Optional.of(" "))) {
+      assertTrue(
+          TunnelDns.listenOverlay(
+                  stated,
+                  TUNNEL,
+                  0,
+                  answers,
+                  () -> {
+                    read.incrementAndGet();
+                    return List.of(OVERLAY);
+                  })
+              .isEmpty());
+    }
+    assertEquals(0, read.get());
+  }
+
+  @Test
+  void noAddressInsideTheOverlayBindsNothingBeyondTheTunnel() {
+    assertTrue(
+        TunnelDns.listenOverlay(
+                Optional.of("10.231.0.0/20"),
+                TUNNEL,
+                0,
+                answers,
+                () -> List.of(TUNNEL, TunnelDns.ipv4("172.18.0.4")))
+            .isEmpty());
+    assertTrue(
+        TunnelDns.listenOverlay(
+                Optional.of("127.0.0.0/8"), TUNNEL, 0, answers, () -> List.of(TUNNEL))
+            .isEmpty(),
+        "the tunnel's own address is bound already, never twice");
+    assertTrue(
+        TunnelDns.listenOverlay(
+                Optional.of("not-a-block"), TUNNEL, 0, answers, () -> List.of(OVERLAY))
+            .isEmpty(),
+        "an unreadable block serves the tunnel alone");
+    assertTrue(
+        TunnelDns.listenOverlay(
+                Optional.of("127.0.0.2/32"),
+                TUNNEL,
+                0,
+                answers,
+                () -> {
+                  throw new IllegalStateException("no interfaces");
+                })
+            .isEmpty(),
+        "unreadable interfaces serve the tunnel alone");
+  }
+
+  @Test
+  void anOverlayAddressThatCannotBeBoundLeavesTheTunnelAndTheOthersServing() throws Exception {
+    EventLoopGroup client = new NioEventLoopGroup(1);
+    try (TunnelDns.Server tunnel = TunnelDns.Server.listen(TUNNEL, 0, answers)) {
+      List<TunnelDns.Server> overlay =
+          TunnelDns.listenOverlay(
+              Optional.of("0.0.0.0/0"), TUNNEL, 0, answers, () -> List.of(NOT_HERE, OVERLAY));
+      try {
+        assertEquals(1, overlay.size(), "the unbindable address is skipped, the next is bound");
+        assertEquals(OVERLAY, overlay.get(0).address());
+        String routed = "ci.dev.acme.wohlben.eu";
+        assertArrayEquals(
+            TUNNEL.getAddress(), wireAddress(udp(client, TUNNEL, tunnel.udpPort(), routed)));
+        assertArrayEquals(
+            TUNNEL.getAddress(), wireAddress(tcp(client, TUNNEL, tunnel.tcpPort(), routed)));
+        assertArrayEquals(
+            OVERLAY.getAddress(),
+            wireAddress(udp(client, OVERLAY, overlay.get(0).udpPort(), routed)));
+      } finally {
+        overlay.forEach(TunnelDns.Server::close);
+      }
+    } finally {
+      client.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+    }
+  }
+
+  @Test
+  void theInterfaceAddressesIncludeTheLoopback() {
+    assertTrue(TunnelDns.interfaceAddresses().contains(TUNNEL));
+  }
+
+  /** One A query over UDP to {@code server}:{@code port}; the response is read, then released. */
+  private static DnsResponse udp(EventLoopGroup group, Inet4Address server, int port, String name)
+      throws Exception {
+    CompletableFuture<DnsResponse> answer = new CompletableFuture<>();
+    Channel channel =
+        new Bootstrap()
+            .group(group)
+            .channelFactory(NioDatagramChannel::new)
+            .handler(
+                new ChannelInitializer<DatagramChannel>() {
+                  @Override
+                  protected void initChannel(DatagramChannel channel) {
+                    channel
+                        .pipeline()
+                        .addLast(
+                            new DatagramDnsQueryEncoder(),
+                            new DatagramDnsResponseDecoder(),
+                            capture(answer));
+                  }
+                })
+            .bind(TUNNEL, 0)
+            .sync()
+            .channel();
+    try {
+      DatagramDnsQuery query =
+          new DatagramDnsQuery(null, new InetSocketAddress(server, port), 9, DnsOpCode.QUERY);
+      query.setRecord(DnsSection.QUESTION, new DefaultDnsQuestion(name, DnsRecordType.A));
+      channel.writeAndFlush(query).sync();
+      return detach(answer.get(10, TimeUnit.SECONDS));
+    } finally {
+      channel.close().sync();
+    }
+  }
+
+  /** One A query over TCP to {@code server}:{@code port}; the response is read, then released. */
+  private static DnsResponse tcp(EventLoopGroup group, Inet4Address server, int port, String name)
+      throws Exception {
+    CompletableFuture<DnsResponse> answer = new CompletableFuture<>();
+    Channel channel =
+        new Bootstrap()
+            .group(group)
+            .channelFactory(NioSocketChannel::new)
+            .handler(
+                new ChannelInitializer<SocketChannel>() {
+                  @Override
+                  protected void initChannel(SocketChannel channel) {
+                    channel
+                        .pipeline()
+                        .addLast(
+                            new TcpDnsQueryEncoder(), new TcpDnsResponseDecoder(), capture(answer));
+                  }
+                })
+            .connect(server, port)
+            .sync()
+            .channel();
+    try {
+      DnsQuery query = new DefaultDnsQuery(10, DnsOpCode.QUERY);
+      query.setRecord(DnsSection.QUESTION, new DefaultDnsQuestion(name, DnsRecordType.A));
+      channel.writeAndFlush(query).sync();
+      return detach(answer.get(10, TimeUnit.SECONDS));
+    } finally {
+      channel.close().sync();
+    }
+  }
+
+  /** A heap copy of the code and the answer, so the pooled original can be released at once. */
+  private static DnsResponse detach(DnsResponse wire) {
+    try {
+      DefaultDnsResponse copy = new DefaultDnsResponse(wire.id(), wire.opCode(), wire.code());
+      DnsRecord answer = wire.recordAt(DnsSection.ANSWER);
+      if (answer instanceof DnsRawRecord raw) {
+        copy.addRecord(
+            DnsSection.ANSWER,
+            new DefaultDnsRawRecord(
+                raw.name(),
+                raw.type(),
+                raw.timeToLive(),
+                Unpooled.wrappedBuffer(ByteBufUtil.getBytes(raw.content()))));
+      }
+      return copy;
+    } finally {
+      ReferenceCountUtil.release(wire);
     }
   }
 

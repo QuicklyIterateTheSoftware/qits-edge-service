@@ -319,6 +319,7 @@ Without the variable it is empty and the edge is the public one, unchanged.
 | `qits.edge.wireguard.enabled` | `true` |
 | `qits.edge.wireguard.listen-port` | `47812` |
 | `qits.edge.dns.enabled` | `true` |
+| `qits.edge.dns.overlay-cidr` | `10.231.0.0/20` — the tunnel DNS responder answers on `qits-private` too |
 | `qits.edge.listen.allowed-local-cidrs` | `100.96.0.0/24,10.231.0.0/20` |
 | `qits.edge.acme.enabled` | `false` — it orders nothing, it serves the public edge's certificate |
 | `quarkus.http.port` / `quarkus.http.ssl-port` | `80` / `443` — a peer dials `https://<app>.qits.<domain>` with no port |
@@ -336,6 +337,24 @@ edge routes gets `100.96.0.1`, every other in-zone name the public edge's addres
 A record, looked up through the container's resolver at start and every five minutes
 (`qits.edge.dns.public-address` overrides it), and SERVFAIL while none is known. Private upstreams
 are reached on `qits-private`, `10.231.0.0/20`.
+
+**The responder answers the overlay too** (qits-1991). A host container on `qits-private` — a
+DIRECT admin workspace — names the private edge's swarm VIP there as its first `--dns`, and
+`100.96.0.1` is not on that network. So `qits.edge.dns.overlay-cidr` (`10.231.0.0/20` on the
+private edge, unset and inert on the public one) makes `TunnelDns` read this container's IPv4
+addresses at start and bind one more UDP and TCP socket on port 53 for each address inside the
+block — the edge's task address on the overlay — beside the tunnel's:
+
+    tunnel DNS responder on 100.96.0.1:53 and overlay 10.231.0.5:53 (UDP and TCP): zone …
+
+One socket per address rather than `0.0.0.0`, because netty reads no `IP_PKTINFO`: a UDP socket on
+the wildcard cannot say which address a datagram was sent to, and a private name would be answered
+with the tunnel's `100.96.0.1`, which the overlay cannot route. Bound to one address, a routed name
+is answered with that address, the one the caller asked. The rules are otherwise the tunnel's — and
+a name outside the zone is REFUSED, which sends docker's embedded resolver on to the container's
+next `--dns`. The addresses are read once: swarm attaches a task's networks before the entrypoint,
+and a task's address changes only with the task. An address that cannot be bound is an ERROR and is
+skipped, a block with none of this container's addresses a WARN; either way the tunnel is served.
 
 **Root brings up `wg0`, and nothing else runs as root.** The image starts as root and
 `docker/entrypoint.sh` hands every start to `qits-edge-init` (`docker/edge-init`, Go, built in the
