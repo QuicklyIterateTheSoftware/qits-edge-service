@@ -35,7 +35,9 @@ class PrivateVariantConfigSourceTest {
         "/work/.letsencrypt/current/lets-encrypt.key",
         source.getValue("quarkus.tls.key-store.pem.acme.key"));
     assertEquals("1m", source.getValue("quarkus.tls.reload-period"));
-    assertEquals(12, source.getPropertyNames().size());
+    assertEquals(
+        "${QITS_APPLICATION:qits-edge-private}", source.getValue("quarkus.otel.service.name"));
+    assertEquals(13, source.getPropertyNames().size());
     assertEquals(source.getPropertyNames(), source.getProperties().keySet());
     assertNull(source.getValue("qits.edge.domain"), "anything else keeps its default");
     assertEquals(275, source.getOrdinal());
@@ -80,6 +82,45 @@ class PrivateVariantConfigSourceTest {
     assertEquals("false", config.getRawValue("qits.edge.acme.enabled"));
     assertEquals("private", config.getRawValue("qits.edge.exposure"));
     assertEquals("8081", config.getRawValue("quarkus.http.port"), "an env var still wins");
+  }
+
+  /**
+   * Telemetry under its own name; quarkus.application.name, which more than OTel reads, unmoved.
+   */
+  @Test
+  void thePrivateEdgeExportsTelemetryAsItsOwnApplication() {
+    Map<String, String> properties = Map.of("quarkus.application.name", "qits-edge");
+
+    SmallRyeConfig deployed =
+        config(properties, Map.of("QITS_APPLICATION", "qits-edge-private"), () -> "private");
+    assertEquals("qits-edge-private", deployed.getRawValue("quarkus.otel.service.name"));
+    assertEquals("qits-edge", deployed.getRawValue("quarkus.application.name"));
+
+    SmallRyeConfig renamed =
+        config(properties, Map.of("QITS_APPLICATION", "qits-edge-other"), () -> "private");
+    assertEquals("qits-edge-other", renamed.getRawValue("quarkus.otel.service.name"));
+
+    SmallRyeConfig bare = config(properties, Map.of(), () -> "private");
+    assertEquals("qits-edge-private", bare.getRawValue("quarkus.otel.service.name"));
+
+    SmallRyeConfig publicEdge =
+        config(properties, Map.of("QITS_APPLICATION", "qits-edge"), () -> null);
+    assertNull(
+        publicEdge.getRawValue("quarkus.otel.service.name"),
+        "the public edge sets none: Quarkus falls back to quarkus.application.name, qits-edge");
+    assertEquals("qits-edge", publicEdge.getRawValue("quarkus.application.name"));
+  }
+
+  private static SmallRyeConfig config(
+      Map<String, String> properties,
+      Map<String, String> environment,
+      java.util.function.Supplier<String> variant) {
+    return new SmallRyeConfigBuilder()
+        .addDefaultInterceptors()
+        .withSources(new PropertiesConfigSource(properties, "application.properties", 250))
+        .withSources(new EnvConfigSource(environment, 300))
+        .withSources(new PrivateVariantConfigSource(variant))
+        .build();
   }
 
   @Test

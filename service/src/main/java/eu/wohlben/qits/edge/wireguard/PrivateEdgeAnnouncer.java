@@ -100,6 +100,9 @@ public class PrivateEdgeAnnouncer {
   /** The address last announced, or null before the first announcement. */
   private Inet4Address announced;
 
+  /** What {@link #announceIfDue} last declined for, so each reason is logged once. */
+  private String declined;
+
   PrivateEdgeAnnouncer() {}
 
   PrivateEdgeAnnouncer(Settings settings, Consumer<PrivateEdgeAnnounced> publisher, Clock clock) {
@@ -113,7 +116,14 @@ public class PrivateEdgeAnnouncer {
     // Off the caller's thread: publishing dials qits-events, and the callers are the startup
     // observer and the DNS refresher, neither of which should wait on it.
     publisher =
-        event -> Thread.ofVirtual().name("edge-private-announce").start(() -> bus.publish(event));
+        event ->
+            Thread.ofVirtual()
+                .name("edge-private-announce")
+                .start(
+                    () -> {
+                      bus.publish(event);
+                      logAnnounced(event);
+                    });
     if (!wireguard.enabled()) {
       return;
     }
@@ -144,9 +154,12 @@ public class PrivateEdgeAnnouncer {
   }
 
   private void announceIfDue() {
-    if (settings == null || publicKey == null || publicAddress == null) {
+    String missing = missing();
+    if (missing != null) {
+      declined(missing);
       return;
     }
+    declined = null;
     if (publicAddress.equals(announced)) {
       return;
     }
@@ -174,6 +187,47 @@ public class PrivateEdgeAnnouncer {
         event.mtu(),
         event.domain());
     publisher.accept(event);
+  }
+
+  /** Why no announcement can be made yet, or null when it can. */
+  private String missing() {
+    if (settings == null) {
+      return wireguard != null && !wireguard.enabled()
+          ? "wireguard is off"
+          : "its settings are unusable (qits.edge.wireguard.address, see the ERROR at start)";
+    }
+    if (publicKey == null) {
+      return "wg0 has no key yet (not configured)";
+    }
+    if (publicAddress == null) {
+      return "the tunnel DNS knows no public address yet";
+    }
+    return null;
+  }
+
+  /** One line per change of reason: every call repeats it, the log does not. */
+  private void declined(String missing) {
+    if (missing.equals(declined)) {
+      return;
+    }
+    declined = missing;
+    if (settings == null && wireguard != null && wireguard.enabled()) {
+      LOG.warnf("private edge not announced: %s", missing);
+    } else {
+      LOG.infof("private edge not announced yet: %s", missing);
+    }
+  }
+
+  /** The bus took the event: delivered, or owned by its outbox, which the bus does not say. */
+  static void logAnnounced(PrivateEdgeAnnounced event) {
+    LOG.infof(
+        "private edge announced: key %s at %s:%d",
+        event.publicKey(), event.publicAddress(), event.listenPort());
+  }
+
+  /** The reason last logged, or null since an announcement was due; for a test. */
+  synchronized String declined() {
+    return declined;
   }
 
   private static Inet4Address ipv4(String literal) {

@@ -3,7 +3,9 @@ package eu.wohlben.qits.edge.wireguard;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -72,6 +74,26 @@ class PrivateEdgeAnnouncerTest {
     assertEquals(2, published.size());
     assertEquals("46.224.171.34", published.get(1).publicAddress());
     assertNotEquals(published.get(0).eventId(), published.get(1).eventId());
+  }
+
+  @Test
+  void itNamesWhatIsMissingUntilItCanAnnounce() throws Exception {
+    PrivateEdgeAnnouncer announcer = announcer();
+    announcer.publicAddress(ip("46.224.171.33"));
+    assertEquals("wg0 has no key yet (not configured)", announcer.declined());
+    announcer.deviceConfigured(PUBLIC_KEY);
+    assertNull(announcer.declined(), "announced: nothing is missing");
+
+    PrivateEdgeAnnouncer keyFirst = announcer();
+    keyFirst.deviceConfigured(PUBLIC_KEY);
+    assertEquals("the tunnel DNS knows no public address yet", keyFirst.declined());
+
+    PrivateEdgeAnnouncer unusable =
+        new PrivateEdgeAnnouncer(null, published::add, Clock.fixed(NOW, ZoneOffset.UTC));
+    unusable.deviceConfigured(PUBLIC_KEY);
+    unusable.publicAddress(ip("46.224.171.33"));
+    assertTrue(unusable.declined().startsWith("its settings are unusable"));
+    assertEquals(1, published.size(), "only the first announcer published");
   }
 
   @Test
