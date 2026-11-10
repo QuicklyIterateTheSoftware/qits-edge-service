@@ -43,18 +43,40 @@ final class Uapi {
     request.append("listen_port=").append(listenPort).append('\n');
     request.append("replace_peers=true\n");
     for (WireguardPeers.Peer peer : peers) {
-      request
-          .append("public_key=")
-          .append(HEX.formatHex(Base64.getDecoder().decode(peer.publicKey())))
-          .append('\n');
+      request.append("public_key=").append(hex(peer.publicKey())).append('\n');
       request.append("replace_allowed_ips=true\n");
-      request
-          .append("allowed_ip=")
-          .append(peer.tunnelIp().getHostAddress())
-          .append(peer.tunnelIp() instanceof Inet4Address ? "/32" : "/128")
-          .append('\n');
+      request.append("allowed_ip=").append(allowedIp(peer)).append('\n');
     }
     return request.append('\n').toString();
+  }
+
+  /**
+   * One peer added or restated live: its key and its one tunnel address, the address replacing
+   * whatever it was allowed before. No {@code replace_peers}, so every other peer stays.
+   */
+  static String addPeerRequest(WireguardPeers.Peer peer) {
+    return "set=1\n"
+        + "public_key="
+        + hex(peer.publicKey())
+        + "\n"
+        + "replace_allowed_ips=true\n"
+        + "allowed_ip="
+        + allowedIp(peer)
+        + "\n\n";
+  }
+
+  /** One peer removed live, by its key; every other peer stays. */
+  static String removePeerRequest(WireguardPeers.Peer peer) {
+    return "set=1\npublic_key=" + hex(peer.publicKey()) + "\nremove=true\n\n";
+  }
+
+  private static String hex(String base64Key) {
+    return HEX.formatHex(Base64.getDecoder().decode(base64Key));
+  }
+
+  private static String allowedIp(WireguardPeers.Peer peer) {
+    return peer.tunnelIp().getHostAddress()
+        + (peer.tunnelIp() instanceof Inet4Address ? "/32" : "/128");
   }
 
   /** Send {@code request} and return the answer, through its terminating blank line. */

@@ -2,33 +2,24 @@ package eu.wohlben.qits.edge;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.net.InetAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 import org.jboss.logging.Logger;
 
 /**
  * {@code qits.edge.wireguard.peers}, read: {@code name:base64PublicKey:tunnelIp}, comma separated —
- * {@code proof-workspace:<44-char key>:100.96.0.2}. Base64 holds no {@code :} and no {@code ,}, so
- * the two separators are unambiguous.
+ * {@code laptop:<44-char key>:100.96.0.3}. Base64 holds no {@code :} and no {@code ,}, so the two
+ * separators are unambiguous.
  *
- * <p>One list, two readers. The peer log names a caller by its tunnel address here; the WireGuard
- * device configures the same peers from it. Static peers by hand are the whole of this slice — live
- * registration is qits-1977's.
- *
- * <p><b>Where the list comes from</b> ({@link #peers()}, the one reading both use): {@code
- * qits.edge.wireguard.peers} when it is set; else, on a {@link ExposureClass#PRIVATE} edge, the
- * classpath file {@value #STATIC_PEERS_RESOURCE} — the proof peer, shipped with the image until
- * qits-1977 replaces static peers, and removed by deleting its line or the file; else none. A
- * public edge never reads the file, so the proof peer can never name a caller there.
+ * <p><b>An operator override, and nothing more</b> (epic qits-1977). The peers a private edge
+ * serves come from qits-network-access, live, as {@code PeerRegistered} and {@code PeerRevoked}
+ * ({@code eu.wohlben.qits.edge.wireguard.LivePeers}); this property's peers are merged with those,
+ * so a peer can still be stated by hand without a registration. Unset is none, on every edge — the
+ * classpath file of static peers epic qits-1976 shipped is gone.
  *
  * <p><b>Lenient, and loud about it.</b> A malformed entry is dropped with a WARN naming its
  * position and what is wrong with it, never its key, and the rest of the list still counts: one
@@ -36,11 +27,6 @@ import org.jboss.logging.Logger;
  */
 @ApplicationScoped
 public class WireguardPeers {
-
-  /**
-   * The static peers shipped with the image, one {@code name:key:ip} per line, {@code #} comments.
-   */
-  static final String STATIC_PEERS_RESOURCE = "wireguard/static-peers";
 
   private static final Logger LOG = Logger.getLogger(WireguardPeers.class);
 
@@ -52,47 +38,24 @@ public class WireguardPeers {
 
   @Inject WireguardConfig wireguard;
 
-  @Inject EdgeConfig edge;
-
   private volatile List<Peer> peers;
 
-  /** The configured peers, read once: see the class comment for where they come from. */
+  /** The configured peers, read once. */
   public List<Peer> peers() {
     List<Peer> read = peers;
     if (read == null) {
-      read = List.copyOf(configured(wireguard.peers(), edge.exposure(), LOG::warn));
+      read = List.copyOf(configured(wireguard.peers(), LOG::warn));
       peers = read;
     }
     return read;
   }
 
-  /** {@link #peers()}' reading, with its inputs passed in. */
-  static List<Peer> configured(
-      Optional<String> property, ExposureClass exposure, Consumer<String> warn) {
+  /** {@link #peers()}' reading, with its input passed in: the property, or none. */
+  static List<Peer> configured(Optional<String> property, Consumer<String> warn) {
     if (property.isPresent() && !property.get().isBlank()) {
       return parse(property.get(), "qits.edge.wireguard.peers", warn);
     }
-    if (exposure != ExposureClass.PRIVATE) {
-      return List.of();
-    }
-    return parse(staticPeers(), STATIC_PEERS_RESOURCE, warn);
-  }
-
-  /** The classpath file's entries, comma-joined; absent is none. */
-  static String staticPeers() {
-    try (InputStream in =
-        WireguardPeers.class.getClassLoader().getResourceAsStream(STATIC_PEERS_RESOURCE)) {
-      if (in == null) {
-        return null;
-      }
-      return new String(in.readAllBytes(), StandardCharsets.UTF_8)
-          .lines()
-          .map(String::strip)
-          .filter(line -> !line.isEmpty() && !line.startsWith("#"))
-          .collect(Collectors.joining(","));
-    } catch (IOException unreadable) {
-      throw new UncheckedIOException(unreadable);
-    }
+    return List.of();
   }
 
   static List<Peer> parse(String raw, Consumer<String> warn) {
@@ -150,7 +113,8 @@ public class WireguardPeers {
     return peers;
   }
 
-  private static boolean isKey(String key) {
+  /** Whether {@code key} is base64 of 32 bytes, the shape of a WireGuard public key. */
+  public static boolean isKey(String key) {
     try {
       return Base64.getDecoder().decode(key).length == KEY_BYTES;
     } catch (IllegalArgumentException notBase64) {

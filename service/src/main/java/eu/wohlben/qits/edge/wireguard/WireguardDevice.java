@@ -1,7 +1,6 @@
 package eu.wohlben.qits.edge.wireguard;
 
 import eu.wohlben.qits.edge.WireguardConfig;
-import eu.wohlben.qits.edge.WireguardPeers;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
@@ -14,6 +13,7 @@ import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.time.Duration;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import org.eclipse.microprofile.health.HealthCheck;
 import org.eclipse.microprofile.health.HealthCheckResponse;
@@ -27,10 +27,13 @@ import org.jboss.logging.Logger;
  * wireguard-go holds the TUN, and its UAPI socket is chowned to uid 1001, which is all this process
  * needs. At start it loads — or on first start generates — the private key, logs the public key a
  * peer configures, and sends one {@code set=1}: the key, {@code qits.edge.wireguard.listen-port}
- * and exactly the configured peers ({@link WireguardPeers}), each allowed its one tunnel address. A
- * changed peer list takes a restart in this slice; qits-1977 sends the same operation live.
+ * and {@code replace_peers=true} with no peers. The peers follow from {@link LivePeers} (epic
+ * qits-1977): one full set once the peer projection has caught up, then one operation per
+ * registration or revocation. The key also goes to {@link PrivateEdgeAnnouncer}, which tells
+ * qits-network-access what a peer dials.
  *
- * <p>Readiness is DOWN until that {@code set=1} was answered {@code errno=0}, and afterwards
+ * <p>Readiness is DOWN until that {@code set=1} was answered {@code errno=0}, while {@link
+ * LivePeers} has not given the device its peers (or the last operation failed), and afterwards
  * whenever {@code get=1} does not answer, answers another listen port, or {@code wg0} is not up —
  * so a wireguard-go that died takes the private edge out of service rather than leaving it serving
  * nothing on the tunnel. Off ({@code qits.edge.wireguard.enabled=false}, every public edge), it is
@@ -53,7 +56,9 @@ public class WireguardDevice implements HealthCheck {
 
   @Inject WireguardConfig config;
 
-  @Inject WireguardPeers peers;
+  @Inject LivePeers peers;
+
+  @Inject PrivateEdgeAnnouncer announcer;
 
   /** Null once configured; until then, why not. */
   private volatile String unconfigured = "not configured yet";
@@ -67,9 +72,12 @@ public class WireguardDevice implements HealthCheck {
             Path.of(config.keyFile()),
             Path.of(config.uapiSocket()),
             config.listenPort(),
-            peers.peers(),
             ATTEMPTS,
-            PAUSE);
+            PAUSE,
+            key -> {
+              peers.deviceConfigured(key.privateKey(), config.listenPort());
+              announcer.deviceConfigured(key.publicKeyBase64());
+            });
     if (unconfigured != null) {
       // What the host looked like when it gave up, which the reason alone cannot say: a socket
       // that never appeared and one that went away read the same ENOENT. wg0 present means
@@ -101,17 +109,18 @@ public class WireguardDevice implements HealthCheck {
   }
 
   /**
-   * Load or create the key and send the configuration.
+   * Load or create the key and send the startup configuration: key, port, no peers.
    *
+   * @param configured told the key once the device took it
    * @return null when the device took it, else the reason it did not
    */
   static String configure(
       Path keyFile,
       Path socket,
       int listenPort,
-      List<WireguardPeers.Peer> peers,
       int attempts,
-      Duration pause) {
+      Duration pause,
+      Consumer<WireguardKey> configured) {
     WireguardKey key;
     try {
       key = WireguardKey.loadOrCreate(keyFile);
@@ -121,18 +130,16 @@ public class WireguardDevice implements HealthCheck {
       return reason;
     }
     LOG.infof("wireguard public key: %s", key.publicKeyBase64());
-    String request = Uapi.setRequest(key.privateKey(), listenPort, peers);
+    String request = Uapi.setRequest(key.privateKey(), listenPort, List.of());
     String reason = null;
     for (int attempt = 1; attempt <= attempts; attempt++) {
       try {
         int errno = Uapi.errno(Uapi.exchange(socket, request));
         if (errno == 0) {
           LOG.infof(
-              "%s configured: listen port %d, %d peers %s",
-              INTERFACE,
-              listenPort,
-              peers.size(),
-              peers.stream().map(WireguardPeers.Peer::name).toList());
+              "%s configured: listen port %d; its peers follow once they are caught up",
+              INTERFACE, listenPort);
+          configured.accept(key);
           return null;
         }
         reason = "set=1 on " + socket + " answered errno=" + errno;
@@ -158,19 +165,32 @@ public class WireguardDevice implements HealthCheck {
       return HealthCheckResponse.named(NAME).up().withData("wireguard", "off").build();
     }
     return check(
-        unconfigured, Path.of(config.uapiSocket()), config.listenPort(), WireguardDevice::isUp);
+        unconfigured,
+        peers.unready(),
+        Path.of(config.uapiSocket()),
+        config.listenPort(),
+        WireguardDevice::isUp);
   }
 
   /**
    * Readiness, with its inputs passed in.
    *
    * @param unconfigured null once the start-up configuration was taken, else why it was not
+   * @param peersUnready null while the device holds its peers, else why not — {@link
+   *     LivePeers#unready()}
    * @param interfaceUp whether the named interface exists and is up
    */
   static HealthCheckResponse check(
-      String unconfigured, Path socket, int listenPort, Predicate<String> interfaceUp) {
+      String unconfigured,
+      String peersUnready,
+      Path socket,
+      int listenPort,
+      Predicate<String> interfaceUp) {
     if (unconfigured != null) {
       return down(unconfigured);
+    }
+    if (peersUnready != null) {
+      return down(peersUnready);
     }
     String answer;
     try {

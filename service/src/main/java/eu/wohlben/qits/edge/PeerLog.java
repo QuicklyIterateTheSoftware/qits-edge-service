@@ -2,6 +2,7 @@ package eu.wohlben.qits.edge;
 
 import java.net.InetAddress;
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * The private edge's one line per request, on {@link #CATEGORY} at INFO:
@@ -13,7 +14,9 @@ import java.util.List;
  * <p>It is how an operator reads who used the tunnel. {@code peer} is the name a tunnel address is
  * configured under ({@link WireguardPeers}), {@code overlay} for a remote inside {@code
  * qits.edge.peer-log.overlay-cidr} — a private service on {@code qits-private} calling through its
- * edge — and {@code unknown} for anything else.
+ * edge — and {@code unknown} for anything else. The peers are read at each request ({@code
+ * LivePeers}, epic qits-1977), so a peer registered a second ago is named on its first request and
+ * a revoked one is not named any more.
  *
  * <p><b>The remote address is the socket's</b>, never {@code X-Forwarded-For}: the edge sets that
  * header only when it is absent and documents it as untrusted ({@code EdgeHeaders.applyForwarded}),
@@ -30,19 +33,19 @@ final class PeerLog {
 
   static final String UNKNOWN = "unknown";
 
-  /** Each peer's tunnel address as a block of one, so it matches in either socket spelling. */
-  private final List<Named> peers;
-
-  private record Named(String name, Cidr address) {}
+  /** The peers as they are now, read at each request. */
+  private final Supplier<List<WireguardPeers.Peer>> peers;
 
   private final Cidr overlay;
 
-  PeerLog(List<WireguardPeers.Peer> peers, Cidr overlay) {
-    this.peers =
-        peers.stream()
-            .map(peer -> new Named(peer.name(), Cidr.parse(peer.tunnelIp().getHostAddress())))
-            .toList();
+  PeerLog(Supplier<List<WireguardPeers.Peer>> peers, Cidr overlay) {
+    this.peers = peers;
     this.overlay = overlay;
+  }
+
+  /** A fixed list of peers, for a test. */
+  PeerLog(List<WireguardPeers.Peer> peers, Cidr overlay) {
+    this(() -> peers, overlay);
   }
 
   /** Who {@code remoteIp} is: a configured peer's name, {@link #OVERLAY}, or {@link #UNKNOWN}. */
@@ -51,9 +54,10 @@ final class PeerLog {
     if (remote == null) {
       return UNKNOWN;
     }
-    for (Named peer : peers) {
-      // A peer at 100.96.0.2 is named whether the socket reports it so or as ::ffff:100.96.0.2.
-      if (peer.address().contains(remote)) {
+    for (WireguardPeers.Peer peer : peers.get()) {
+      // A peer at 100.96.0.2 is named whether the socket reports it so or as ::ffff:100.96.0.2:
+      // its address as a block of one matches either spelling.
+      if (Cidr.parse(peer.tunnelIp().getHostAddress()).contains(remote)) {
         return peer.name();
       }
     }

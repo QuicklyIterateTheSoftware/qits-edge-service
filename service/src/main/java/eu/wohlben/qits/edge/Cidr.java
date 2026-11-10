@@ -89,7 +89,7 @@ public final class Cidr {
    * A socket's address string — {@code 100.96.0.2}, {@code 0:0:0:0:0:0:0:1}, {@code [fe80::1%eth0]}
    * — as an address, or null when it is not a literal at all.
    */
-  static InetAddress literal(String text) {
+  public static InetAddress literal(String text) {
     return literalOrNull(text);
   }
 
