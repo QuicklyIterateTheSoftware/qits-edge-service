@@ -1095,7 +1095,11 @@ a one-minute reload period. An installation states the ACME keys only to turn AC
 (`QITS_EDGE_ACME_ENABLED=false`) or to order from staging (`QITS_EDGE_ACME_MODE=staging`, worth it
 until the whole DNS path works); an environment variable overrides any of these defaults. Quarkus
 refuses to start when the PEM files cannot be read, so a variant without a certificate on that path
-must override the key store too. A non-expiring production certificate is never replaced by
+must override the key store too. `deployments.yml` declares the same five values as
+`image_defaults:`, so the deployer retires any stored setting that merely restates one, once a
+deployment is ACTIVE; on 2026-11-10 that retired the five rows imported from qits-configuration,
+leaving `QITS_EDGE_ACME_EMAIL` and the Hetzner token as the edge's only settings. Change a default
+in `application.properties` and its `image_defaults` pair together. A non-expiring production certificate is never replaced by
 staging. `QITS_DNS_HETZNER_TOKEN` is a
 secret and must be supplied by deployment configuration, never committed or logged. Replicas use a
 database lease so only one of them can place an order or renew at a time.
