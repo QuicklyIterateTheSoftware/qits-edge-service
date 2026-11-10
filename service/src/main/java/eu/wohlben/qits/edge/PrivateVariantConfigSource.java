@@ -61,6 +61,14 @@ public class PrivateVariantConfigSource implements ConfigSource {
         "quarkus.tls.key-store.pem.acme.cert", "/work/.letsencrypt/current/lets-encrypt.crt");
     values.put("quarkus.tls.key-store.pem.acme.key", "/work/.letsencrypt/current/lets-encrypt.key");
     values.put("quarkus.tls.reload-period", "1m");
+    // Its telemetry under its own name (qits-1977): OTel's service.name, which Quarkus reads at
+    // runtime (OTelRuntimeConfig.serviceName) and otherwise takes from quarkus.application.name —
+    // `qits-edge`, the public edge's. Only the resource attribute moves: quarkus.application.name
+    // stays `qits-edge`, and so does the eventstream publisher, a build-time value.
+    // QITS_APPLICATION
+    // is the deployed identity the deployer injects; the literal is its value from
+    // deployments.private.yml. The public edge has no QITS_VARIANT, so this source is empty there.
+    values.put("quarkus.otel.service.name", "${QITS_APPLICATION:qits-edge-private}");
     VALUES = Collections.unmodifiableMap(values);
   }
 

@@ -325,6 +325,7 @@ Without the variable it is empty and the edge is the public one, unchanged.
 | `quarkus.http.port` / `quarkus.http.ssl-port` | `80` / `443` — a peer dials `https://<app>.qits.<domain>` with no port |
 | `quarkus.tls.key-store.pem.acme.cert` / `.key` | `/work/.letsencrypt/current/lets-encrypt.crt` / `.key` |
 | `quarkus.tls.reload-period` | `1m` — follows the public edge's renewals |
+| `quarkus.otel.service.name` | `${QITS_APPLICATION:qits-edge-private}` — its telemetry under its own name; `quarkus.application.name` stays `qits-edge` |
 
 The TLS keys are the public edge's own deployment settings (`QUARKUS_TLS_KEY_STORE_PEM_ACME_CERT`,
 `…_KEY`, `QUARKUS_TLS_RELOAD_PERIOD`) in dotted form: the default TLS configuration's PEM pair named
@@ -405,7 +406,13 @@ address, `PrivateEdgeAnnouncer` publishes `PrivateEdgeAnnounced` — `applicatio
 changes. qits-network-access builds every peer's config from it. The address and MTU are
 `qits.edge.wireguard.address` (`QITS_EDGE_WIREGUARD_ADDRESS`, `100.96.0.1/24`) and
 `qits.edge.wireguard.mtu` (`QITS_EDGE_WIREGUARD_MTU`, `1380`), the same variables and defaults the
-init helper gives `wg0`; `WireguardDefaultsTest` holds the two sets of defaults equal.
+init helper gives `wg0`; `WireguardDefaultsTest` holds the two sets of defaults equal. The outcome
+is one INFO line, `private edge announced: key <publicKey> at <publicAddress>:<port>`, once the bus
+took the event; while it cannot announce, one line per change of reason says what is missing (no
+usable settings, no key yet, no public address yet). Publishing is the edge's only write to
+qits-events, and it needs `EventEnvelope` and `CanonicalJson$QitsEventMixin` in
+`EventWireReflection`: without them the native binary cannot serialize the PUT body, and the library
+reports that only at DEBUG while the outbox retries it forever (qits-edge-private 2026.1110.173435).
 
 ## What it does not do — the non-goals, on purpose
 
