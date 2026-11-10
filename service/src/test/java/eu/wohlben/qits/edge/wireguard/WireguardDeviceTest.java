@@ -166,4 +166,10 @@ class WireguardDeviceTest {
     String reason = String.valueOf(response.getData().orElseThrow().get("reason"));
     assertTrue(reason.contains(reasonPart), reason);
   }
+
+  @Test
+  void theFailureNamesWhetherTheDeviceExists() {
+    assertEquals("interface lo is up", WireguardDevice.deviceState("lo"));
+    assertEquals("interface qitsnone0 does not exist", WireguardDevice.deviceState("qitsnone0"));
+  }
 }

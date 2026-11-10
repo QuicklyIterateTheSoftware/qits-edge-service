@@ -9,6 +9,7 @@ import jakarta.inject.Inject;
 import java.io.IOException;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.time.Duration;
@@ -69,6 +70,34 @@ public class WireguardDevice implements HealthCheck {
             peers.peers(),
             ATTEMPTS,
             PAUSE);
+    if (unconfigured != null) {
+      // What the host looked like when it gave up, which the reason alone cannot say: a socket
+      // that never appeared and one that went away read the same ENOENT. wg0 present means
+      // qits-edge-init brought the device up and wireguard-go is still holding it; absent means it
+      // was never brought up (no --wireguard) or wireguard-go exited and took the TUN with it.
+      // qits-edge-init's own lines and wireguard-go's errors are on the container's stderr, which
+      // telemetry does not carry — measured 2026-11-10 (qits-1991), when an update of
+      // qits-edge-private came up with no socket and swarm rolled it back.
+      LOG.errorf(
+          "%s state at that failure: %s; %s %s",
+          INTERFACE,
+          deviceState(INTERFACE),
+          config.uapiSocket(),
+          Files.exists(Path.of(config.uapiSocket())) ? "exists now" : "is absent");
+    }
+  }
+
+  /** {@code interface wg0 is up}, {@code … is down} or {@code … does not exist}, never a throw. */
+  static String deviceState(String name) {
+    try {
+      NetworkInterface device = NetworkInterface.getByName(name);
+      if (device == null) {
+        return "interface " + name + " does not exist";
+      }
+      return "interface " + name + (device.isUp() ? " is up" : " is down");
+    } catch (SocketException unreadable) {
+      return "interface " + name + " could not be read: " + unreadable.getMessage();
+    }
   }
 
   /**
