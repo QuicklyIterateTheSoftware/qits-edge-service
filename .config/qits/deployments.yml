@@ -122,3 +122,12 @@ publishes: ${QITS_PORT}:8080, 443:8443
 # fact the image derives the whole private edge from (PrivateVariantConfigSource). This application
 # gets no QITS_VARIANT and is unchanged.
 variants: private
+
+# THE SETTINGS THIS IMAGE NOW SHIPS AS ITS OWN DEFAULTS (qits-2009). Each pair is a %prod default in
+# service/src/main/resources/application.properties, released in 2026.1109.200523. The deployer
+# retires a stored setting of qits-edge that holds EXACTLY this value once a deployment of this spec
+# is ACTIVE, and the next deployment --env-rm's it. A row with another value is an install's own
+# override and stays: ACME_ENABLED=false, or ACME_MODE=staging from a bootstrap. Keep the values in
+# step with application.properties: a pair that no longer matches the image would retire a row the
+# image does not replace.
+image_defaults: QUARKUS_TLS_KEY_STORE_PEM_ACME_CERT=/work/.letsencrypt/current/lets-encrypt.crt, QUARKUS_TLS_KEY_STORE_PEM_ACME_KEY=/work/.letsencrypt/current/lets-encrypt.key, QUARKUS_TLS_RELOAD_PERIOD=1m, QITS_EDGE_ACME_ENABLED=true, QITS_EDGE_ACME_MODE=production
