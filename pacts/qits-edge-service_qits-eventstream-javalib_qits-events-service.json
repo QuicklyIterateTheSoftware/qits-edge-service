@@ -146,6 +146,206 @@
         "status": 200
       },
       "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-events-service",
+            "operationId": "listEvents"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "schedule",
+            "schedule": "CatchupSweeper.catchUp(edge-wireguard-peers)"
+          },
+          "qits-via": {
+            "artifact": "eu.wohlben.qits:qits-eventstream",
+            "repository": "qits-eventstream-javalib",
+            "version": "2026.1109.164031"
+          }
+        }
+      },
+      "description": "CatchupSweeper.catchUp(edge-wireguard-peers): listEvents (2 names)",
+      "key": "27b22f9c",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "no events"
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/events/api/events",
+        "query": {
+          "limit": [
+            "200"
+          ],
+          "name": [
+            "PeerRegistered,PeerRevoked"
+          ],
+          "order": [
+            "asc"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "events": []
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-events-service",
+            "operationId": "publishEvent"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "schedule",
+            "schedule": "OutboxSweeper.tick"
+          },
+          "qits-via": {
+            "artifact": "eu.wohlben.qits:qits-eventstream",
+            "repository": "qits-eventstream-javalib",
+            "version": "2026.1109.164031"
+          }
+        }
+      },
+      "description": "OutboxSweeper.tick: publishEvent (a new id)",
+      "key": "a196c66b",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "no event with the given id",
+          "params": {
+            "eventId": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "description": null,
+            "environment": null,
+            "name": "DeploymentActive",
+            "occurredAt": "2026-01-01T00:00:00Z",
+            "parentId": null,
+            "payload": "{\"application\":\"qits-eventstream-pact\"}",
+            "publisher": "eu.wohlben.qits:qits-eventstream-pact"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "dataType": "RAW",
+            "expression": "/events/api/events/${eventId}",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "content-type": [
+            "application/json"
+          ]
+        },
+        "method": "PUT",
+        "path": "/events/api/events/00000000-0000-4000-8000-000000000001"
+      },
+      "response": {
+        "status": 201
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-events-service",
+            "operationId": "publishEvent"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "schedule",
+            "schedule": "OutboxSweeper.tick"
+          },
+          "qits-via": {
+            "artifact": "eu.wohlben.qits:qits-eventstream",
+            "repository": "qits-eventstream-javalib",
+            "version": "2026.1109.164031"
+          }
+        }
+      },
+      "description": "OutboxSweeper.tick: publishEvent (a reused id)",
+      "key": "1c7f8ca9",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "an event with the given id",
+          "params": {
+            "eventId": "00000000-0000-4000-8000-000000000001"
+          }
+        }
+      ],
+      "request": {
+        "body": {
+          "content": {
+            "description": null,
+            "environment": null,
+            "name": "DeploymentActive",
+            "occurredAt": "2026-01-01T00:00:00Z",
+            "parentId": null,
+            "payload": "{\"application\":\"qits-eventstream-pact\"}",
+            "publisher": "eu.wohlben.qits:qits-eventstream-pact"
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "generators": {
+          "path": {
+            "dataType": "RAW",
+            "expression": "/events/api/events/${eventId}",
+            "type": "ProviderState"
+          }
+        },
+        "headers": {
+          "content-type": [
+            "application/json"
+          ]
+        },
+        "method": "PUT",
+        "path": "/events/api/events/00000000-0000-4000-8000-000000000001"
+      },
+      "response": {
+        "status": 400
+      },
+      "type": "Synchronous/HTTP"
     }
   ],
   "metadata": {

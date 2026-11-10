@@ -33,6 +33,20 @@ class PeerLogTest {
   }
 
   @Test
+  void namesAreReadAtEachRequestSoALivePeerIsNamedAtOnce() {
+    java.util.concurrent.atomic.AtomicReference<List<WireguardPeers.Peer>> live =
+        new java.util.concurrent.atomic.AtomicReference<>(List.of());
+    PeerLog log = new PeerLog(live::get, Cidr.parse("10.231.0.0/20"));
+    assertEquals("unknown", log.peer("100.96.0.10"));
+
+    live.set(WireguardPeers.parse("laptop:" + KEY + ":100.96.0.10", ignored -> {}));
+    assertEquals("laptop", log.peer("100.96.0.10"), "registered a moment ago");
+
+    live.set(List.of());
+    assertEquals("unknown", log.peer("100.96.0.10"), "revoked");
+  }
+
+  @Test
   void aMalformedEntryIsDroppedLoudlyAndTheRestStillCount() {
     List<String> warnings = new ArrayList<>();
     List<WireguardPeers.Peer> peers =

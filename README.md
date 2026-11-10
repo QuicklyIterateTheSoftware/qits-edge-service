@@ -378,18 +378,34 @@ UAPI socket, which uid 1001 now owns.
 **The edge configures `wg0` itself** (`WireguardDevice`). Its private key is
 `qits.edge.wireguard.key-file` (`/work/.wireguard/private.key`, on the private volume), generated on
 first start (X25519, base64 of the raw 32 bytes, mode 0600) and never overwritten; the public key a
-peer configures is logged at INFO as `wireguard public key: <base64>` on every start. It sends one
-UAPI `set=1` — the key, the listen port, `replace_peers=true` and each peer with its one tunnel
-address as `/32` — and readiness (`edge wireguard device`) is DOWN until that is answered
-`errno=0`, and afterwards whenever `get=1` does not answer, reports another listen port, or `wg0` is
-not up. A changed peer list takes a restart in this slice; qits-1977 sends the same operation live.
+peer configures is logged at INFO as `wireguard public key: <base64>` on every start. At start it
+sends one UAPI `set=1` — the key, the listen port and `replace_peers=true`, with no peers — and
+readiness (`edge wireguard device`) is DOWN until that is answered `errno=0`, while the peers have
+not been given to the device (`peers not caught up`, or the failure of the last operation), and
+whenever `get=1` does not answer, reports another listen port, or `wg0` is not up.
 
-**The static peers.** The peer log and the device read one list (`WireguardPeers`):
-`qits.edge.wireguard.peers` (`name:base64PublicKey:tunnelIp`, comma separated) when it is set; else,
-on a private edge only, the classpath file `service/src/main/resources/wireguard/static-peers`, one
-entry per line with `#` comments; else none. That file ships the proof peer,
-`proof-workspace:…:100.96.0.2`, and is **temporary until qits-1977**: remove the peer by deleting its
-line, or the file, and releasing.
+**The peers come from qits-network-access** (epic qits-1977). It publishes `PeerRegistered` and
+`PeerRevoked`; `PeerEventsSubscriber` (consumer `edge-wireguard-peers`, replayed from the epoch,
+frames of this edge's own `QITS_ENVIRONMENT` only) keeps the newest frame per peer in
+`edge_wireguard_peer`, a revoke as a tombstone, so a replayed register can never revive a revoked
+peer. `LivePeers` catches that consumer up to the log head at start and then sends ONE full set
+(`replace_peers=true`) of the registered active peers plus any stated by hand in
+`qits.edge.wireguard.peers` (`name:base64PublicKey:tunnelIp`, comma separated, an operator
+override); after that every frame is one UAPI operation — `public_key` + `replace_allowed_ips` +
+its `/32` to add, `public_key` + `remove=true` to remove — logged at INFO as `wireguard peer added:
+<name> <tunnelIp>` / `wireguard peer removed: <name> <tunnelIp> (<reason>)`, never with a key. An
+operation that is not answered `errno=0` is a WARN and readiness DOWN, and the full set is resent
+every 30 s until it is taken. The peer log names a caller from the same live set. The public edge
+keeps the same rows and applies nothing. The static-peers file of qits-1976 is gone.
+
+**The edge announces itself.** Once `wg0` took its startup set and the tunnel DNS knows the public
+address, `PrivateEdgeAnnouncer` publishes `PrivateEdgeAnnounced` — `application`
+(`QITS_APPLICATION`), `publicKey`, `publicAddress`, `listenPort`, `tunnelAddress`, `tunnelCidr`,
+`dnsAddress`, `mtu`, `domain` — and again whenever the public address, looked up every five minutes,
+changes. qits-network-access builds every peer's config from it. The address and MTU are
+`qits.edge.wireguard.address` (`QITS_EDGE_WIREGUARD_ADDRESS`, `100.96.0.1/24`) and
+`qits.edge.wireguard.mtu` (`QITS_EDGE_WIREGUARD_MTU`, `1380`), the same variables and defaults the
+init helper gives `wg0`; `WireguardDefaultsTest` holds the two sets of defaults equal.
 
 ## What it does not do — the non-goals, on purpose
 

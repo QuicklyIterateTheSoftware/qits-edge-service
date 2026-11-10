@@ -3,6 +3,7 @@ package eu.wohlben.qits.edge.dns;
 import eu.wohlben.qits.edge.Cidr;
 import eu.wohlben.qits.edge.EdgeConfig;
 import eu.wohlben.qits.edge.EdgeRouter;
+import eu.wohlben.qits.edge.wireguard.PrivateEdgeAnnouncer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufUtil;
@@ -62,6 +63,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -131,6 +133,9 @@ public class TunnelDns {
 
   @Inject EdgeRouter router;
 
+  /** Told the public address whenever it becomes known or changes (epic qits-1977). */
+  @Inject PrivateEdgeAnnouncer announcer;
+
   private volatile Server server;
 
   private volatile List<Server> overlay = List.of();
@@ -154,7 +159,8 @@ public class TunnelDns {
           stated);
       return;
     }
-    PublicAddress publicAddress = new PublicAddress(zone, override, TunnelDns::resolveIpv4);
+    PublicAddress publicAddress =
+        new PublicAddress(zone, override, TunnelDns::resolveIpv4, announcer::publicAddress);
     Inet4Address bind = ipv4(config.bind());
     if (bind == null) {
       LOG.errorf(
@@ -189,7 +195,9 @@ public class TunnelDns {
         listenOverlay(config.overlayCidr(), bind, config.port(), answers, interfaces);
     overlay = overlaid;
     // At once, then every REFRESH, off the event loop: the JDK lookup blocks.
-    if (override == null) {
+    if (override != null) {
+      announcer.publicAddress(override);
+    } else {
       ScheduledExecutorService schedule =
           Executors.newSingleThreadScheduledExecutor(
               new DefaultThreadFactory("edge-tunnel-dns-apex", true));
@@ -359,15 +367,26 @@ public class TunnelDns {
     private final Function<String, Inet4Address> resolver;
     private final AtomicReference<Inet4Address> current = new AtomicReference<>();
     private final boolean fixed;
+    private final Consumer<Inet4Address> changed;
+
+    PublicAddress(String zone, Inet4Address override, Function<String, Inet4Address> resolver) {
+      this(zone, override, resolver, ignored -> {});
+    }
 
     /**
      * @param override the stated address, or null to look the apex up
      * @param resolver a name to its IPv4 address, or null when it has none
+     * @param changed told each looked-up address that differs from the one before
      */
-    PublicAddress(String zone, Inet4Address override, Function<String, Inet4Address> resolver) {
+    PublicAddress(
+        String zone,
+        Inet4Address override,
+        Function<String, Inet4Address> resolver,
+        Consumer<Inet4Address> changed) {
       this.zone = zone;
       this.resolver = resolver;
       this.fixed = override != null;
+      this.changed = changed;
       current.set(override);
     }
 
@@ -401,6 +420,12 @@ public class TunnelDns {
         current.set(found);
         LOG.infof(
             "tunnel DNS public address is %s, the A record of %s", found.getHostAddress(), zone);
+        try {
+          changed.accept(found);
+        } catch (RuntimeException failed) {
+          // The refresher must keep running: a listener's failure is its own.
+          LOG.warnf(failed, "the public address change to %s was not handed on", found);
+        }
       }
     }
   }
