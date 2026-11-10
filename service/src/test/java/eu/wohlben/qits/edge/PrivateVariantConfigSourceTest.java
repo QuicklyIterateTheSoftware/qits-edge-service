@@ -22,6 +22,7 @@ class PrivateVariantConfigSourceTest {
     assertEquals("true", source.getValue("qits.edge.wireguard.enabled"));
     assertEquals("47812", source.getValue("qits.edge.wireguard.listen-port"));
     assertEquals("true", source.getValue("qits.edge.dns.enabled"));
+    assertEquals("10.231.0.0/20", source.getValue("qits.edge.dns.overlay-cidr"));
     assertEquals(
         "100.96.0.0/24,10.231.0.0/20", source.getValue("qits.edge.listen.allowed-local-cidrs"));
     assertEquals("false", source.getValue("qits.edge.acme.enabled"));
@@ -34,7 +35,7 @@ class PrivateVariantConfigSourceTest {
         "/work/.letsencrypt/current/lets-encrypt.key",
         source.getValue("quarkus.tls.key-store.pem.acme.key"));
     assertEquals("1m", source.getValue("quarkus.tls.reload-period"));
-    assertEquals(11, source.getPropertyNames().size());
+    assertEquals(12, source.getPropertyNames().size());
     assertEquals(source.getPropertyNames(), source.getProperties().keySet());
     assertNull(source.getValue("qits.edge.domain"), "anything else keeps its default");
     assertEquals(275, source.getOrdinal());

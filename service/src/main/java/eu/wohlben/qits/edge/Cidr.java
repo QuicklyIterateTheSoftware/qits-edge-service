@@ -15,8 +15,12 @@ import java.util.Arrays;
  * peer as {@code ::ffff:100.96.0.2}; read as sixteen bytes it would match no IPv4 block and every
  * check written in IPv4 would refuse it. So both sides are unwrapped to four bytes first, and a
  * mapped block ({@code ::ffff:10.0.0.0/104}) is the IPv4 block it maps.
+ *
+ * <p>Public for {@code parse} and {@code contains} alone: the tunnel DNS responder picks the
+ * overlay addresses it binds with the same block test the listener and the peer log use
+ * (qits-1991).
  */
-final class Cidr {
+public final class Cidr {
 
   private final byte[] network;
   private final int prefix;
@@ -33,7 +37,7 @@ final class Cidr {
    *
    * @throws IllegalArgumentException on anything that is not a literal block
    */
-  static Cidr parse(String spelling) {
+  public static Cidr parse(String spelling) {
     if (spelling == null || spelling.isBlank()) {
       throw new IllegalArgumentException("An address block is empty.");
     }
@@ -73,7 +77,7 @@ final class Cidr {
   }
 
   /** Whether {@code address} is inside this block; an IPv4 address is never in an IPv6 block. */
-  boolean contains(InetAddress address) {
+  public boolean contains(InetAddress address) {
     if (address == null) {
       return false;
     }
