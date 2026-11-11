@@ -77,7 +77,7 @@
              the declaration site; a pin in <properties> like every other qits jar, so
              qits-maintenance bumps it when the consumer releases a changed pact. -->
         <qits.ci-frontend-pacts-qits-edge-service.version>2026.1111.84704</qits.ci-frontend-pacts-qits-edge-service.version>
-        <qits.projects-frontend-pacts-qits-edge-service.version>2026.1110.192846</qits.projects-frontend-pacts-qits-edge-service.version>
+        <qits.projects-frontend-pacts-qits-edge-service.version>2026.1111.92259</qits.projects-frontend-pacts-qits-edge-service.version>
         <qits.docs-frontend-pacts-qits-edge-service.version>2026.1111.83509</qits.docs-frontend-pacts-qits-edge-service.version>
         <qits.events-frontend-pacts-qits-edge-service.version>2026.1111.55312</qits.events-frontend-pacts-qits-edge-service.version>
         <qits.githost-frontend-pacts-qits-edge-service.version>2026.1111.83840</qits.githost-frontend-pacts-qits-edge-service.version>
