@@ -78,7 +78,7 @@
              qits-maintenance bumps it when the consumer releases a changed pact. -->
         <qits.ci-frontend-pacts-qits-edge-service.version>2026.1111.114336</qits.ci-frontend-pacts-qits-edge-service.version>
         <qits.projects-frontend-pacts-qits-edge-service.version>2026.1111.114204</qits.projects-frontend-pacts-qits-edge-service.version>
-        <qits.docs-frontend-pacts-qits-edge-service.version>2026.1111.114250</qits.docs-frontend-pacts-qits-edge-service.version>
+        <qits.docs-frontend-pacts-qits-edge-service.version>2026.1111.133347</qits.docs-frontend-pacts-qits-edge-service.version>
         <qits.events-frontend-pacts-qits-edge-service.version>2026.1111.123044</qits.events-frontend-pacts-qits-edge-service.version>
         <qits.githost-frontend-pacts-qits-edge-service.version>2026.1111.114316</qits.githost-frontend-pacts-qits-edge-service.version>
         <qits.maintenance-frontend-pacts-qits-edge-service.version>2026.1111.123045</qits.maintenance-frontend-pacts-qits-edge-service.version>
