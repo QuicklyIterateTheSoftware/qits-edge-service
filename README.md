@@ -325,7 +325,6 @@ Without the variable it is empty and the edge is the public one, unchanged.
 | `quarkus.http.port` / `quarkus.http.ssl-port` | `80` / `443` — a peer dials `https://<app>.qits.<domain>` with no port |
 | `quarkus.tls.key-store.pem.acme.cert` / `.key` | `/work/.letsencrypt/current/lets-encrypt.crt` / `.key` |
 | `quarkus.tls.reload-period` | `1m` — follows the public edge's renewals |
-| `quarkus.otel.service.name` | `${QITS_APPLICATION:qits-edge-private}` — its telemetry under its own name; `quarkus.application.name` stays `qits-edge` |
 
 The TLS keys are the public edge's own deployment settings (`QUARKUS_TLS_KEY_STORE_PEM_ACME_CERT`,
 `…_KEY`, `QUARKUS_TLS_RELOAD_PERIOD`) in dotted form: the default TLS configuration's PEM pair named
