@@ -76,16 +76,16 @@
              `pacts/qits-<frontend>_qits-ui-components-jslib_qits-edge-service.json`. Test scope at
              the declaration site; a pin in <properties> like every other qits jar, so
              qits-maintenance bumps it when the consumer releases a changed pact. -->
-        <qits.ci-frontend-pacts-qits-edge-service.version>2026.1111.134026</qits.ci-frontend-pacts-qits-edge-service.version>
-        <qits.projects-frontend-pacts-qits-edge-service.version>2026.1111.134224</qits.projects-frontend-pacts-qits-edge-service.version>
-        <qits.docs-frontend-pacts-qits-edge-service.version>2026.1111.133347</qits.docs-frontend-pacts-qits-edge-service.version>
+        <qits.ci-frontend-pacts-qits-edge-service.version>2026.1111.145352</qits.ci-frontend-pacts-qits-edge-service.version>
+        <qits.projects-frontend-pacts-qits-edge-service.version>2026.1111.145438</qits.projects-frontend-pacts-qits-edge-service.version>
+        <qits.docs-frontend-pacts-qits-edge-service.version>2026.1111.144940</qits.docs-frontend-pacts-qits-edge-service.version>
         <qits.events-frontend-pacts-qits-edge-service.version>2026.1111.135741</qits.events-frontend-pacts-qits-edge-service.version>
-        <qits.githost-frontend-pacts-qits-edge-service.version>2026.1111.133557</qits.githost-frontend-pacts-qits-edge-service.version>
+        <qits.githost-frontend-pacts-qits-edge-service.version>2026.1111.145257</qits.githost-frontend-pacts-qits-edge-service.version>
         <qits.maintenance-frontend-pacts-qits-edge-service.version>2026.1111.135737</qits.maintenance-frontend-pacts-qits-edge-service.version>
-        <qits.artifacts-frontend-pacts-qits-edge-service.version>2026.1111.134235</qits.artifacts-frontend-pacts-qits-edge-service.version>
+        <qits.artifacts-frontend-pacts-qits-edge-service.version>2026.1111.145422</qits.artifacts-frontend-pacts-qits-edge-service.version>
         <qits.deployments-frontend-pacts-qits-edge-service.version>2026.1111.135743</qits.deployments-frontend-pacts-qits-edge-service.version>
         <qits.mirror-frontend-pacts-qits-edge-service.version>2026.1111.135823</qits.mirror-frontend-pacts-qits-edge-service.version>
-        <qits.observability-frontend-pacts-qits-edge-service.version>2026.1111.133503</qits.observability-frontend-pacts-qits-edge-service.version>
+        <qits.observability-frontend-pacts-qits-edge-service.version>2026.1111.145217</qits.observability-frontend-pacts-qits-edge-service.version>
         <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1111.135738</qits.orchestrator-frontend-pacts-qits-edge-service.version>
         <qits.system-frontend-pacts-qits-edge-service.version>2026.1111.135749</qits.system-frontend-pacts-qits-edge-service.version>
         <qits.idp-frontend-pacts-qits-edge-service.version>2026.1111.135755</qits.idp-frontend-pacts-qits-edge-service.version>
