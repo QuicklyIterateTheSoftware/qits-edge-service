@@ -3352,6 +3352,89 @@ class EdgeRoutingTest {
     }
   }
 
+  @Test
+  void theTokenEndpointHandsBackAPlatformJwtPresentedAsGitsOauth2Pair() {
+    // `docker login -u oauth2 -p <JWT>`, the spelling git's credential helper already stores. The
+    // JWT is the token docker wants, so it is checked offline and handed back as itself — never
+    // spent at idp as a client secret, which idp could only refuse.
+    int grants = StubGateways.grants();
+    int introspections = StubGateways.tokenIntrospections();
+    String jwt = TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE));
+    EdgeClient.Answer answer =
+        client()
+            .get(
+                "registry.dev.acme.example.com",
+                "/token?service=registry.dev.acme.example.com&scope=repository:qits/x:pull",
+                basic("oauth2", jwt));
+    assertEquals(200, answer.status(), answer.body());
+    assertEquals("no-store", answer.headers().get("cache-control"));
+    JsonObject issued = new JsonObject(answer.body());
+    assertEquals(jwt, issued.getString("token"));
+    assertEquals(jwt, issued.getString("access_token"));
+    long expiresIn = issued.getLong("expires_in");
+    assertTrue(expiresIn > 0 && expiresIn <= 300, "what the JWT has left: " + expiresIn);
+    assertEquals(grants, StubGateways.grants(), "no grant was asked for");
+    assertEquals(introspections, StubGateways.tokenIntrospections(), "nor an introspection");
+
+    assertEquals(
+        "registry-dev",
+        client().get("registry.dev.acme.example.com", "/v2/", bearer(jwt)).line("upstream"),
+        "and the registry takes it as the Bearer it is");
+  }
+
+  @Test
+  void theTokenEndpointRefusesAnOauth2JwtThatFailsTheOfflineCheck() {
+    int grants = StubGateways.grants();
+    List<String> platform = List.of(StubGateways.PLATFORM_AUDIENCE);
+    Map<String, String> refused =
+        Map.of(
+            "expired",
+            TestTokens.mint(
+                TestTokens.IDP,
+                TestTokens.KID,
+                "RS256",
+                TestTokens.claims(issuer(), platform, Instant.now().minusSeconds(3600))),
+            "another audience",
+            TestTokens.valid(issuer(), List.of("somebody-else")),
+            "another key",
+            TestTokens.mint(
+                TestTokens.IMPOSTOR,
+                TestTokens.KID,
+                "RS256",
+                TestTokens.claims(issuer(), platform, Instant.now().plusSeconds(300))));
+    refused.forEach(
+        (why, jwt) -> {
+          EdgeClient.Answer answer =
+              client()
+                  .get(
+                      "registry.dev.acme.example.com",
+                      "/token?service=registry.dev.acme.example.com",
+                      basic("oauth2", jwt));
+          assertEquals(401, answer.status(), why + ": " + answer.body());
+          assertTrue(answer.body().contains("UNAUTHORIZED"), why + ": " + answer.body());
+          assertTrue(answer.body().contains(EdgeAuth.JWT_REFUSED), why + ": " + answer.body());
+          assertFalse(answer.body().contains(jwt), why + ": the token is never echoed");
+        });
+    assertEquals(grants, StubGateways.grants(), "none of them was spent at idp");
+  }
+
+  @Test
+  void aJwtUnderAnotherUsernameIsStillAClientSecret() {
+    // Only the `oauth2` user declares the password a token; under any other it is a secret, spent
+    // at idp's grant like any other, and idp refuses it.
+    int grants = StubGateways.grants();
+    EdgeClient.Answer answer =
+        client()
+            .get(
+                "registry.dev.acme.example.com",
+                "/token",
+                basic(
+                    "a-client",
+                    TestTokens.valid(issuer(), List.of(StubGateways.PLATFORM_AUDIENCE))));
+    assertEquals(401, answer.status(), answer.body());
+    assertTrue(StubGateways.grants() > grants, "it went to idp's grant");
+  }
+
   // --- HTTP Basic, for the clients that cannot do docker's dance --------------------------------
 
   @Test

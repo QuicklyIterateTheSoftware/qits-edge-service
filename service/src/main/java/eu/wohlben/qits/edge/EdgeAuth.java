@@ -56,9 +56,10 @@ import org.jboss.logging.Logger;
  * <p>The token itself is validated OFFLINE against idp's published keys ({@link IdpKeys}), so idp
  * is on the login path and not on the per-pull path.
  *
- * <p>An opaque {@code qits_tok_} value stored with {@code docker login -u token -p qits_tok_…} is
- * the one realm credential that is not a client secret: step 3 introspects it instead of granting,
- * and hands docker the JWT it stands for ({@link #realmToken}).
+ * <p>Two realm credentials are not a client secret. An opaque {@code qits_tok_} value stored with
+ * {@code docker login -u token -p qits_tok_…} is introspected instead of granted, and docker is
+ * handed the JWT it stands for ({@link #realmToken}). A platform JWT stored as {@code oauth2:<JWT>}
+ * is validated offline and handed back as itself ({@link #realmJwt}).
  *
  * <h2>The other half: clients that cannot do the dance</h2>
  *
@@ -506,6 +507,9 @@ public class EdgeAuth {
   /** The reason every idp refusal of a token is given, whatever idp's own status was. */
   static final String TOKEN_REFUSED = "the identity provider refused this token";
 
+  /** The reason the realm gives every {@code oauth2:<JWT>} that fails the offline check. */
+  static final String JWT_REFUSED = "the token is not valid";
+
   /** The reason every token is given while the edge holds no client to introspect with. */
   static final String TOKEN_UNCHECKABLE = "the edge cannot introspect tokens";
 
@@ -889,6 +893,12 @@ public class EdgeAuth {
    * authenticates the client and decides its audiences, exactly as it does for every other machine
    * caller on the platform.
    *
+   * <p>Two credentials are not a client secret, and neither reaches idp's grant. An opaque {@code
+   * qits_tok_} password, whatever the user, is introspected ({@link #realmToken}). A platform JWT
+   * under the {@code oauth2} user — git's credential-helper spelling, which a workstation's docker
+   * reuses — is validated offline like any Bearer and handed back as itself ({@link #realmJwt}). A
+   * JWT under any other user is a client secret like any other, and idp refuses it.
+   *
    * <p><b>Every arm of this method ends a response.</b> That is the whole requirement docker places
    * on it: the CLI reaches this endpoint from a challenge it was handed and has no timeout of its
    * own, so an arm that answers nothing is a client that waits forever rather than one that fails.
@@ -910,6 +920,14 @@ public class EdgeAuth {
       // `docker login -u <anything> -p qits_tok_…`. The token is not a client secret, so nothing is
       // granted: it is introspected, and the JWT it stands for is what docker is handed.
       realmToken(request, opaque);
+      return;
+    }
+    String jwt = oauth2Token(credential);
+    if (jwt != null) {
+      // `oauth2:<JWT>`, git's credential-helper spelling of a platform JWT. It is already the
+      // token docker wants, so it is checked offline exactly as a vhost checks it and handed back
+      // unchanged — never spent at idp as a client secret, which idp could only refuse.
+      realmJwt(request, jwt);
       return;
     }
     if (!isClientCredentials(credential)) {
@@ -959,6 +977,36 @@ public class EdgeAuth {
         .onFailure(
             failure -> {
               LOG.warnf("the realm could not introspect a token: %s", failure.getMessage());
+              realmUnavailable(request);
+            });
+  }
+
+  /**
+   * The realm's answer to a platform JWT presented as {@code oauth2:<JWT>}: that same JWT,
+   * docker-shaped, once it passes the offline check every Bearer passes — issuer, the platform
+   * audience, expiry and signature ({@link #checkBearer}). Its {@code expires_in} is what it has
+   * LEFT, as {@link #realmToken}'s is, so docker comes back here when it runs out.
+   *
+   * <p>Every arm ends a response, the requirement {@link #token} states: a JWT that fails the check
+   * is the realm's existing 401, keys that cannot be fetched its existing 502.
+   */
+  private void realmJwt(HttpServerRequest request, String jwt) {
+    checkBearer(jwt)
+        .onSuccess(
+            problem -> {
+              if (problem != null) {
+                LOG.debugf("the realm refused a JWT: %s", problem);
+                realmRefused(request, JWT_REFUSED);
+                return;
+              }
+              Instant expiry = SignedJwt.parse(jwt).expiry();
+              long remaining =
+                  Math.max(0, expiry.getEpochSecond() - Instant.now().getEpochSecond());
+              issue(request, jwt, remaining);
+            })
+        .onFailure(
+            failure -> {
+              LOG.warnf("the realm could not check a JWT: %s", failure.getMessage());
               realmUnavailable(request);
             });
   }
