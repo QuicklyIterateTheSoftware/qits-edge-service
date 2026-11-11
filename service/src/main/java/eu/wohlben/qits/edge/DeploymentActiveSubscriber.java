@@ -89,7 +89,9 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
    * empty snapshot — no endpoint, no host, no navigation — through the same {@link
    * EdgeRoutes#replace} an explicit empty {@code endpoints} array, a retirement, goes through. So a
    * deployment that changes class leaves the edge it left exactly as it would by being retired, and
-   * the frame-time ordering still holds: a later frame back inside the class restores it.
+   * the frame-time ordering still holds: a later frame back inside the class restores it. The one
+   * thing it keeps is {@link EdgeRoutes.Withdrawn}: the host it declared and its exposure, which
+   * route nothing and which only the navigation reads (qits-2061).
    */
   @Override
   public void onFrame(EventFrame frame) {
@@ -158,7 +160,8 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
             active.applicationName(),
             frame.id(),
             frame.occurredAt(),
-            new EdgeRoutes.Snapshot(List.of(), null, null, List.of()));
+            EdgeRoutes.Snapshot.withdrawal(
+                withdrawnHost(frame, active, environment), active.exposure()));
     if (replaced) {
       LOG.infof(
           "withdrew %s in %s from DeploymentActive %s: its exposure is %s, outside this %s edge's"
@@ -168,6 +171,39 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
           frame.id(),
           ExposureClass.declared(active.exposure()),
           config.exposure().name().toLowerCase(Locale.ROOT));
+    }
+  }
+
+  /**
+   * The host a withdrawn frame declared, held to {@link #browserHost}'s rules against the endpoints
+   * it declared — built here only to be compared, never stored, so nothing becomes routable.
+   *
+   * <p><b>A host that fails those rules is dropped, not poison.</b> The withdrawal must happen
+   * whatever the host says: settling the frame unchanged, as a bad served snapshot is, would leave
+   * the application routed on an edge outside its class. The navigation then merely cannot name it.
+   */
+  private String withdrawnHost(
+      EventFrame frame, DeploymentActivePayload active, String environment) {
+    try {
+      List<EdgeEndpoint> declared = new ArrayList<>();
+      if (active.endpoints() != null) {
+        for (EndpointPayload endpoint : active.endpoints()) {
+          if (endpoint != null && endpoint.upstreamPort() != null) {
+            declared.add(
+                new EdgeEndpoint(
+                    environment,
+                    active.applicationName(),
+                    endpoint.path(),
+                    new Upstream(endpoint.upstreamHost(), endpoint.upstreamPort())));
+          }
+        }
+      }
+      return browserHost(active, environment, declared);
+    } catch (IllegalArgumentException unusable) {
+      LOG.warnf(
+          "%s %s withdraws %s with an unusable host: %s; it is withdrawn without one",
+          frame.name(), frame.id(), active.applicationName(), unusable.getMessage());
+      return null;
     }
   }
 

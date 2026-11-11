@@ -56,6 +56,16 @@ public class ProviderStates {
   public static final String A_PUBLISHED_NAVIGATION = "a published navigation";
 
   /**
+   * {@link #A_PUBLISHED_NAVIGATION} plus one PRIVATE application, qits-stt on {@code stt}, which
+   * this public edge withdraws and names only to a caller the gate admits (qits-2061). {@link
+   * #requestHeaders} carries a bearer for this state, which the verifier sets over whatever the
+   * pact's request holds: <b>a consumer pact against this state must send {@code Authorization}</b>
+   * (any {@code Bearer} value — the provider substitutes a live one), as a signed-in shell does.
+   */
+  public static final String A_SIGNED_IN_CALLER_AND_A_PRIVATE_APP =
+      "a signed-in caller and a private app";
+
+  /**
    * One idle ordinary connection pooled to qits-artifacts' registry in {@code dev}, the only
    * connection the edge holds open. {@code /upstream-pools} answers only a caller the edge would
    * let through to a service, so {@link #requestHeaders} carries a bearer for this state, which the
@@ -108,6 +118,7 @@ public class ProviderStates {
 
   public ProviderStates() {
     states.put(A_PUBLISHED_NAVIGATION, this::aPublishedNavigation);
+    states.put(A_SIGNED_IN_CALLER_AND_A_PRIVATE_APP, this::aSignedInCallerAndAPrivateApp);
     states.put(AN_OPEN_UPSTREAM_POOL, this::anOpenUpstreamPool);
   }
 
@@ -141,13 +152,16 @@ public class ProviderStates {
       Map.of(
           A_PUBLISHED_NAVIGATION,
           "projects." + PROJECT + "." + DOMAIN,
+          A_SIGNED_IN_CALLER_AND_A_PRIVATE_APP,
+          "projects." + PROJECT + "." + DOMAIN,
           // Any name answers /upstream-pools; the platform project's own door is the one a shell
           // asks it on.
           AN_OPEN_UPSTREAM_POOL,
           PROJECT + "." + DOMAIN);
 
   /** The states whose operation is answered only to an admitted caller. */
-  private static final Set<String> CREDENTIALED = Set.of(AN_OPEN_UPSTREAM_POOL);
+  private static final Set<String> CREDENTIALED =
+      Set.of(AN_OPEN_UPSTREAM_POOL, A_SIGNED_IN_CALLER_AND_A_PRIVATE_APP);
 
   /**
    * The headers a request in a state carries: the state's host, and the scheme a TLS front reports,
@@ -254,6 +268,49 @@ public class ProviderStates {
     }
     Map<String, String> params = new TreeMap<>();
     params.put("host", HOSTS.get(A_PUBLISHED_NAVIGATION));
+    return new Setup(Collections.unmodifiableMap(params));
+  }
+
+  /**
+   * Everything {@link #A_PUBLISHED_NAVIGATION} publishes — applied in full, so the answer is the
+   * same whichever of the two states ran first in the JVM — and qits-stt deployed {@code private}
+   * on the host {@code stt} with no placement, which this public edge withdraws: it routes nothing
+   * and is named, to an admitted caller, as {@code {"origin", "exposure": "private"}}.
+   */
+  private Setup aSignedInCallerAndAPrivateApp() {
+    aPublishedNavigation();
+    String environment = config.defaultEnvironment();
+    JsonObject payload =
+        new JsonObject()
+            .put("applicationName", "qits-stt")
+            .put("environmentName", environment)
+            .put("browserHost", "stt")
+            .put("exposure", "private")
+            .put(
+                "endpoints",
+                new JsonArray()
+                    .add(
+                        new JsonObject()
+                            .put("path", "/stt")
+                            .put("upstreamHost", environment + "-qits-stt")
+                            .put("upstreamPort", 8080)))
+            .put("navigation", new JsonArray());
+    deployments.onFrame(
+        new EventFrame(
+            UUID.randomUUID().toString(),
+            "DeploymentActive",
+            Instant.now(),
+            payload.encode(),
+            null,
+            null,
+            environment));
+    if (!routes.withdrawnHosts(environment).containsKey("qits-stt")
+        || routes.applicationHosts(environment).containsKey("qits-stt")) {
+      throw new IllegalStateException(
+          "State '" + A_SIGNED_IN_CALLER_AND_A_PRIVATE_APP + "' did not withdraw qits-stt");
+    }
+    Map<String, String> params = new TreeMap<>();
+    params.put("host", HOSTS.get(A_SIGNED_IN_CALLER_AND_A_PRIVATE_APP));
     return new Setup(Collections.unmodifiableMap(params));
   }
 

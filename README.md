@@ -264,6 +264,14 @@ frame back inside the class restores it by the usual frame-time order. An exposu
 the three is an unusable frame and changes nothing. Navigation follows on its own, because it is
 built from the snapshots each edge holds.
 
+**A withdrawal keeps the name, and nothing that routes** (qits-2061). The stored snapshot also
+records the host the deployment declared — checked by the same rules as a served host, and simply
+dropped when it fails them, so a bad host can never keep an application routed — and its declared
+exposure (`withdrawn_host`, `withdrawn_exposure`; migration V10 resets the projection so the boot's
+replay fills them). Neither is a vhost, a route, a host claim or a certificate SAN: `stt.qits.<domain>`
+on the public edge is a 404 exactly as before, and `EdgeRoutes.applicationHosts` does not list it.
+Only `/main-navigation` reads them, through `EdgeRoutes.withdrawnHosts` — see below.
+
 **The platform app labels are public-edge code.** On a private edge `registry`, `mirror`, `githost`
 and `idp` are ordinary unknown names — a 404 unless a private or `both` deployment publishes one —
 and the qits-1403 exception that answers them before the catch-up does not apply: the private edge
@@ -497,7 +505,22 @@ reports that only at DEBUG while the outbox retries it forever (qits-edge-privat
   application is flipped, and `path` is present either way — it is what a shell renders an unflipped
   application under, so nothing leaves the sidebar during a rollout. There is no flat list and no
   synthesized `Home`: the environment's own door is qits-projects' `system` entry, a deployment fact
-  like every other entry here.
+  like every other entry here. `applications` holds one object per application with a published
+  host (`origin`) or api-docs path (`apiDocs`).
+- **Names private applications in `/main-navigation` to a signed-in caller, and to nobody else**
+  (qits-2061). The document is anonymous, but when the request carries a credential the service gate
+  would accept — a bearer or basic credential that passes `EdgeAuth.checkCredential`, or, while the
+  browser gate is on and no `Authorization` is sent, a `qits-session` cookie `EdgeSessions`
+  introspects as live (`AdmittedCaller`, the check `/upstream-pools` uses too) — the public edge
+  adds every application it withdrew for being `private` that declared a host:
+
+      "qits-stt": {"origin": "https://stt.qits.wohlben.eu", "exposure": "private"}
+
+  No `apiDocs`, no `slots` entry. A missing, refused or uncheckable credential is never an error
+  status: the private entries are left out and the answer is the anonymous document, byte for byte
+  — private names are not advertised to the internet. Public and `both` entries never carry
+  `exposure`. With nothing withdrawn there is no credential check at all. The private edge's own
+  document is unchanged: what it withdraws is public, already listed by the public edge.
 - **Keeps upstream sockets honest.** Every upstream connection has `SO_KEEPALIVE` on and the
   kernel's keepalive timers set to probe after 60 s of silence, every 10 s, and give up after 3
   (`UpstreamKeepAlive`). An SSE stream whose upstream task swarm redeployed away gets no FIN and no

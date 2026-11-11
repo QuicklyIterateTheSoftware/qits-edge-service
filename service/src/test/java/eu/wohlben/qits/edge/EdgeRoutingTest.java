@@ -2140,6 +2140,85 @@ class EdgeRoutingTest {
   }
 
   @Test
+  void aWithdrawnAppIsNamedToASignedInCallerAndRoutesNothing() {
+    activateArtifacts();
+    Instant at = Instant.now();
+    deployments.onFrame(exposedCi(null, at));
+    deployments.onFrame(exposedCi("private", at.plusMillis(1)));
+
+    // The withdrawal keeps the host for the navigation and nothing that routes: no vhost, no path,
+    // no applicationHosts row — the name is still a 404 to a caller with a good token.
+    assertEquals(
+        new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
+    assertNull(routes.serviceHost("dev", "ci"));
+    assertNull(routes.applicationHost("dev", "qits-ci"));
+    assertFalse(routes.applicationHosts("dev").containsKey("qits-ci"));
+    assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
+    assertEquals(404, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
+
+    // Anonymous, and with a token the gate refuses: exactly today's document, no private name.
+    for (Map<String, String> credential :
+        List.of(Map.<String, String>of(), aliasToken("dev"), bearer("not-a-jwt"))) {
+      EdgeClient.Answer answer =
+          client().get("dev.acme.example.com", "/main-navigation", credential);
+      assertEquals(200, answer.status(), credential.toString());
+      JsonObject applications = new JsonObject(answer.body()).getJsonObject("applications");
+      assertFalse(applications.containsKey("qits-ci"), answer.body());
+      assertTrue(
+          applications.getJsonObject("qits-artifacts").fieldNames().stream()
+              .noneMatch("exposure"::equals),
+          answer.body());
+    }
+
+    // A token the gate accepts: the private app's origin, marked private, and nothing else of it.
+    JsonObject document =
+        new JsonObject(client().get("dev.acme.example.com", "/main-navigation", token()).body());
+    JsonObject applications = document.getJsonObject("applications");
+    assertEquals(
+        new JsonObject().put("origin", "http://ci.dev.acme.example.com").put("exposure", "private"),
+        applications.getJsonObject("qits-ci"));
+    assertFalse(
+        applications.getJsonObject("qits-artifacts").containsKey("exposure"),
+        "a public entry carries no exposure key");
+    assertTrue(
+        document.getJsonObject("slots").stream()
+            .flatMap(slot -> ((io.vertx.core.json.JsonArray) slot.getValue()).stream())
+            .noneMatch(entry -> "qits-ci".equals(((JsonObject) entry).getString("app"))),
+        "a withdrawn app fills no slot");
+
+    // Back inside the class: routed again, and an ordinary entry with no exposure.
+    deployments.onFrame(exposedCi("public", at.plusMillis(2)));
+    assertNull(routes.withdrawnHosts("dev").get("qits-ci"));
+    assertNotNull(routes.serviceHost("dev", "ci"));
+    JsonObject restored =
+        new JsonObject(client().get("dev.acme.example.com", "/main-navigation", token()).body())
+            .getJsonObject("applications")
+            .getJsonObject("qits-ci");
+    assertEquals("http://ci.dev.acme.example.com", restored.getString("origin"));
+    assertFalse(restored.containsKey("exposure"), restored.encode());
+  }
+
+  @Test
+  void aWithdrawalWithAnUnusableHostStillWithdraws() {
+    Instant at = Instant.now();
+    deployments.onFrame(exposedCi(null, at));
+    JsonObject payload =
+        new JsonObject(exposedCi("private", at.plusMillis(1)).payload())
+            .put("browserHost", "not a label");
+    deployments.onFrame(
+        new eu.wohlben.qits.eventstream.control.EventFrame(
+            java.util.UUID.randomUUID().toString(),
+            "DeploymentActive",
+            at.plusMillis(1),
+            payload.encode(),
+            null,
+            null,
+            null));
+    assertNull(routes.serviceHost("dev", "ci"), "the bad host must not keep the app routed");
+    assertFalse(routes.withdrawnHosts("dev").containsKey("qits-ci"));
+  }
+
+  @Test
   void anUnknownExposureChangesNothing() {
     Instant at = Instant.now();
     deployments.onFrame(exposedCi("public", at));

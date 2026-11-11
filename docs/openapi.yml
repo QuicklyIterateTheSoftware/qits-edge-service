@@ -12,7 +12,16 @@ paths:
         \ ones included; a slot is an array, and one application may fill several\
         \ of its entries. An origin is null on a name that is inside no project (the\
         \ apex, an address literal), because an application address needs a project\
-        \ label."
+        \ label. A caller the service gate would admit — a valid bearer or basic credential,\
+        \ or a live qits-session cookie while the browser gate is on — also gets,\
+        \ on the public edge, each private application that declared a host, as an\
+        \ applications entry with exposure \"private\"; a missing, refused or uncheckable\
+        \ credential only leaves those entries out."
+      security:
+      - {}
+      - bearer: []
+      - basic: []
+      - session: []
       responses:
         "200":
           description: The navigation document. Cache-Control is no-store.
@@ -167,6 +176,13 @@ components:
           type: string
           description: "The application's api-docs path, served on its own origin;\
             \ present when it published one."
+        exposure:
+          type: string
+          enum:
+          - private
+          description: "Present only on a private application the public edge does\
+            \ not route, listed to an admitted caller alone; reachable through the\
+            \ private edge (the tunnel). Absent on every public and both entry."
     UpstreamPool:
       type: object
       required:

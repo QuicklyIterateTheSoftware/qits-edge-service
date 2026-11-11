@@ -93,6 +93,13 @@ class GoldenMasterRecordingTest {
               200,
               List.of("$.applications")),
           new Interaction(
+              ProviderStates.A_SIGNED_IN_CALLER_AND_A_PRIVATE_APP,
+              "getMainNavigation",
+              "GET",
+              "/main-navigation",
+              200,
+              List.of("$.applications")),
+          new Interaction(
               ProviderStates.AN_OPEN_UPSTREAM_POOL,
               "getUpstreamPools",
               "GET",

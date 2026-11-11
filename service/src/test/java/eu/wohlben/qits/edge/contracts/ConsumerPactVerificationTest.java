@@ -153,6 +153,11 @@ class ConsumerPactVerificationTest {
     return states.params(ProviderStates.A_PUBLISHED_NAVIGATION);
   }
 
+  @State(ProviderStates.A_SIGNED_IN_CALLER_AND_A_PRIVATE_APP)
+  Map<String, String> aSignedInCallerAndAPrivateApp() {
+    return states.params(ProviderStates.A_SIGNED_IN_CALLER_AND_A_PRIVATE_APP);
+  }
+
   @State(ProviderStates.AN_OPEN_UPSTREAM_POOL)
   Map<String, String> anOpenUpstreamPool() {
     return states.params(ProviderStates.AN_OPEN_UPSTREAM_POOL);

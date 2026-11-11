@@ -1,6 +1,5 @@
 package eu.wohlben.qits.edge;
 
-import io.vertx.core.Future;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerRequest;
@@ -47,8 +46,9 @@ import org.jboss.logging.Logger;
  * every upstream on the estate and how loaded it is, which is not a thing to hand an anonymous
  * caller. A valid machine credential — checked by {@link EdgeAuth#checkCredential} exactly as on a
  * service vhost — or, with the browser gate on, a live {@code qits-session} cookie introspected by
- * {@link EdgeSessions}. Anything else is a 401; an idp that cannot vouch for an opaque token is the
- * same 503 the service gate answers, because a check that cannot be made is not a verdict.
+ * {@link EdgeSessions}; both through {@link AdmittedCaller}. Anything else is a 401; an idp that
+ * cannot vouch for an opaque token is the same 503 the service gate answers, because a check that
+ * cannot be made is not a verdict.
  */
 @ApplicationScoped
 public class UpstreamPoolsRoute {
@@ -61,7 +61,7 @@ public class UpstreamPoolsRoute {
 
   @Inject EdgeAuth auth;
 
-  @Inject EdgeSessions sessions;
+  @Inject AdmittedCaller caller;
 
   void register(@Observes Router router) {
     router
@@ -76,7 +76,8 @@ public class UpstreamPoolsRoute {
   private void handle(RoutingContext context) {
     HttpServerRequest request = context.request();
     // No pause while the caller is checked: a GET or a HEAD has no body to hold back.
-    admitted(request)
+    caller
+        .admitted(request)
         .onSuccess(
             yes -> {
               if (yes) {
@@ -95,21 +96,6 @@ public class UpstreamPoolsRoute {
               LOG.errorf(failure, "could not check the caller of %s", PATH);
               refuse(request);
             });
-  }
-
-  /**
-   * Whether this caller would be let through to a service: a machine credential first, as on a
-   * service vhost, then — only while the browser gate is on — the session cookie.
-   */
-  private Future<Boolean> admitted(HttpServerRequest request) {
-    if (EdgeAuth.carriesCredential(request)) {
-      return auth.checkCredential(request).map(rejection -> rejection == null);
-    }
-    String cookie = sessions.enabled() ? sessions.cookie(request) : null;
-    if (cookie == null) {
-      return Future.succeededFuture(false);
-    }
-    return sessions.introspect(cookie).map(session -> session != null);
   }
 
   private static void refuse(HttpServerRequest request) {

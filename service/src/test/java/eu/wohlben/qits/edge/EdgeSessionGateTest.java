@@ -197,6 +197,55 @@ class EdgeSessionGateTest {
   }
 
   @Test
+  void aLiveSessionSeesThePrivateAppsInTheNavigation() {
+    // qits-2061: a private deployment is withdrawn from this public edge with its host kept for
+    // the navigation, which names it to a caller holding a live session and to nobody else.
+    routes.replace(
+        "dev",
+        "session-test-stt",
+        "session-test-stt-" + FRAME.incrementAndGet(),
+        java.time.Instant.EPOCH.plusSeconds(FRAME.get()),
+        EdgeRoutes.Snapshot.withdrawal("stt", "private"));
+    try {
+      EdgeClient.Answer live =
+          client().get("dev.acme.example.com", NavigationRoute.PATH, session());
+      assertEquals(200, live.status(), live.body());
+      io.vertx.core.json.JsonObject applications =
+          new io.vertx.core.json.JsonObject(live.body()).getJsonObject("applications");
+      assertEquals(
+          new io.vertx.core.json.JsonObject()
+              .put("origin", "http://stt.dev.acme.example.com")
+              .put("exposure", "private"),
+          applications.getJsonObject("session-test-stt"),
+          live.body());
+      assertTrue(
+          !applications.getJsonObject("session-test-ci").containsKey("exposure"),
+          "a public entry carries no exposure key");
+
+      for (Map<String, String> nobody :
+          List.of(Map.<String, String>of(), cookieHeader(StubGateways.EXPIRED_SESSION))) {
+        EdgeClient.Answer anonymous =
+            client().get("dev.acme.example.com", NavigationRoute.PATH, nobody);
+        assertEquals(200, anonymous.status(), anonymous.body());
+        assertTrue(
+            !new io.vertx.core.json.JsonObject(anonymous.body())
+                .getJsonObject("applications")
+                .containsKey("session-test-stt"),
+            anonymous.body());
+      }
+      // The name itself routes nothing, session or not.
+      assertEquals(404, client().get("stt.dev.acme.example.com", "/stt/api", session()).status());
+    } finally {
+      routes.replace(
+          "dev",
+          "session-test-stt",
+          "session-test-stt-" + FRAME.incrementAndGet(),
+          java.time.Instant.EPOCH.plusSeconds(FRAME.get()),
+          EdgeRoutes.Snapshot.ofEndpoints(List.of()));
+    }
+  }
+
+  @Test
   void aRefusedNavigationIsSentToTheHostThatOWNSTheLoginPath() {
     // The login moved off the door with every other service. The origin is read off the projection
     // — whoever owns /idp/login and publishes a host — and never from the canonical origin, which

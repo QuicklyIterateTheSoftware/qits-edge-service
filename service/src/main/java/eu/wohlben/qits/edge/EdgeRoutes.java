@@ -141,17 +141,29 @@ public class EdgeRoutes {
    *     may hang SEVERAL rows under one heading, so the slot alone was never the claim. Two of the
    *     same pair is one row asked for twice and is refused; a repeated POSITION is not, because
    *     the document breaks that tie by label exactly as it does between applications
+   * @param withdrawn null for every snapshot this edge serves; set only on the empty snapshot a
+   *     frame outside this edge's exposure class stores — see {@link Withdrawn}
    */
   public record Snapshot(
       List<EdgeEndpoint> endpoints,
       String browserHost,
       String apiDocsPath,
-      List<NavigationEntry> navigation) {
+      List<NavigationEntry> navigation,
+      Withdrawn withdrawn) {
 
     public Snapshot {
       endpoints = endpoints == null ? null : List.copyOf(endpoints);
       apiDocsPath = apiDocsPath == null || apiDocsPath.isBlank() ? null : apiDocsPath.strip();
       navigation = navigation == null ? List.of() : List.copyOf(navigation);
+    }
+
+    /** A served snapshot: everything but the withdrawal, which only {@link #withdrawal} sets. */
+    public Snapshot(
+        List<EdgeEndpoint> endpoints,
+        String browserHost,
+        String apiDocsPath,
+        List<NavigationEntry> navigation) {
+      this(endpoints, browserHost, apiDocsPath, navigation, null);
     }
 
     /** The pre-api-docs shape, which every already-written caller and test still means. */
@@ -163,6 +175,39 @@ public class EdgeRoutes {
     /** The routes alone, which is what an application that has not been flipped publishes. */
     public static Snapshot ofEndpoints(List<EdgeEndpoint> endpoints) {
       return new Snapshot(endpoints, null, null, List.of());
+    }
+
+    /**
+     * What a frame outside this edge's class stores: no endpoint, no host, no api docs and no
+     * placement — exactly the empty snapshot a retirement is, as far as routing, vhosts, the
+     * certificate and {@link #applicationHosts} can tell — plus the {@link Withdrawn} fact the
+     * navigation reads.
+     */
+    public static Snapshot withdrawal(String host, String exposure) {
+      return new Snapshot(List.of(), null, null, List.of(), new Withdrawn(host, exposure));
+    }
+  }
+
+  /**
+   * Why an application is absent from this edge, and what name it answers to on the other one
+   * (qits-2061).
+   *
+   * <p><b>It routes nothing.</b> {@code host} is not a {@link ServiceHost}: it is in no vhost map,
+   * resolves no path, claims no name against another application and feeds no certificate SAN. It
+   * exists for one reader, {@link NavigationRoute}, which names such an application to a caller the
+   * gate would admit, so a shell can tell "not reachable from here" from "does not exist".
+   *
+   * @param host the DNS label the deployment declared, validated as the served host would be, or
+   *     null when it declared none or one this edge could not accept
+   * @param exposure the deployment's declared exposure, normalised by {@link
+   *     ExposureClass#declared} — {@code private} on the public edge, {@code public} on the private
+   *     one, since {@code both} is never withdrawn
+   */
+  public record Withdrawn(String host, String exposure) {
+
+    public Withdrawn {
+      host = host == null || host.isBlank() ? null : host.strip().toLowerCase(Locale.ROOT);
+      exposure = ExposureClass.declared(exposure);
     }
   }
 
@@ -205,10 +250,12 @@ public class EdgeRoutes {
       Map<String, Map<String, String>> primaryPaths,
       Map<String, Map<String, String>> apiDocsPaths,
       Map<String, List<NavigationPlacement>> navigation,
-      Set<String> landings) {
+      Set<String> landings,
+      Map<String, Map<String, Withdrawn>> withdrawn) {
 
     static View empty() {
-      return new View(Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Set.of());
+      return new View(
+          Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Set.of(), Map.of());
     }
   }
 
@@ -286,6 +333,15 @@ public class EdgeRoutes {
    */
   public Map<String, ServiceHost> applicationHosts(String environment) {
     return view.hostsByApplication().getOrDefault(environment, Map.of());
+  }
+
+  /**
+   * Every application withdrawn from this edge in this environment that declared a host, by
+   * application name — see {@link Withdrawn}. Disjoint from {@link #applicationHosts}: a withdrawn
+   * application publishes no host here, so nothing that routes reads this.
+   */
+  public Map<String, Withdrawn> withdrawnHosts(String environment) {
+    return view.withdrawn().getOrDefault(environment, Map.of());
   }
 
   /**
@@ -368,13 +424,15 @@ public class EdgeRoutes {
       }
       try (PreparedStatement insert =
           connection.prepareStatement(
-              "insert into edge_deployment_snapshot (environment_name, application_name, event_id, occurred_at, browser_host, api_docs_path) values (?, ?, ?, ?, ?, ?)")) {
+              "insert into edge_deployment_snapshot (environment_name, application_name, event_id, occurred_at, browser_host, api_docs_path, withdrawn_exposure, withdrawn_host) values (?, ?, ?, ?, ?, ?, ?, ?)")) {
         insert.setString(1, environment);
         insert.setString(2, application);
         insert.setString(3, eventId);
         insert.setTimestamp(4, java.sql.Timestamp.from(occurredAt));
         insert.setString(5, snapshot.browserHost());
         insert.setString(6, snapshot.apiDocsPath());
+        insert.setString(7, snapshot.withdrawn() == null ? null : snapshot.withdrawn().exposure());
+        insert.setString(8, snapshot.withdrawn() == null ? null : snapshot.withdrawn().host());
         insert.executeUpdate();
       }
       int ordinal = 0;
@@ -482,6 +540,23 @@ public class EdgeRoutes {
                 + "."
                 + entry.label()
                 + ".");
+      }
+    }
+    if (snapshot.withdrawn() != null) {
+      // A withdrawal routes nothing, so it may carry nothing that routes: everything that reads the
+      // projection to route, to name a vhost or to order a certificate has to keep seeing the empty
+      // snapshot a retirement is.
+      if (!snapshot.endpoints().isEmpty()
+          || snapshot.browserHost() != null
+          || snapshot.apiDocsPath() != null
+          || !snapshot.navigation().isEmpty()) {
+        throw new IllegalArgumentException(
+            "`" + application + "` was withdrawn and still carries routes, a host or placements.");
+      }
+      String host = snapshot.withdrawn().host();
+      if (host != null && !HostEnvironments.isLabel(host)) {
+        throw new IllegalArgumentException(
+            "`" + host + "` cannot be a DNS label, so it cannot be a host.");
       }
     }
     if (snapshot.browserHost() == null && !snapshot.navigation().isEmpty()) {
@@ -617,6 +692,7 @@ public class EdgeRoutes {
 
     private String host;
     private String apiDocsPath;
+    private Withdrawn withdrawn;
     private EdgeEndpoint primary;
     private int primaryOrdinal = Integer.MAX_VALUE;
   }
@@ -626,7 +702,7 @@ public class EdgeRoutes {
     Map<String, Map<String, Read>> applications = new LinkedHashMap<>();
     try (PreparedStatement query =
             connection.prepareStatement(
-                "select environment_name, application_name, browser_host, api_docs_path from edge_deployment_snapshot");
+                "select environment_name, application_name, browser_host, api_docs_path, withdrawn_exposure, withdrawn_host from edge_deployment_snapshot");
         ResultSet result = query.executeQuery()) {
       while (result.next()) {
         Read read =
@@ -635,6 +711,11 @@ public class EdgeRoutes {
                 .computeIfAbsent(result.getString(2), ignored -> new Read());
         read.host = result.getString(3);
         read.apiDocsPath = result.getString(4);
+        String withdrawnExposure = result.getString(5);
+        read.withdrawn =
+            withdrawnExposure == null
+                ? null
+                : new Withdrawn(result.getString(6), withdrawnExposure);
       }
     }
     try (PreparedStatement query =
@@ -665,10 +746,16 @@ public class EdgeRoutes {
     Map<String, Map<String, ServiceHost>> byApplication = new LinkedHashMap<>();
     Map<String, Map<String, String>> primaryPaths = new LinkedHashMap<>();
     Map<String, Map<String, String>> apiDocsPaths = new LinkedHashMap<>();
+    Map<String, Map<String, Withdrawn>> withdrawn = new LinkedHashMap<>();
     applications.forEach(
         (environment, reads) ->
             reads.forEach(
                 (application, read) -> {
+                  if (read.withdrawn != null && read.withdrawn.host() != null) {
+                    withdrawn
+                        .computeIfAbsent(environment, ignored -> new LinkedHashMap<>())
+                        .put(application, read.withdrawn);
+                  }
                   if (read.primary != null) {
                     primaryPaths
                         .computeIfAbsent(environment, ignored -> new LinkedHashMap<>())
@@ -738,7 +825,15 @@ public class EdgeRoutes {
         immutablePaths(primaryPaths),
         immutablePaths(apiDocsPaths),
         immutable(navigation),
-        Set.copyOf(landings));
+        Set.copyOf(landings),
+        immutableWithdrawn(withdrawn));
+  }
+
+  private static Map<String, Map<String, Withdrawn>> immutableWithdrawn(
+      Map<String, Map<String, Withdrawn>> values) {
+    Map<String, Map<String, Withdrawn>> copy = new LinkedHashMap<>();
+    values.forEach((key, map) -> copy.put(key, Map.copyOf(map)));
+    return Map.copyOf(copy);
   }
 
   private static <T> Map<String, List<T>> immutable(Map<String, List<T>> values) {

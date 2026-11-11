@@ -26,6 +26,29 @@
       ]
     },
     {
+      "name": "a signed-in caller and a private app",
+      "slug": "a-signed-in-caller-and-a-private-app",
+      "params": {
+        "host": "projects.qits.example.com"
+      },
+      "dependsOn": [],
+      "operations": [
+        {
+          "operationId": "getMainNavigation",
+          "method": "GET",
+          "path": "/main-navigation",
+          "status": 200,
+          "file": "a-signed-in-caller-and-a-private-app/getMainNavigation.json",
+          "frozen": {
+            "ids": [],
+            "instants": [],
+            "strings": [],
+            "listFilteredTo": null
+          }
+        }
+      ]
+    },
+    {
       "name": "an open upstream pool",
       "slug": "an-open-upstream-pool",
       "params": {

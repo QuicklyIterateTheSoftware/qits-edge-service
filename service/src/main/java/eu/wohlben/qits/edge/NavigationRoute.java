@@ -10,6 +10,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The platform navigation, derived from the active deployment projection rather than a gateway enum
@@ -55,6 +56,24 @@ import java.util.List;
  * that application's API now that a hostname alone picks the application. {@code apiDocs} is served
  * on that same host, so a shell page composes it against {@code origin} rather than against the
  * door.
+ *
+ * <p><b>A private application is named to a signed-in caller, and to nobody else</b> (qits-2061).
+ * The public edge withdraws a deployment declared {@code exposure: private} — it routes nothing for
+ * it, and its name is a 404 here — but a shell still has to tell "reachable only on the tunnel"
+ * from "does not exist". So when the request carries a credential the service gate would accept
+ * ({@link AdmittedCaller}: a valid bearer or basic credential, or a live {@code qits-session}
+ * cookie while the browser gate is on), each withdrawn application that declared a host is added to
+ * {@code applications} as {@code {"origin": <its origin>, "exposure": "private"}}: no {@code
+ * apiDocs} and no {@code slots} entry. A missing, refused or uncheckable credential is not an error
+ * here; the private entries are simply left out, and the anonymous document is exactly what it was
+ * — private names are not advertised to the internet. A public or {@code both} entry never carries
+ * {@code exposure}, so a reader that knows nothing of it reads the same document.
+ *
+ * <p><b>Only the public edge does this.</b> On the private edge a withdrawn application is a PUBLIC
+ * one, reachable by every browser through the public edge and listed in the public edge's own
+ * document, so naming it here would add nothing and change a document nobody asked to change; the
+ * private edge's {@code /main-navigation} stays its own class alone. The value written is the
+ * declared exposure the withdrawal stored, which on the public edge is always {@code private}.
  */
 @ApplicationScoped
 public class NavigationRoute {
@@ -64,6 +83,8 @@ public class NavigationRoute {
   @Inject EdgeRoutes routes;
   @Inject EdgeRouter edgeRouter;
   @Inject DeploymentProjectionBootstrap projectionBootstrap;
+  @Inject AdmittedCaller caller;
+  @Inject EdgeConfig config;
 
   void register(@Observes Router router) {
     router
@@ -137,17 +158,49 @@ public class NavigationRoute {
               entry.put("apiDocs", apiDocsPath);
             });
 
+    JsonObject document =
+        new JsonObject()
+            .put("environment", environment)
+            .put("origin", authority.origin())
+            .put("projectOrigin", authority.origin())
+            .put("slots", slots)
+            .put("applications", applications);
+
+    Map<String, EdgeRoutes.Withdrawn> withdrawn =
+        config.exposure() == ExposureClass.PUBLIC ? routes.withdrawnHosts(environment) : Map.of();
+    if (withdrawn.isEmpty()) {
+      // Nothing private to name, so no credential to check: the anonymous answer, at no cost.
+      answer(context, document);
+      return;
+    }
+    // Non-blocking: the check is a future — a cached key or an idp call over a socket.
+    caller
+        .admitted(context.request())
+        .onComplete(
+            admitted -> {
+              if (admitted.succeeded() && Boolean.TRUE.equals(admitted.result())) {
+                withdrawn.forEach(
+                    (application, absent) -> {
+                      if (!applications.containsKey(application)) {
+                        applications.put(
+                            application,
+                            new JsonObject()
+                                .put("origin", authority.hostOrigin(absent.host()))
+                                .put("exposure", absent.exposure()));
+                      }
+                    });
+              }
+              // A refused credential, and one that could not be checked, are both just "not
+              // signed in" here: the private entries stay out and the answer is still a 200.
+              answer(context, document);
+            });
+  }
+
+  private static void answer(RoutingContext context, JsonObject document) {
     context
         .response()
         .putHeader(HttpHeaders.CONTENT_TYPE, "application/json; charset=utf-8")
         .putHeader(HttpHeaders.CACHE_CONTROL, "no-store")
-        .end(
-            new JsonObject()
-                .put("environment", environment)
-                .put("origin", authority.origin())
-                .put("projectOrigin", authority.origin())
-                .put("slots", slots)
-                .put("applications", applications)
-                .encode());
+        .end(document.encode());
   }
 }
