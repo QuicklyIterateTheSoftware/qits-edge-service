@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>eu.wohlben</groupId>
     <artifactId>qits-platform-edge-parent</artifactId>
-    <version>2026.1111.190640</version>
+    <version>2026.1112.81532</version>
     <packaging>pom</packaging>
     <name>qits-platform-edge reactor</name>
 
