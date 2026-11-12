@@ -5,6 +5,7 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 import org.jboss.logging.Logger;
 
@@ -18,6 +19,10 @@ import org.jboss.logging.Logger;
  * reader reports that {@link DeploymentActiveSubscriber#CONSUMER_ID} reached a page whose explicit
  * next cursor was absent. It retries indefinitely: qits-events being briefly down must not turn a
  * recoverable boot race into a permanently stale edge.
+ *
+ * <p>Before that replay it re-derives the exposure class (qits-2120): a projection built under
+ * another class than this edge's — or under none recorded — is truncated first, and the change is
+ * logged as {@code edge projection rebuilt: class <old> -> <new>}.
  */
 @ApplicationScoped
 public class DeploymentProjectionBootstrap {
@@ -31,6 +36,10 @@ public class DeploymentProjectionBootstrap {
 
   @jakarta.inject.Inject DeploymentProjectionCatchup catchup;
   @jakarta.inject.Inject EdgeConfig config;
+  @jakarta.inject.Inject EdgeRoutes routes;
+
+  /** The class to rebuild under when a suite states one; null reads {@code config.exposure()}. */
+  private ExposureClass exposure;
 
   /** Test-only escape hatch for suites that deliberately turn qits-eventstream off. */
   boolean required;
@@ -42,8 +51,14 @@ public class DeploymentProjectionBootstrap {
   DeploymentProjectionBootstrap() {}
 
   DeploymentProjectionBootstrap(
-      DeploymentProjectionCatchup catchup, boolean required, Duration retry) {
+      DeploymentProjectionCatchup catchup,
+      EdgeRoutes routes,
+      ExposureClass exposure,
+      boolean required,
+      Duration retry) {
     this.catchup = catchup;
+    this.routes = routes;
+    this.exposure = exposure;
     this.required = required;
     this.retry = retry;
   }
@@ -85,8 +100,23 @@ public class DeploymentProjectionBootstrap {
     // claims survived. An ordinary catch-up would then start after that watermark and faithfully
     // rebuild nothing. Resetting this replay-from-epoch consumer at every edge boot makes the log,
     // rather than either local database, the reconstruction source. EdgeRoutes' LWW replacement
-    // makes replay over a surviving snapshot safe too, so there is deliberately no projection
-    // truncate before this call.
+    // makes replay over a surviving snapshot safe too, so there is no projection truncate before
+    // this call — unless the exposure class changed (qits-2120): which frames were withdrawn
+    // depends on the class, and LWW never re-applies a frame the snapshot already records, so a
+    // withdrawal from the old class would survive the replay.
+    while (true) {
+      try {
+        reconcileClass();
+        break;
+      } catch (RuntimeException failure) {
+        LOG.warnf(
+            "deployment routing projection class could not be checked (%s); retrying in %s",
+            failure.getMessage(), retry);
+        if (!waitForRetry()) {
+          return;
+        }
+      }
+    }
     CatchupResult result = catchup.rebuildFromEpoch(DeploymentActiveSubscriber.CONSUMER_ID);
     while (!authoritative()) {
       if (result.reachedLogHead()) {
@@ -104,6 +134,27 @@ public class DeploymentProjectionBootstrap {
       }
       result = catchup.catchUp(DeploymentActiveSubscriber.CONSUMER_ID);
     }
+  }
+
+  /**
+   * Truncates the projection when it was built under another class than this edge's, or under none
+   * recorded, and records this one — so the replay that follows rebuilds every snapshot under the
+   * current class. An unchanged class keeps the projection as it is.
+   */
+  private void reconcileClass() {
+    ExposureClass exposure = exposure();
+    String current = exposure.name().toLowerCase(Locale.ROOT);
+    String stored = routes.projectionClass();
+    if (current.equals(stored)) {
+      return;
+    }
+    routes.resetProjection(exposure);
+    LOG.infof(
+        "edge projection rebuilt: class %s -> %s", stored == null ? "<none>" : stored, current);
+  }
+
+  private ExposureClass exposure() {
+    return exposure != null ? exposure : config.exposure();
   }
 
   private boolean waitForRetry() {

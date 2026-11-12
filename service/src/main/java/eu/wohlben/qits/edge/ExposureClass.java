@@ -8,11 +8,18 @@ import java.util.Set;
  * {@code public} unless stated (epic qits-1976).
  *
  * <p>A deployment declares {@code exposure: public | private | both} and the deployer carries it on
- * {@code DeploymentActive.exposure}. An edge is one class, never {@code both}: the public edge
- * keeps {@code public} and {@code both}, the private edge — the same image behind the WireGuard
- * tunnel — keeps {@code private} and {@code both}. A frame with no exposure, which is every frame
- * written before the field existed, is {@code public}; that is why neither edge needed a migration
- * or a replay reset.
+ * {@code DeploymentActive.exposure}. An edge's class is never {@code both}: the public edge keeps
+ * {@code public} and {@code both}, the private edge — the same image behind the WireGuard tunnel —
+ * keeps {@code private} and {@code both}. A frame with no exposure, which is every frame written
+ * before the field existed, is {@code public}; that is why neither edge needed a migration when the
+ * field arrived.
+ *
+ * <p>{@link #ALL} is the break-glass (qits-2120): the public edge keeps every frame while the
+ * tunnel or the private edge is down, set from a shell on the platform host ({@code
+ * QITS_EDGE_EXPOSURE=all}) and gone at the next edge release. It is still one class at a time —
+ * what changes with the class is which frames were withdrawn, so a class change at boot is a replay
+ * reset: {@code DeploymentProjectionBootstrap} truncates the projection and rebuilds it from the
+ * epoch whenever the class it was built under ({@code edge_projection_class}) differs.
  *
  * <p><b>What a frame outside the class does is withdraw.</b> It is stored as an empty snapshot, not
  * skipped — see {@code DeploymentActiveSubscriber} — so a deployment that moves from {@code public}
@@ -25,7 +32,9 @@ import java.util.Set;
  */
 public enum ExposureClass {
   PUBLIC,
-  PRIVATE;
+  PRIVATE,
+  /** The break-glass: the public edge keeps every frame, private ones included. */
+  ALL;
 
   /** The declared exposure both edges keep. */
   static final String BOTH = "both";
@@ -38,12 +47,18 @@ public enum ExposureClass {
   /** Whether a deployment declaring {@code exposure} is served by an edge of this class. */
   boolean keeps(String exposure) {
     String declared = declared(exposure);
+    if (this == ALL) {
+      return true;
+    }
     return declared.equals(BOTH) || declared.equals(name().toLowerCase(Locale.ROOT));
   }
 
-  /** Whether this edge answers {@link PlatformApps}' labels from code: the public edge only. */
+  /**
+   * Whether this edge answers {@link PlatformApps}' labels from code: the public edge, under its
+   * own class or the break-glass {@link #ALL}, and never the private one.
+   */
   boolean servesPlatformApps() {
-    return this == PUBLIC;
+    return this != PRIVATE;
   }
 
   /**

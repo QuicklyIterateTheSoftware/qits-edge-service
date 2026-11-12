@@ -248,8 +248,8 @@ machine token are both answered `404` like any other request.
 
 One image runs as two edges (epic qits-1976). **`qits.edge.exposure`** (`QITS_EDGE_EXPOSURE`) is
 `public` — every edge before the epic, and the default — or `private`, the second deployment behind
-the WireGuard tunnel. An edge is never `both`; a deployment may be, and `DeploymentActive.exposure`
-carries which:
+the WireGuard tunnel — or `all`, the break-glass below, which keeps every frame. An edge is never
+`both`; a deployment may be, and `DeploymentActive.exposure` carries which:
 
 | deployment declares | public edge | private edge |
 | --- | --- | --- |
@@ -420,6 +420,38 @@ usable settings, no key yet, no public address yet). Publishing is the edge's on
 qits-events, and it needs `EventEnvelope` and `CanonicalJson$QitsEventMixin` in
 `EventWireReflection`: without them the native binary cannot serialize the PUT body, and the library
 reports that only at DEBUG while the outbox retries it forever (qits-edge-private 2026.1110.173435).
+
+## Break-glass: the public edge serves every class
+
+When the tunnel or `qits-edge-private` breaks, every private service goes dark at once — CI, release
+requests, the deployer UI and mcp — and the fix for the edge can then be neither built, approved nor
+watched. `QITS_EDGE_EXPOSURE=all` makes the **public** edge serve every class until the next
+qits-edge release. Authentication stays on every door, exactly as on the public edge today. It is
+set from a shell on the platform host, never through a door: a door would be internet-facing, or
+behind the very edge that is broken.
+
+The class is re-derived at boot (qits-2120). `edge_projection_class` holds the class the projection
+was last rebuilt under; when it is absent or differs from `qits.edge.exposure`,
+`DeploymentProjectionBootstrap` deletes the projection and writes the new class in one transaction,
+replays from the epoch, and logs `edge projection rebuilt: class <old> -> <new>` (`<none>` the first
+time). An unchanged class keeps the projection as it is. Without the truncate, a snapshot withdrawn
+under the old class would survive the replay, because `EdgeRoutes.replace` writes only a strictly
+newer frame.
+
+On the platform host, as a user with the docker socket. The service name is `<env>-qits-edge`, `dev-qits-edge` on this estate; `docker service ls --filter label=qits.platform.deployments.app-name=qits-edge` confirms it:
+
+    docker service update \
+      --network-add name=qits-private \
+      --env-add QITS_EDGE_EXPOSURE=all \
+      dev-qits-edge
+
+- **What it does:** the public edge restarts, rebuilds its projection under `all`, and routes every private app by wire alias over `qits-private`. Swarm registers each service's aliases on every network it joins (`SwarmDeploymentDriver.networkFlags`, ~:1881-1900).
+- **Check:** from outside the tunnel, `curl -H "Authorization: Bearer $T" https://projects.qits.<d>/projects/q/health/ready` answers 200.
+- **Way out:** release qits-edge-service (the fix). The deployer sees network drift on `dev-qits-edge` and recreates it as declared, on `qits-net` only and without the env. Ordinary updates also strip env the config does not state (`envRemovals`). So the break-glass ends by itself at the next edge release, which is the intent.
+- **To end it by hand:**
+
+      docker service update --network-rm qits-private --env-rm QITS_EDGE_EXPOSURE dev-qits-edge
+- **Never leave it on:** it puts every private app back on the internet behind authentication alone.
 
 ## What it does not do — the non-goals, on purpose
 
@@ -650,7 +682,7 @@ a file.
 | `qits.edge.environments` | `QITS_EDGE_ENVIRONMENTS` | `prod` | The routable environment names, comma separated |
 | `qits.edge.default-environment` | `QITS_EDGE_DEFAULT_ENVIRONMENT` | `prod` | Where the apex and every unmatched host go. **Must be in the list** |
 | `qits.edge.apps.<app>.hosts.<env>` | `QITS_EDGE_APPS_<APP>_HOSTS_<ENV>` | — | A local process's or a suite's override of one **platform** label in one environment, `host` or `host:port`. It cannot add a label; a live deployment sets none |
-| `qits.edge.exposure` | `QITS_EDGE_EXPOSURE` | `public` | Which deployments this edge serves, `public` or `private` — see *The exposure class* |
+| `qits.edge.exposure` | `QITS_EDGE_EXPOSURE` | `public` | Which deployments this edge serves, `public` or `private` — see *The exposure class* — or `all`, the break-glass |
 | `qits.edge.listen.allowed-local-cidrs` | `QITS_EDGE_LISTEN_ALLOWED_LOCAL_CIDRS` | — (any) | Local addresses a connection may arrive on, as CIDR blocks; set, anything else is closed before routing and the loopback is always added |
 | `qits.edge.wireguard.peers` | `QITS_EDGE_WIREGUARD_PEERS` | — | Static peers, `name:base64PublicKey:tunnelIp` comma separated; names the caller in the private edge's peer log. A malformed entry is dropped with a WARN |
 | `qits.edge.peer-log.overlay-cidr` | `QITS_EDGE_PEER_LOG_OVERLAY_CIDR` | `10.231.0.0/20` | The `qits-private` overlay; a remote inside it is `peer=overlay` |

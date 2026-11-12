@@ -84,6 +84,52 @@ public class EdgeRoutes {
   }
 
   /**
+   * The exposure class this projection was last rebuilt under, as stored ({@code public}, {@code
+   * private}, {@code all}), or null on an edge that has not rebuilt since the table existed — see
+   * {@code DeploymentProjectionBootstrap#catchUpUntilReady}.
+   */
+  public String projectionClass() {
+    try (Connection connection = dataSource.getConnection();
+        PreparedStatement read =
+            connection.prepareStatement("select exposure from edge_projection_class");
+        ResultSet result = read.executeQuery()) {
+      return result.next() ? result.getString(1) : null;
+    } catch (SQLException failure) {
+      throw new IllegalStateException("could not read the edge projection class", failure);
+    }
+  }
+
+  /**
+   * Empties the deployment projection and records the class it is about to be rebuilt under, in one
+   * transaction (qits-2120). Only the replay that follows can fill it again: a frame withdrawn
+   * under the old class is otherwise never re-read, because {@link #replace} writes only a strictly
+   * newer frame and the replay brings the same ones.
+   */
+  @Transactional(Transactional.TxType.REQUIRES_NEW)
+  public void resetProjection(ExposureClass exposure) {
+    try (Connection connection = dataSource.getConnection()) {
+      for (String statement :
+          List.of(
+              "delete from edge_navigation_entry",
+              "delete from edge_endpoint",
+              "delete from edge_deployment_snapshot",
+              "delete from edge_projection_class")) {
+        try (PreparedStatement delete = connection.prepareStatement(statement)) {
+          delete.executeUpdate();
+        }
+      }
+      try (PreparedStatement insert =
+          connection.prepareStatement("insert into edge_projection_class (exposure) values (?)")) {
+        insert.setString(1, exposure.name().toLowerCase(Locale.ROOT));
+        insert.executeUpdate();
+      }
+      view = readAll(connection);
+    } catch (SQLException failure) {
+      throw new IllegalStateException("could not reset the edge routing projection", failure);
+    }
+  }
+
+  /**
    * One navigation placement an application published: where in the tree it asks to appear, under
    * what name, how high — and, optionally, which view of the application it opens.
    *

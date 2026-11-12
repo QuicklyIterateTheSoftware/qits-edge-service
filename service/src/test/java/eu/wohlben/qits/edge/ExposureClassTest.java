@@ -31,8 +31,17 @@ class ExposureClassTest {
   }
 
   @Test
+  void theBreakGlassKeepsEveryDeclaredExposure() {
+    assertTrue(ExposureClass.ALL.keeps("public"));
+    assertTrue(ExposureClass.ALL.keeps("private"));
+    assertTrue(ExposureClass.ALL.keeps("both"));
+    assertTrue(ExposureClass.ALL.keeps(null));
+    assertThrows(IllegalArgumentException.class, () -> ExposureClass.ALL.keeps("internal"));
+  }
+
+  @Test
   void aFrameWithoutTheFieldIsPublic() {
-    // Every frame written before qits-1976: why neither edge needs a migration or a replay reset.
+    // Every frame written before qits-1976: why neither edge needed a migration for the field.
     assertTrue(ExposureClass.PUBLIC.keeps(null));
     assertTrue(ExposureClass.PUBLIC.keeps("  "));
     assertFalse(ExposureClass.PRIVATE.keeps(null));
@@ -48,6 +57,7 @@ class ExposureClassTest {
   @Test
   void onlyAPublicEdgeServesThePlatformLabels() {
     assertEquals(PlatformApps.labels(), EdgeRouter.platformLabels(ExposureClass.PUBLIC));
+    assertEquals(PlatformApps.labels(), EdgeRouter.platformLabels(ExposureClass.ALL));
     assertTrue(EdgeRouter.platformLabels(ExposureClass.PRIVATE).isEmpty());
   }
 

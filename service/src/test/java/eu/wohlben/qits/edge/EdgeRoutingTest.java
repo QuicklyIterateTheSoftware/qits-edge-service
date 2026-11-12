@@ -63,6 +63,9 @@ class EdgeRoutingTest {
   @DataSource("edge")
   AgroalDataSource edgeDataSource;
 
+  /** The suite's configuration, which {@code bootUnder} restates under another exposure class. */
+  @Inject EdgeConfig edgeConfig;
+
   /** The project every name in the project tiers is spelled with here. It has environments. */
   private static final String PROJECT = "acme";
 
@@ -1785,7 +1788,8 @@ class EdgeRoutingTest {
           }
         };
     bootstrap[0] =
-        new DeploymentProjectionBootstrap(historicalLog, true, java.time.Duration.ofMillis(1));
+        new DeploymentProjectionBootstrap(
+            historicalLog, routes, ExposureClass.PUBLIC, true, java.time.Duration.ofMillis(1));
 
     bootstrap[0].catchUpUntilReady();
 
@@ -1798,6 +1802,103 @@ class EdgeRoutingTest {
     assertEquals(
         List.of("system", "system"),
         routes.navigation("dev").stream().map(EdgeRoutes.NavigationPlacement::slot).toList());
+  }
+
+  // --- the class is re-derived at boot (qits-2120) ----------------------------------------------
+
+  @Test
+  void aPrivateFrameWithdrawnUnderPublicIsRoutedAfterARestartUnderAllAndWithdrawnAgainUnderPublic()
+      throws Exception {
+    // The log the edge replays at every boot: ci public, then private. Its frames keep their ids
+    // across "restarts", exactly as the durable log does — so only a truncate lets the replay
+    // rewrite a snapshot the previous class withdrew.
+    Instant at = Instant.now();
+    List<eu.wohlben.qits.eventstream.control.EventFrame> log =
+        List.of(exposedCi("public", at), exposedCi("private", at.plusMillis(1)));
+
+    bootUnder(ExposureClass.PUBLIC, log);
+    assertEquals("public", routes.projectionClass());
+    assertNull(routes.serviceHost("dev", "ci"), "under public the private frame withdraws");
+    assertEquals(
+        new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
+
+    bootUnder(ExposureClass.ALL, log);
+    assertEquals("all", routes.projectionClass());
+    assertNotNull(routes.serviceHost("dev", "ci"), "the break-glass routes the private frame");
+    assertNotNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
+    assertFalse(routes.withdrawnHosts("dev").containsKey("qits-ci"));
+
+    bootUnder(ExposureClass.PUBLIC, log);
+    assertEquals("public", routes.projectionClass());
+    assertNull(routes.serviceHost("dev", "ci"), "back under public it is withdrawn again");
+    assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
+    assertEquals(
+        new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
+  }
+
+  @Test
+  void anUnchangedClassDoesNotTruncateTheProjection() throws Exception {
+    Instant at = Instant.now();
+    bootUnder(ExposureClass.PUBLIC, List.of(exposedCi("public", at)));
+    assertNotNull(routes.serviceHost("dev", "ci"));
+
+    // The same class with a log that brings nothing: what the previous boot built is still there.
+    bootUnder(ExposureClass.PUBLIC, List.of());
+    assertEquals("public", routes.projectionClass());
+    assertNotNull(routes.serviceHost("dev", "ci"), "an unchanged class keeps the projection");
+    assertNotNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
+  }
+
+  /**
+   * One edge boot under {@code exposure}: the production bootstrap, replaying {@code log} into a
+   * subscriber of that class — the class a restart with {@code QITS_EDGE_EXPOSURE} set would read.
+   */
+  private void bootUnder(
+      ExposureClass exposure, List<eu.wohlben.qits.eventstream.control.EventFrame> log) {
+    DeploymentActiveSubscriber subscriber = new DeploymentActiveSubscriber();
+    subscriber.routes = routes;
+    subscriber.config = exposedAs(exposure);
+    DeploymentProjectionCatchup replay =
+        new DeploymentProjectionCatchup() {
+          @Override
+          public eu.wohlben.qits.eventstream.control.CatchupResult rebuildFromEpoch(
+              String consumerId) {
+            log.forEach(subscriber::onFrame);
+            return new eu.wohlben.qits.eventstream.control.CatchupResult(
+                consumerId,
+                eu.wohlben.qits.eventstream.control.CatchupResult.Status.REACHED_HEAD,
+                log.size());
+          }
+
+          @Override
+          public eu.wohlben.qits.eventstream.control.CatchupResult catchUp(String consumerId) {
+            throw new AssertionError("a confirmed head must not need a retry");
+          }
+        };
+    DeploymentProjectionBootstrap bootstrap =
+        new DeploymentProjectionBootstrap(
+            replay, routes, exposure, true, java.time.Duration.ofMillis(1));
+    bootstrap.catchUpUntilReady();
+    assertTrue(bootstrap.authoritative());
+  }
+
+  /** This suite's configuration with only the exposure class replaced. */
+  private EdgeConfig exposedAs(ExposureClass exposure) {
+    EdgeConfig real = edgeConfig;
+    return (EdgeConfig)
+        java.lang.reflect.Proxy.newProxyInstance(
+            EdgeConfig.class.getClassLoader(),
+            new Class<?>[] {EdgeConfig.class},
+            (proxy, method, arguments) -> {
+              if ("exposure".equals(method.getName()) && method.getParameterCount() == 0) {
+                return exposure;
+              }
+              try {
+                return method.invoke(real, arguments);
+              } catch (java.lang.reflect.InvocationTargetException failure) {
+                throw failure.getCause();
+              }
+            });
   }
 
   /**
