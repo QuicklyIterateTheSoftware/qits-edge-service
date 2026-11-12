@@ -94,9 +94,11 @@ import org.jboss.logging.Logger;
  *   <li>A query with other than one question: FORMERR. A packet the codec cannot read at all is
  *       dropped: there is no header to answer it under.
  *   <li>An in-zone name this edge does not route, while no public address is known: SERVFAIL.
- *   <li>Until the routes view is ready — the same head-reached condition {@code /q/health/ready}
- *       reports — every query is SERVFAIL, so a private name that has not been read yet is never
- *       sent to the public address.
+ *   <li>Until the routes view is routable — caught up to the head {@code /q/health/ready} reports,
+ *       or serving the stored snapshot while it catches up (qits-2160) — every query is SERVFAIL.
+ *       While the stored snapshot is served, a name it routes is answered locally and every other
+ *       name is still SERVFAIL, so a private name that has not been read yet is never sent to the
+ *       public address.
  * </ul>
  *
  * <p>It runs on a small event loop group of its own, closed at shutdown, with netty's DNS codec

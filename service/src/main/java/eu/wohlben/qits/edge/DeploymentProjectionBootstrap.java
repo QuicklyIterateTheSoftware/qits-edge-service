@@ -6,6 +6,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import java.time.Duration;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.jboss.logging.Logger;
 
@@ -15,10 +16,18 @@ import org.jboss.logging.Logger;
  *
  * <p>PostgreSQL is a cache of this projection, not proof that it is current: a newer {@code
  * DeploymentActive} can have been published while this edge was down. At startup this coordinator
- * therefore holds readiness down and keeps direct path routing disabled until the eventstream
- * reader reports that {@link DeploymentActiveSubscriber#CONSUMER_ID} reached a page whose explicit
- * next cursor was absent. It retries indefinitely: qits-events being briefly down must not turn a
- * recoverable boot race into a permanently stale edge.
+ * therefore holds readiness down until the eventstream reader reports that {@link
+ * DeploymentActiveSubscriber#CONSUMER_ID} reached a page whose explicit next cursor was absent. It
+ * retries indefinitely: qits-events being briefly down must not turn a recoverable boot race into a
+ * permanently stale edge.
+ *
+ * <p><b>Routing is not readiness</b> (qits-2160). While it catches up, the edge serves the snapshot
+ * it stored — {@link #routable()} — and the replay converges that same projection in place, so the
+ * routes become the replayed ones frame by frame and {@link #authoritative()} flips at the head. A
+ * stale route is a 502 at worst, which is no worse than the 503 every name used to get, and it
+ * keeps the estate reachable through a long qits-events outage. Only a snapshot worth serving is
+ * served: the class reconcile below must have kept it, and it must route something. A first boot, a
+ * wiped database or a class reset still answers 503 until the head.
  *
  * <p>Before that replay it re-derives the exposure class (qits-2120): a projection built under
  * another class than this edge's — or under none recorded — is truncated first, and the change is
@@ -47,6 +56,17 @@ public class DeploymentProjectionBootstrap {
   Duration retry;
 
   private final AtomicReference<State> state = new AtomicReference<>(State.CATCHING_UP);
+
+  /**
+   * Whether the stored snapshot survived this boot's class reconcile and routed something then, and
+   * so may be served while the replay runs. False until {@link #reconcileClass} has looked — before
+   * that it is not known yet — and false for this boot once that reconcile truncated the projection
+   * or found it empty.
+   */
+  private volatile boolean snapshotKept;
+
+  /** Whether serving the stored snapshot has been logged, so it is logged once. */
+  private final AtomicBoolean snapshotAnnounced = new AtomicBoolean();
 
   DeploymentProjectionBootstrap() {}
 
@@ -78,6 +98,44 @@ public class DeploymentProjectionBootstrap {
   /** Whether direct routes and edge-owned navigation are backed by a complete projection. */
   public boolean authoritative() {
     return state.get() == State.READY;
+  }
+
+  /**
+   * Whether requests are routed from the projection at all: always once it is {@link
+   * #authoritative()}, and before that while the stored snapshot is being served (qits-2160) — the
+   * class reconcile kept it, and it routes something ({@link EdgeRoutes#routesAnything()}).
+   *
+   * <p>Routing and navigation ask this; readiness, and anything that publishes, withdraws or judges
+   * on the projection's word, asks {@link #authoritative()}.
+   */
+  public boolean routable() {
+    if (authoritative()) {
+      return true;
+    }
+    if (!snapshotKept || !routes.routesAnything()) {
+      return false;
+    }
+    if (snapshotAnnounced.compareAndSet(false, true)) {
+      LOG.info("deployment routing projection: serving stored snapshot while catching up");
+    }
+    return true;
+  }
+
+  /**
+   * Whether the stored snapshot is what is served right now: {@link #routable()} without being
+   * {@link #authoritative()}. Readiness reports it beside the state.
+   */
+  public boolean servingSnapshot() {
+    return !authoritative() && routable();
+  }
+
+  /**
+   * What a catching-up edge's stored snapshot is taken to be, by hand — for a suite that has to see
+   * both catch-ups: true serves a snapshot that routes something, false is the first boot or the
+   * class reset that serves nothing until the head.
+   */
+  void snapshotKept(boolean value) {
+    snapshotKept = value;
   }
 
   /**
@@ -139,15 +197,21 @@ public class DeploymentProjectionBootstrap {
   /**
    * Truncates the projection when it was built under another class than this edge's, or under none
    * recorded, and records this one — so the replay that follows rebuilds every snapshot under the
-   * current class. An unchanged class keeps the projection as it is.
+   * current class. An unchanged class keeps the projection as it is, and only such a projection is
+   * served during the catch-up ({@link #routable()}).
    */
   private void reconcileClass() {
     ExposureClass exposure = exposure();
     String current = exposure.name().toLowerCase(Locale.ROOT);
     String stored = routes.projectionClass();
     if (current.equals(stored)) {
+      // Kept, and served during the catch-up only when it routes something: an empty projection
+      // (a first boot, a database wiped of its rows) has nothing to serve, and the replay filling
+      // it is no complete view either — it waits for the head as before.
+      snapshotKept = routes.storesRoutes();
       return;
     }
+    snapshotKept = false;
     routes.resetProjection(exposure);
     LOG.infof(
         "edge projection rebuilt: class %s -> %s", stored == null ? "<none>" : stored, current);

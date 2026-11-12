@@ -12,6 +12,11 @@ import org.eclipse.microprofile.health.Readiness;
  *
  * <p>It deliberately does not probe application endpoints: an edge whose downstream is down is
  * still correctly configured, and restarting it for that outage would make recovery worse.
+ *
+ * <p>DOWN until the head, even while the stored snapshot is served ({@code serving-snapshot}): that
+ * is a fallback, not a caught-up edge. Nothing routes on this check (qits-2160) — swarm's
+ * healthcheck is {@code /q/health/live}, because a not-ready edge must still receive traffic: the
+ * catch-up barrier lives in the router, not in swarm's routing mesh.
  */
 @Readiness
 @ApplicationScoped
@@ -26,7 +31,8 @@ public class UpstreamsHealthCheck implements HealthCheck {
     HealthCheckResponseBuilder response =
         HealthCheckResponse.named("edge upstreams")
             .status(projectionBootstrap.authoritative())
-            .withData("deployment-projection", projectionBootstrap.state());
+            .withData("deployment-projection", projectionBootstrap.state())
+            .withData("serving-snapshot", projectionBootstrap.servingSnapshot());
     response.withData("default", router.defaultEnvironment());
     return response.build();
   }

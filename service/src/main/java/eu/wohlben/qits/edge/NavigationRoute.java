@@ -96,10 +96,12 @@ public class NavigationRoute {
   }
 
   private void handle(RoutingContext context) {
-    if (!projectionBootstrap.authoritative()) {
-      // Navigation is itself a projection response. Returning an incomplete list as 200 makes the
-      // UI silently lose services during an edge restart, which is harder to recover from than a
-      // short, explicit retry.
+    if (!projectionBootstrap.routable()) {
+      // Navigation is itself a projection response. Returning an empty list as 200 makes the UI
+      // silently lose services during an edge restart, which is harder to recover from than a
+      // short, explicit retry. A stored snapshot the boot kept is served while the catch-up runs
+      // (qits-2160), exactly as the router serves its routes: at worst it misses what was published
+      // while this edge was down, and the next ask after the head has it.
       context.response().setStatusCode(503).putHeader(HttpHeaders.RETRY_AFTER, "1").end();
       return;
     }

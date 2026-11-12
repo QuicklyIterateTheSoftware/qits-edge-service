@@ -56,19 +56,38 @@ survived: a durable watermark without the edge projection would otherwise make a
 database look caught up. Snapshot replacement is idempotent and last-writer-wins, so replaying over
 a surviving projection is safe and there is no projection truncate.
 
-Until qits-events explicitly marks the final catch-up page as its head, `/q/health/ready` is DOWN,
-`/main-navigation` returns `503 Retry-After: 1`, and every non-`/q` request returns the same
-retryable `503` — **except a platform app label's** (`PlatformApps`: `registry`, `mirror`,
-`githost`, `idp`), which is served from code throughout, exactly as if nothing had been published
-(qits-1403). The persisted snapshot is not consulted for those names until the head is reached. The
-exception is not a convenience: the edge's own catch-up dials qits-events, and qits-events fetches
-the keys it checks that call's token with from `https://idp.qits.<domain>/idp/jwks` — through the
-edge. Holding `idp` behind the replay would be a boot that waits for itself. The edge therefore
-never presents a partial direct-routing or navigation view as authoritative, and never needs one to
-serve the four names it routes by rule. An unavailable event log or a failed event handler leaves it down and retries after
-`qits.edge.projection.catchup.retry`; a confirmed head enables admission. The ordinary generic
-eventstream startup sweep is disabled here because this named, readiness-owning rebuild is the
-startup path; scheduled sweeps remain the post-start safety net.
+Until qits-events explicitly marks the final catch-up page as its head, `/q/health/ready` is DOWN
+(`deployment-projection: catching-up`). **Meanwhile the edge serves the snapshot it stored**
+(qits-2160): every name is routed, and `/main-navigation` answered, from the persisted projection,
+and the replay converges that same projection in place, so the routes become the replayed ones frame
+by frame until the head flips readiness UP. A stale route is a 502 at worst, which is no worse than
+a 503, and a stored snapshot keeps the estate reachable through a qits-events outage of any length.
+Readiness reports `serving-snapshot: true` while it does. A name the stored snapshot does not route
+is answered `503 Retry-After: 1` rather than a 404 until the head: it may be one published while
+this edge was down. The edge logs `deployment routing projection: serving stored snapshot while
+catching up` once when it starts.
+
+A stored snapshot is served only when it is worth serving: the class reconcile at boot kept it (see
+the exposure class below — a reset truncates it), and it routes at least one endpoint. A first
+boot, a wiped database or a class reset therefore still answers every non-`/q` request, and
+`/main-navigation`, with a retryable `503 Retry-After: 1` until the head — **except a platform app
+label's** (`PlatformApps`: `registry`, `mirror`, `githost`, `idp`), which is served from code
+throughout, exactly as if nothing had been published (qits-1403). The persisted snapshot is not
+consulted for those four names until the head is reached, whether or not it is served for the rest.
+The exception is not a convenience: the edge's own catch-up dials qits-events, and qits-events
+fetches the keys it checks that call's token with from `https://idp.qits.<domain>/idp/jwks` —
+through the edge. Holding `idp` behind the replay would be a boot that waits for itself, and a stale
+idp entry in a snapshot must not be able to stand in for it. An unavailable event log or a failed
+event handler leaves readiness down and retries after `qits.edge.projection.catchup.retry`; a
+confirmed head makes the projection authoritative. The ordinary generic eventstream startup sweep is
+disabled here because this named, readiness-owning rebuild is the startup path; scheduled sweeps
+remain the post-start safety net.
+
+**Swarm's healthcheck is liveness, `/q/health/live`, not readiness** (qits-2160). A not-ready edge
+must still receive traffic: the catch-up barrier lives inside the router, not in swarm's routing
+mesh. Gated on readiness, swarm never routed the published port to a catching-up edge and killed it
+every ~90 s — so the platform labels it serves during the catch-up never reached it, qits-events
+could not fetch idp's keys through it, and the edge and qits-events deadlocked at boot.
 
 A **second** consumer, `edge-project-sans`, rebuilds the project-slug projection, and
 `ProjectSansBootstrap` is deliberately not folded into that barrier: holding the whole edge down
@@ -643,8 +662,9 @@ pinned only the half that works is how it would stop being documented.
 
 Every download on the platform passes through this process, so a redeploy of it is a redeploy of
 every transfer in flight (qits-1170). The update is start-first: the successor passes
-`/q/health/ready`, and only then does swarm send the predecessor SIGTERM and take it out of the
-ingress balancer, so nothing new reaches it. What happens to the old task after that:
+`/q/health/live` — swarm's healthcheck, which is liveness (qits-2160), so the successor may still be
+catching up over its stored snapshot — and only then does swarm send the predecessor SIGTERM and
+take it out of the ingress balancer, so nothing new reaches it. What happens to the old task after that:
 
 - **Streams end at once.** `EdgeRouter.draining` runs in Quarkus' pre-shutdown pass
   (`ShutdownDelayInitiatedEvent`, enabled by `quarkus.shutdown.delay-enabled=true` with no delay)

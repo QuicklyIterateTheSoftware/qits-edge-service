@@ -69,10 +69,19 @@ renamed_from: qits-platform-edge
 # Ticket qits-162, epic qits-540 contract C3.
 resources: postgresql:edge:qits_platform_edge, postgresql:eventstream:qits_platform_edge_eventstream, idp:client
 
-# The default would be /platform-edge/q/health/ready, derived from the name with the qits- prefix
-# dropped. The edge owns the root path space and has no segment, so that path would be proxied to an
-# environment gateway and 404 — the health gate would fail a perfectly healthy edge.
-health_path: /q/health/ready
+# LIVENESS, NOT READINESS (qits-2160). The deployer turns this path into the swarm HEALTHCHECK, and
+# swarm routes the published port only to a healthy task and kills an unhealthy one. A not-ready edge
+# must still receive traffic: the catch-up barrier lives inside the router (it serves the platform
+# labels and its stored snapshot while it replays qits-events), not in swarm's routing mesh. Gated on
+# /q/health/ready, swarm sent nothing to a catching-up edge and killed it every ~90 s — so qits-events
+# could not fetch idp's keys through it, could not validate the edge's catch-up bearer, and the edge
+# and qits-events deadlocked at boot (the 2026-11-12 outage). /q/health/ready keeps its meaning,
+# "caught up to the head"; nothing in swarm waits on it.
+#
+# Spelled because the default would be /platform-edge/q/health/<...>, derived from the name with the
+# qits- prefix dropped. The edge owns the root path space and has no segment, so that path would be
+# proxied to an environment gateway and 404 — the health gate would fail a perfectly healthy edge.
+health_path: /q/health/live
 
 # INGRESS MODE, which is what retires the stop-first landmine here. A HOST-mode published port is
 # bound on the node by the task itself, so two tasks cannot hold it across a rolling update and a

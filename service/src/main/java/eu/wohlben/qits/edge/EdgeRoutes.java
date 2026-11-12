@@ -100,6 +100,22 @@ public class EdgeRoutes {
   }
 
   /**
+   * Whether the PERSISTED projection routes anything: some snapshot holds at least one endpoint.
+   * Read from PostgreSQL rather than the serving copy, because it is asked at boot, before or
+   * beside {@link #load} — see {@code DeploymentProjectionBootstrap#reconcileClass}.
+   */
+  public boolean storesRoutes() {
+    try (Connection connection = dataSource.getConnection();
+        PreparedStatement read =
+            connection.prepareStatement("select exists (select 1 from edge_endpoint)");
+        ResultSet result = read.executeQuery()) {
+      return result.next() && result.getBoolean(1);
+    } catch (SQLException failure) {
+      throw new IllegalStateException("could not read the edge routing projection", failure);
+    }
+  }
+
+  /**
    * Empties the deployment projection and records the class it is about to be rebuilt under, in one
    * transaction (qits-2120). Only the replay that follows can fill it again: a frame withdrawn
    * under the old class is otherwise never re-read, because {@link #replace} writes only a strictly
@@ -303,6 +319,24 @@ public class EdgeRoutes {
       return new View(
           Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Set.of(), Map.of());
     }
+  }
+
+  /**
+   * Whether the serving copy routes anything at all: some environment holds at least one active
+   * endpoint. A withdrawal routes nothing, so a projection of withdrawals only is empty here.
+   *
+   * <p>What {@link DeploymentProjectionBootstrap#routable()} asks before it serves a stored
+   * snapshot during the catch-up (qits-2160), beside the boot's own {@link #storesRoutes()}: this
+   * copy is loaded at startup, possibly after the bootstrap has looked, and an empty one would
+   * answer 404 for names the replay is about to publish.
+   */
+  public boolean routesAnything() {
+    for (List<EdgeEndpoint> endpoints : view.endpoints().values()) {
+      if (!endpoints.isEmpty()) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** The longest matching active prefix in this environment, or null when no deployment owns it. */

@@ -39,9 +39,10 @@ paths:
               schema: { $ref: "#/components/schemas/MainNavigation" }
         "503":
           description: >-
-            The deployment projection is not authoritative yet (an edge that is still catching up),
-            so an incomplete list is not answered as a 200. Retry-After says when to ask again; the
-            body is empty.
+            The edge is still catching up and holds no stored projection it may serve meanwhile (a
+            first boot, a wiped database, an exposure-class reset), so an empty list is not
+            answered as a 200. An edge catching up over a stored projection answers 200 from it.
+            Retry-After says when to ask again; the body is empty.
           headers:
             Retry-After: { schema: { type: integer } }
   /upstream-pools:

@@ -1184,9 +1184,11 @@ class EdgeRoutingTest {
   void idpsNameAnswersWhileTheRoutingProjectionCatchesUpAndNothingElseDoes() {
     // The boot this exists for: qits-events checks the edge's catch-up token against keys it
     // fetches from idp's public name — through the edge. Held behind the replay, that is a boot
-    // waiting for itself.
+    // waiting for itself. No stored snapshot is served here — the class reset truncated it, or
+    // the boot has not checked it yet (qits-2160) — so every other name waits for the head.
     activateCi();
     routingBootstrap.authoritative(false);
+    routingBootstrap.snapshotKept(false);
     try {
       EdgeClient.Answer idp =
           client().get("idp.dev." + PROJECT + ".example.com", "/idp/jwks", token());
@@ -1207,6 +1209,85 @@ class EdgeRoutingTest {
         "mirror-dev",
         client().get("ci.dev." + PROJECT + ".example.com", "/", token()).line("upstream"),
         "and it is served the moment the catch-up is done");
+  }
+
+  @Test
+  void aKeptSnapshotIsServedWhileTheRoutingProjectionCatchesUpAndReadinessStaysDown() {
+    // qits-2160: a catching-up edge whose boot kept its stored snapshot routes from it — a stale
+    // route is a 502 at worst, no worse than the 503 — while readiness waits for the head.
+    activateCi();
+    routingBootstrap.authoritative(false);
+    routingBootstrap.snapshotKept(true);
+    try {
+      EdgeClient.Answer ci = client().get("ci.dev." + PROJECT + ".example.com", "/", token());
+      assertEquals("mirror-dev", ci.line("upstream"), "the stored route is served: " + ci.body());
+
+      EdgeClient.Answer idp =
+          client().get("idp.dev." + PROJECT + ".example.com", "/idp/jwks", token());
+      assertEquals("idp-dev", idp.line("upstream"), "a platform label is still served from code");
+
+      EdgeClient.Answer unknown =
+          client().get("nosuchapp.dev." + PROJECT + ".example.com", "/anything", token());
+      assertEquals(503, unknown.status(), "a name the snapshot lacks may yet be published");
+      assertEquals("1", unknown.headers().get("retry-after"));
+      assertNull(unknown.line("upstream"));
+
+      EdgeClient.Answer navigation = client().get("dev.acme.example.com", "/main-navigation");
+      assertEquals(200, navigation.status(), navigation.body());
+      assertTrue(
+          new JsonObject(navigation.body())
+              .getJsonObject("slots").getJsonArray("services.details").stream()
+                  .anyMatch(entry -> "CI".equals(((JsonObject) entry).getString("label"))),
+          "navigation is answered from the stored snapshot: " + navigation.body());
+
+      RestAssured.given()
+          .header("Host", "dev.acme.example.com")
+          .when()
+          .get("/q/health/ready")
+          .then()
+          .statusCode(503)
+          .body("checks.find { it.name == 'edge upstreams' }.status", is("DOWN"))
+          .body(
+              "checks.find { it.name == 'edge upstreams' }.data.'deployment-projection'",
+              is("catching-up"))
+          .body("checks.find { it.name == 'edge upstreams' }.data.'serving-snapshot'", is(true));
+    } finally {
+      routingBootstrap.authoritative(true);
+      routingBootstrap.snapshotKept(false);
+    }
+    RestAssured.given()
+        .header("Host", "dev.acme.example.com")
+        .when()
+        .get("/q/health/ready")
+        .then()
+        .statusCode(200)
+        .body("checks.find { it.name == 'edge upstreams' }.data.'serving-snapshot'", is(false));
+  }
+
+  @Test
+  void anEmptySnapshotIsNotServedWhileTheRoutingProjectionCatchesUp() throws Exception {
+    // A first boot or a wiped database: the class reconcile had nothing to truncate, but there is
+    // nothing to serve either — 404s about names the replay is about to publish would be wrong.
+    clearProjection();
+    routingBootstrap.authoritative(false);
+    routingBootstrap.snapshotKept(true);
+    try {
+      EdgeClient.Answer ci = client().get("ci.dev." + PROJECT + ".example.com", "/", token());
+      assertEquals(503, ci.status(), ci.body());
+      assertEquals("1", ci.headers().get("retry-after"));
+      EdgeClient.Answer navigation = client().get("dev.acme.example.com", "/main-navigation");
+      assertEquals(503, navigation.status());
+      assertEquals("1", navigation.headers().get("retry-after"));
+      assertEquals(
+          "registry-dev",
+          client()
+              .get("registry.dev." + PROJECT + ".example.com", "/v2/", token())
+              .line("upstream"),
+          "the platform labels are served regardless");
+    } finally {
+      routingBootstrap.authoritative(true);
+      routingBootstrap.snapshotKept(false);
+    }
   }
 
   @Test
@@ -1847,6 +1928,96 @@ class EdgeRoutingTest {
     assertEquals("public", routes.projectionClass());
     assertNotNull(routes.serviceHost("dev", "ci"), "an unchanged class keeps the projection");
     assertNotNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
+  }
+
+  // --- the stored snapshot is served while catching up (qits-2160) -------------------------------
+
+  @Test
+  void aKeptSnapshotIsRoutableBeforeTheHeadAndAuthoritativeOnlyAtIt() throws Exception {
+    Instant at = Instant.now();
+    List<eu.wohlben.qits.eventstream.control.EventFrame> log = List.of(exposedCi("public", at));
+    bootUnder(ExposureClass.PUBLIC, log);
+
+    Observed seen = bootObserving(ExposureClass.PUBLIC, log);
+    assertFalse(seen.beforeReconcile, "not before the boot has looked at the snapshot");
+    assertTrue(seen.beforeReplay, "an unchanged class over routes is served at once");
+    assertTrue(seen.afterReplay);
+    assertFalse(seen.authoritativeBeforeHead, "but it is not authoritative before the head");
+    assertTrue(seen.bootstrap.authoritative());
+    assertTrue(seen.bootstrap.routable());
+    assertFalse(seen.bootstrap.servingSnapshot(), "at the head it is the replayed projection");
+  }
+
+  @Test
+  void aClassResetIsNotRoutableUntilTheHeadEvenOnceTheReplayRefillsIt() throws Exception {
+    Instant at = Instant.now();
+    List<eu.wohlben.qits.eventstream.control.EventFrame> log = List.of(exposedCi("public", at));
+    bootUnder(ExposureClass.PUBLIC, log);
+
+    Observed seen = bootObserving(ExposureClass.ALL, log);
+    assertFalse(seen.beforeReplay, "the truncated projection is not served");
+    assertFalse(seen.afterReplay, "nor is the partial one the replay builds");
+    assertTrue(seen.bootstrap.authoritative());
+    assertTrue(seen.bootstrap.routable());
+    bootUnder(ExposureClass.PUBLIC, log);
+  }
+
+  @Test
+  void anEmptyProjectionIsNotRoutableUntilTheHeadEvenOnceTheReplayFillsIt() throws Exception {
+    bootUnder(ExposureClass.PUBLIC, List.of());
+    clearProjection();
+
+    Observed seen =
+        bootObserving(ExposureClass.PUBLIC, List.of(exposedCi("public", Instant.now())));
+    assertFalse(seen.beforeReplay, "a first boot or a wiped database has nothing to serve");
+    assertFalse(seen.afterReplay, "and a projection the replay is still filling is no snapshot");
+    assertTrue(seen.bootstrap.authoritative());
+  }
+
+  /** What {@link #bootObserving} saw of the bootstrap on the way to the head. */
+  private static final class Observed {
+    DeploymentProjectionBootstrap bootstrap;
+    boolean beforeReconcile;
+    boolean beforeReplay;
+    boolean afterReplay;
+    boolean authoritativeBeforeHead;
+  }
+
+  /**
+   * {@link #bootUnder}, recording {@code routable()} before the reconcile and around the replay.
+   */
+  private Observed bootObserving(
+      ExposureClass exposure, List<eu.wohlben.qits.eventstream.control.EventFrame> log) {
+    Observed seen = new Observed();
+    DeploymentActiveSubscriber subscriber = new DeploymentActiveSubscriber();
+    subscriber.routes = routes;
+    subscriber.config = exposedAs(exposure);
+    DeploymentProjectionCatchup replay =
+        new DeploymentProjectionCatchup() {
+          @Override
+          public eu.wohlben.qits.eventstream.control.CatchupResult rebuildFromEpoch(
+              String consumerId) {
+            seen.beforeReplay = seen.bootstrap.routable();
+            log.forEach(subscriber::onFrame);
+            seen.afterReplay = seen.bootstrap.routable();
+            seen.authoritativeBeforeHead = seen.bootstrap.authoritative();
+            return new eu.wohlben.qits.eventstream.control.CatchupResult(
+                consumerId,
+                eu.wohlben.qits.eventstream.control.CatchupResult.Status.REACHED_HEAD,
+                log.size());
+          }
+
+          @Override
+          public eu.wohlben.qits.eventstream.control.CatchupResult catchUp(String consumerId) {
+            throw new AssertionError("a confirmed head must not need a retry");
+          }
+        };
+    seen.bootstrap =
+        new DeploymentProjectionBootstrap(
+            replay, routes, exposure, true, java.time.Duration.ofMillis(1));
+    seen.beforeReconcile = seen.bootstrap.routable();
+    seen.bootstrap.catchUpUntilReady();
+    return seen;
   }
 
   /**
