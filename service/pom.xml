@@ -62,7 +62,7 @@
              checks that every state golden-masters/index.json records has its @State callback on
              ConsumerPactVerificationTest. Released out of libs/qits-integrations-quarkus, like
              qits-userflows and qits-service-mock above. -->
-        <qits.arch-rules.version>2026.1113.1442</qits.arch-rules.version>
+        <qits.arch-rules.version>2026.1113.14706</qits.arch-rules.version>
         <!-- pact-jvm's JUnit 5 provider, for contracts/ConsumerPactVerificationTest: the version every
              provider on the estate verifies with, so a consumer's pact is read the same way. -->
         <pact.version>4.7.5</pact.version>
