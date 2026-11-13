@@ -35,7 +35,13 @@ class PrivateVariantConfigSourceTest {
         "/work/.letsencrypt/current/lets-encrypt.key",
         source.getValue("quarkus.tls.key-store.pem.acme.key"));
     assertEquals("1m", source.getValue("quarkus.tls.reload-period"));
-    assertEquals(12, source.getPropertyNames().size());
+    assertEquals(
+        "30s",
+        source.getValue("quarkus.shutdown.timeout"),
+        "stop-first: the drain is downtime, so it is bounded short (qits-2223)");
+    assertNull(
+        source.getValue("qits.edge.shutdown.linger"), "the linger keeps application.properties'");
+    assertEquals(13, source.getPropertyNames().size());
     assertEquals(source.getPropertyNames(), source.getProperties().keySet());
     assertNull(source.getValue("qits.edge.domain"), "anything else keeps its default");
     assertNull(
@@ -52,6 +58,9 @@ class PrivateVariantConfigSourceTest {
       assertTrue(source.getPropertyNames().isEmpty(), String.valueOf(variant));
       assertTrue(source.getProperties().isEmpty(), String.valueOf(variant));
       assertNull(source.getValue("qits.edge.exposure"), String.valueOf(variant));
+      assertNull(
+          source.getValue("quarkus.shutdown.timeout"),
+          "the public edge keeps application.properties' 9m30s: " + variant);
     }
   }
 
@@ -84,6 +93,30 @@ class PrivateVariantConfigSourceTest {
     assertEquals("false", config.getRawValue("qits.edge.acme.enabled"));
     assertEquals("private", config.getRawValue("qits.edge.exposure"));
     assertEquals("8081", config.getRawValue("quarkus.http.port"), "an env var still wins");
+  }
+
+  @Test
+  void onlyThePrivateVariantShortensTheDrain() {
+    // qits-2223: the public edge's 9m30s stands without the variant; the private one answers 30s.
+    for (String variant : new String[] {null, "private"}) {
+      SmallRyeConfig config =
+          new SmallRyeConfigBuilder()
+              .withProfile("prod")
+              .withSources(
+                  new PropertiesConfigSource(
+                      Map.of(
+                          "quarkus.shutdown.timeout", "9m30s", "qits.edge.shutdown.linger", "10s"),
+                      "application.properties",
+                      250))
+              .withSources(new PrivateVariantConfigSource(() -> variant))
+              .build();
+
+      assertEquals(
+          variant == null ? "9m30s" : "30s",
+          config.getRawValue("quarkus.shutdown.timeout"),
+          String.valueOf(variant));
+      assertEquals("10s", config.getRawValue("qits.edge.shutdown.linger"), String.valueOf(variant));
+    }
   }
 
   @Test

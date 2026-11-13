@@ -107,7 +107,9 @@ publish_mode: ingress
 # minutes: on SIGTERM the edge closes its SSE and WebSocket streams at once (their clients reconnect
 # to the new task) and exits as soon as the ordinary transfers end. Its own drain bound,
 # `quarkus.shutdown.timeout` in application.properties, is 9m30s — just under this, so the process
-# always exits on its own before swarm would kill it. Change the two together.
+# always exits on its own before swarm would kill it. Change the two together. This is the PUBLIC
+# edge's budget only: the private variant (deployments.private.yml) is stop-first, drains for 30s
+# (PrivateVariantConfigSource) and has a grace of its own (qits-2223).
 stop_grace_period: 10m
 
 # THE CERTIFICATE VOLUME, declared here rather than in deployment config (qits-1391): the ACME

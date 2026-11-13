@@ -64,6 +64,9 @@ publishes: 47812:47812/udp
 # limit twice — the deployer refuses it mounted read-write.
 volumes: private:wireguard:/work/.wireguard, shared:qits-edge-letsencrypt:/work/.letsencrypt:ro
 
-# The public edge's ten minutes, for the same reason: let transfers in flight finish. Its drain
-# bound, quarkus.shutdown.timeout (9m30s), is the same image's and stays just under this.
-stop_grace_period: 10m
+# NOT the public edge's ten minutes (qits-2223). Stop-first means no successor while this task drains,
+# so the drain is downtime for every private name and the tunnel: a stuck drain under the inherited
+# 9m30s bound once made a redeploy 9m51s of it. PrivateVariantConfigSource bounds the drain at 30s
+# (quarkus.shutdown.timeout); the 10s linger follows, so 40s < 1m and the process always exits on its
+# own. A long transfer through the private edge is cut by a redeploy — accepted.
+stop_grace_period: 1m

@@ -352,6 +352,7 @@ Without the variable it is empty and the edge is the public one, unchanged.
 | `quarkus.http.port` / `quarkus.http.ssl-port` | `80` / `443` — a peer dials `https://<app>.qits.<domain>` with no port |
 | `quarkus.tls.key-store.pem.acme.cert` / `.key` | `/work/.letsencrypt/current/lets-encrypt.crt` / `.key` |
 | `quarkus.tls.reload-period` | `1m` — follows the public edge's renewals |
+| `quarkus.shutdown.timeout` | `30s` — stop-first, so the drain is downtime for every private name; the public edge's 9m30s is for a start-first update (qits-2223) |
 
 The TLS keys are the public edge's own deployment settings (`QUARKUS_TLS_KEY_STORE_PEM_ACME_CERT`,
 `…_KEY`, `QUARKUS_TLS_RELOAD_PERIOD`) in dotted form: the default TLS configuration's PEM pair named
@@ -703,7 +704,11 @@ take it out of the ingress balancer, so nothing new reaches it. What happens to 
   fails, and from the splice when the inbound socket closes.
 - **Transfers finish.** Ordinary requests drain for up to `quarkus.shutdown.timeout=9m30s`, inside
   the `stop_grace_period: 10m` that `.config/qits/deployments.yml` hands the deployer. Keep the two
-  in step: a timeout at or over the grace is SIGKILL mid-transfer.
+  in step: a timeout at or over the grace is SIGKILL mid-transfer. **That is the public edge's
+  budget.** The private edge updates stop-first, so nothing serves its names while it drains: it
+  drains for `30s` at most (`PrivateVariantConfigSource`) inside a `stop_grace_period: 1m`, and a
+  longer transfer through it is cut by a redeploy — accepted, against the 9m51s outage a stuck
+  drain cost (qits-2223).
 - **Then it lingers.** After the drain the process waits `qits.edge.shutdown.linger=10s` before
   exiting (`ShutdownLinger`): a response Quarkus calls complete may still sit in the kernel's send
   buffer, and exiting at once lets swarm tear down the network namespace under it — a 201 MB jar
