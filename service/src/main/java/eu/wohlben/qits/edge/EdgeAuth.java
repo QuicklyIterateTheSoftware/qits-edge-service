@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 /**
@@ -107,7 +108,11 @@ import org.jboss.logging.Logger;
  * AuthConfig#anonymousReadApps()} names app labels whose {@code GET} and {@code HEAD} pass without
  * a credential, because reads are the bootstrap steps — pulling a base image, cloning, fetching a
  * dependency — that happen before there is anything to hold a token. Writes on the same name keep
- * the whole check, so the exemption cannot widen into "this service is public".
+ * the whole check, so the exemption cannot widen into "this service is public". Quarkus' own
+ * management surface is never part of that opening either (qits-2222): since {@code /q} on an app's
+ * name started reaching the app's own non-application routes, the exemption would otherwise hand an
+ * anonymous internet caller {@code /q/metrics}, {@code /q/openapi} and the rest — none of which
+ * bootstrap ever needs.
  *
  * <p>docker's {@code service} and {@code scope} query parameters are read and dropped. The
  * permission is the audience the token already carries; per-repository grants would be a change to
@@ -133,6 +138,13 @@ public class EdgeAuth {
   private static final String BASIC = "basic ";
 
   @Inject AuthConfig config;
+
+  /**
+   * Quarkus' own management root — {@code /q} by default — kept in step with {@link EdgeRouter}'s
+   * copy of the same property so the two never disagree about what the management surface is.
+   */
+  @ConfigProperty(name = "quarkus.http.non-application-root-path", defaultValue = "/q")
+  String nonApplicationRootPath;
 
   @Inject Idp idp;
 
@@ -243,21 +255,30 @@ public class EdgeAuth {
 
   /**
    * Whether this request is a read the deployment opened: a {@code GET} or a {@code HEAD}, on an
-   * APP vhost, whose app label was named.
+   * APP vhost, whose app label was named, and not on Quarkus' own non-application root.
    *
-   * <p>All three conditions are load-bearing. {@code toApp()} keeps the exemption off the
+   * <p>All four conditions are load-bearing. {@code toApp()} keeps the exemption off the
    * environment vhost, which is the door and serves nothing. The app label is the one the routing
    * decision already resolved, so a label the edge does not route never reaches here — an unknown
-   * app is answered 404 one step earlier. And the method list is the two that read: everything that
-   * changes the service still needs a token.
+   * app is answered 404 one step earlier. The method list is the two that read: everything that
+   * changes the service still needs a token. And the path check keeps {@code
+   * nonApplicationRootPath} (qits-2222: {@code /q} and everything under it) out of the opening no
+   * matter which app is named — the management surface is never part of a bootstrap read, so it
+   * stays gated even on an app whose ordinary reads are open.
    *
    * <p>Package-private and static so it can be asserted without booting an application.
    */
   static boolean anonymousRead(
-      HostEnvironments.Route route, HttpMethod method, Set<String> readApps) {
+      HostEnvironments.Route route,
+      HttpMethod method,
+      String path,
+      Set<String> readApps,
+      String nonApplicationRootPath) {
     return route.toApp()
         && (method == HttpMethod.GET || method == HttpMethod.HEAD)
-        && readApps.contains(route.app());
+        && readApps.contains(route.app())
+        && !path.equals(nonApplicationRootPath)
+        && !path.startsWith(nonApplicationRootPath + "/");
   }
 
   /** Whether this request is docker fetching a token rather than asking for a registry object. */
@@ -326,7 +347,9 @@ public class EdgeAuth {
    * there is no second switch for it.
    */
   public boolean open(HostEnvironments.Route route, HttpServerRequest request) {
-    return !config.enforceOnApps() || anonymousRead(route, request.method(), anonymousReadApps);
+    return !config.enforceOnApps()
+        || anonymousRead(
+            route, request.method(), request.path(), anonymousReadApps, nonApplicationRootPath);
   }
 
   /**

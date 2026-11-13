@@ -119,6 +119,13 @@ public final class StoryTarget {
   public static final String UNCLAIMED_HOST = "nosuchservice." + DOOR_HOST;
 
   /**
+   * The name an orchestrator probes the edge on: {@code localhost}, one label, the apex reading — a
+   * name that means this edge rather than anything behind it, and so the kind of name the edge
+   * answers its own {@code /q/*} on (qits-2222). Swarm's healthcheck curls exactly this.
+   */
+  public static final String OWN_HOST = "localhost";
+
+  /**
    * The canonical origin, which is DERIVED from the stated domain and configured nowhere: the
    * PLATFORM project's own door, {@code https://qits.<domain>}. It is what a name inside no project
    * falls back to, and the login page's fallback while no deployment has published a host for
@@ -132,7 +139,9 @@ public final class StoryTarget {
 
   // --- the edge's own surface --------------------------------------------------------------------
 
-  /** Never proxied, answered whatever the Host name says. */
+  /**
+   * Answered by the edge on the apex names only; an app's name routes it like any path (qits-2222).
+   */
   public static final String READY = "/q/health/ready";
 
   public static final String LIVE = "/q/health/live";
