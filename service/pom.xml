@@ -173,7 +173,7 @@
             <artifactId>vertx-http-proxy</artifactId>
         </dependency>
         <dependency>
-            <!-- /q/health/{live,ready}, answered by this process and never proxied. -->
+            <!-- /q/health/{live,ready}, answered by this process on the apex names (qits-2222). -->
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-smallrye-health</artifactId>
         </dependency>

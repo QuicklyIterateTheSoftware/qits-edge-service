@@ -16,9 +16,10 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The document is {@code META-INF/openapi.yaml} and nothing else — the edge's routes are Vert.x,
  * so nothing is scanned — and it is served in dev and test only: the edge answers {@code /q/*} on
- * every Host, so in production it would be an anonymous route on every vhost. {@code EdgeRouter}
- * hands {@code /q/*} on to Quarkus whatever the Host, which is why the plain request below reaches
- * it.
+ * its apex names, the public bare domain among them, so in production it would be an anonymous
+ * route on the platform's front name. {@code EdgeRouter} hands {@code /q/*} on to Quarkus on the
+ * apex reading — and the plain request below names {@code localhost}, a single label, which is that
+ * reading — so it reaches it.
  *
  * <p>It compares by default and fails with a unified diff when the served document moved; {@code
  * -Dgolden.update=true} (or {@code QITS_GOLDEN_UPDATE=true}) rewrites the file. {@code

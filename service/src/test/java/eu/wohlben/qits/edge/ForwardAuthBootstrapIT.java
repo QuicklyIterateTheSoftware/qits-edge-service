@@ -55,8 +55,9 @@ import org.junit.jupiter.api.TestMethodOrder;
  *       of refusal (the login redirect a browser can follow, the {@code WWW-Authenticate} challenge
  *       docker acts on) are what a caller outside the platform actually receives.
  *   <li><b>Health and the door answer before any of it.</b> Both are properties of route ORDER in a
- *       booted Vert.x router — {@code EdgeRouter.ROUTE_ORDER} and the explicit {@code /q} skip —
- *       and a packaged process is where an ordering mistake would show.
+ *       booted Vert.x router — {@code EdgeRouter.ROUTE_ORDER} and the explicit {@code /q} skip on
+ *       the edge's own names (qits-2222) — and a packaged process is where an ordering mistake
+ *       would show.
  * </ul>
  *
  * <p><b>This class runs FIRST, and that is load-bearing.</b> A cumulative recording is attributed
@@ -87,8 +88,8 @@ import org.junit.jupiter.api.TestMethodOrder;
  *
  * <p><b>The requests are driven by {@link EdgeClient} rather than by rest-assured</b>, for the
  * reason written on that class: this service routes on {@code Host}, and rest-assured derives that
- * header from the URL it was given. rest-assured is used for the health probe alone, where the name
- * genuinely does not matter.
+ * header from the URL it was given. rest-assured is used for the boot's health probe alone, whose
+ * URL names {@code localhost} — the edge's own name, the only kind it answers {@code /q/*} on.
  *
  * <p><b>An absence is never an edge.</b> "The refused request never reached the service" is the
  * sharpest claim in this file and it is a claim about traffic that did NOT happen — the diagram can
@@ -371,13 +372,19 @@ public class ForwardAuthBootstrapIT {
       through to something that serves it would hand exactly those requests to the hop that does
       not check them.
 
-      And the one surface that stays open to everyone, on every name: this process's own health.
-      An orchestrator carries no session and can never be given one, so a readiness probe that
-      redirected to a login page would be a container that never comes up — and this is the
-      container that binds the host's only published port, so nothing on the platform would come up
-      behind it. It is answered by this process rather than proxied, whatever Host the probe used,
-      and it says what a booted edge is ready FOR: a deployment routing projection it has caught up
-      with.
+      And the one surface that stays open to everyone: this process's own health, asked on a name
+      that means this process. An orchestrator carries no session and can never be given one, so a
+      readiness probe that redirected to a login page would be a container that never comes up —
+      and this is the container that binds the host's only published port, so nothing on the
+      platform would come up behind it. On `localhost`, an address, the wire alias or the bare
+      domain it is answered by this process rather than proxied, and it says what a booted edge is
+      ready FOR: a deployment routing projection it has caught up with.
+
+      On any other name the same path is that name's, like every other path on it. A service's name
+      gates it and would hand it to the service; a door serves nothing on it; a name nobody claims
+      is the same 404 there as anywhere. An application's name must never answer with the edge's
+      health: it used to, and a stopped application read healthy on the one path anybody probes
+      while every other path on its name was a 404.
       """)
   @Order(2)
   void theDoorRefusesEverybodyAlikeWhileHealthAnswersEverybody(Interactions story) {
@@ -469,40 +476,58 @@ public class ForwardAuthBootstrapIT {
                 + " check them")
         .as("an-unclaimed-service-name-is-refused-rather-than-forwarded");
 
-    // --- (4) health, on a gated service host, with no credential of any kind. This is the one
-    // request on that name that must not meet the gate, and it is answered by this process rather
-    // than proxied: the `/q` prefix is skipped explicitly, before the Host name is even read for
-    // routing.
+    // --- (4) health, on the edge's own name, with no credential of any kind. It is answered by
+    // this process rather than proxied: `/q` is skipped explicitly on the apex reading — localhost,
+    // an address, the wire alias, the bare domain — ahead of every gate and of the catch-up
+    // barrier.
     NetworkCapture.actor("an orchestrator");
-    EdgeClient.Answer ready = StoryEdge.client().get(StoryTarget.PROJECTS_HOST, StoryTarget.READY);
+    EdgeClient.Answer ready = StoryEdge.client().get(StoryTarget.OWN_HOST, StoryTarget.READY);
     assertEquals(200, ready.status(), "a readiness probe carries no session and never can");
     assertTrue(ready.body().contains("\"status\""), ready.body());
     assertTrue(ready.body().contains("UP"), ready.body());
     assertTrue(
         ready.body().contains("deployment-projection"),
         "readiness says what a booted edge is ready FOR: " + ready.body());
-    assertEquals(200, StoryEdge.client().get(StoryTarget.PROJECTS_HOST, StoryTarget.LIVE).status());
+    assertEquals(200, StoryEdge.client().get(StoryTarget.OWN_HOST, StoryTarget.LIVE).status());
     assertEquals(
         0,
         upstream.requestsTo(StoryTarget.READY),
-        "the edge's own surface is the one thing that never leaves the process");
+        "the edge's own surface never leaves the process");
     // The probe is NOT skipped by this tap, unlike every sibling service's, and that is deliberate:
-    // here health is the subject rather than the scaffolding. `/q` is skipped before the Host name
-    // is even read for routing, and the two edges below — the gated service name and the door —
-    // are what say so.
+    // here health is the subject rather than the scaffolding.
     story
         .note(
-            "health is answered by this process rather than proxied, on a GATED name, with no"
-                + " credential of any kind: an orchestrator carries no session and never can, and"
-                + " this is the container that binds the host's only published port")
+            "health is answered by this process rather than proxied, on the edge's own name, with"
+                + " no credential of any kind: an orchestrator carries no session and never can,"
+                + " and this is the container that binds the host's only published port")
         .as("health-is-never-gated-and-never-proxied");
 
-    // …and on the door's name too, because a probe does not know or care which vhost it hit.
-    assertEquals(200, StoryEdge.client().get(StoryTarget.DOOR_HOST, StoryTarget.READY).status());
+    // --- (5) the same path on every other kind of name is that name's own (qits-2222). A gated
+    // service's name gates it like any other path — never the edge's UP, and it does not reach the
+    // service without a credential either; the door and a name nobody claims answer their 404.
+    EdgeClient.Answer gated = StoryEdge.client().get(StoryTarget.PROJECTS_HOST, StoryTarget.READY);
+    assertEquals(401, gated.status(), "a service's name gates its health path like any other");
+    assertTrue(!gated.body().contains("deployment-projection"), gated.body());
+    EdgeClient.Answer atTheDoor = StoryEdge.client().get(StoryTarget.DOOR_HOST, StoryTarget.READY);
+    assertEquals(404, atTheDoor.status(), "the door serves nothing, health included");
+    assertTrue(!atTheDoor.body().contains("deployment-projection"), atTheDoor.body());
+    EdgeClient.Answer unclaimed404 =
+        StoryEdge.client().get(StoryTarget.UNCLAIMED_HOST, StoryTarget.READY);
+    assertEquals(404, unclaimed404.status(), "a name nobody claims is a 404 on every path");
+    assertTrue(
+        unclaimed404.body().contains("`nosuchservice` is not an application this edge routes"),
+        unclaimed404.body());
+    assertEquals(
+        0,
+        upstream.requestsTo(StoryTarget.READY),
+        "an anonymous probe on a gated name reaches no service either");
     story
         .note(
-            "…and on the door's name too, because a probe does not know or care which vhost it hit")
-        .as("health-answers-whatever-name-was-used");
+            "on any other name the health path is that name's, like every other path on it: a"
+                + " service's name gates it, the door and a name nobody claims answer 404. An"
+                + " application's name never answers with the edge's health — it did, and a"
+                + " stopped application read healthy")
+        .as("an-applications-name-never-answers-with-the-edges-health");
   }
 
   @AfterAll
@@ -603,7 +628,7 @@ public class ForwardAuthBootstrapIT {
     ReportAssertions.assertComplete(StoryTarget.CATEGORY, DOOR_SLUG, UserflowReport.PASSED);
 
     // --- the door story's whole graph ------------------------------------------------------------
-    // Six arrivals and NOTHING leaving: no upstream edge and no idp edge anywhere in this story,
+    // Eight arrivals and NOTHING leaving: no upstream edge and no idp edge anywhere in this story,
     // which is the door's entire claim. assertNoEdgesTo is what states it — a presence check cannot
     // assert that a hop did not happen, and here it PAYS, because every one of those services was
     // live and answering throughout.
@@ -634,22 +659,36 @@ public class ForwardAuthBootstrapIT {
         "http",
         "an orchestrator",
         StoryTarget.SERVICE,
-        StoryTarget.arriving(StoryTarget.READY, StoryTarget.PROJECTS_HOST, 200));
+        StoryTarget.arriving(StoryTarget.READY, StoryTarget.OWN_HOST, 200));
     ReportAssertions.assertEdge(
         StoryTarget.CATEGORY,
         DOOR_SLUG,
         "http",
         "an orchestrator",
         StoryTarget.SERVICE,
-        StoryTarget.arriving(StoryTarget.LIVE, StoryTarget.PROJECTS_HOST, 200));
+        StoryTarget.arriving(StoryTarget.LIVE, StoryTarget.OWN_HOST, 200));
     ReportAssertions.assertEdge(
         StoryTarget.CATEGORY,
         DOOR_SLUG,
         "http",
         "an orchestrator",
         StoryTarget.SERVICE,
-        StoryTarget.arriving(StoryTarget.READY, StoryTarget.DOOR_HOST, 200));
-    ReportAssertions.assertEdgeCount(StoryTarget.CATEGORY, DOOR_SLUG, 6);
+        StoryTarget.arriving(StoryTarget.READY, StoryTarget.PROJECTS_HOST, 401));
+    ReportAssertions.assertEdge(
+        StoryTarget.CATEGORY,
+        DOOR_SLUG,
+        "http",
+        "an orchestrator",
+        StoryTarget.SERVICE,
+        StoryTarget.arriving(StoryTarget.READY, StoryTarget.DOOR_HOST, 404));
+    ReportAssertions.assertEdge(
+        StoryTarget.CATEGORY,
+        DOOR_SLUG,
+        "http",
+        "an orchestrator",
+        StoryTarget.SERVICE,
+        StoryTarget.arriving(StoryTarget.READY, StoryTarget.UNCLAIMED_HOST, 404));
+    ReportAssertions.assertEdgeCount(StoryTarget.CATEGORY, DOOR_SLUG, 8);
     ReportAssertions.assertNoEdgesTo(StoryTarget.CATEGORY, DOOR_SLUG, StoryTarget.PROJECTS);
     ReportAssertions.assertNoEdgesTo(StoryTarget.CATEGORY, DOOR_SLUG, StoryTarget.IDP);
     ReportAssertions.assertNotLeaked(StoryTarget.CATEGORY, DOOR_SLUG, StoryTarget.DOOR_SESSION);
@@ -664,6 +703,8 @@ public class ForwardAuthBootstrapIT {
     ReportAssertions.assertStepId(
         StoryTarget.CATEGORY, DOOR_SLUG, "health-is-never-gated-and-never-proxied");
     ReportAssertions.assertStepId(
-        StoryTarget.CATEGORY, DOOR_SLUG, "health-answers-whatever-name-was-used");
+        StoryTarget.CATEGORY,
+        DOOR_SLUG,
+        "an-applications-name-never-answers-with-the-edges-health");
   }
 }
