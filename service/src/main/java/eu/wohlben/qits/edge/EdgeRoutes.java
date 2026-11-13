@@ -3,6 +3,7 @@ package eu.wohlben.qits.edge;
 import io.agroal.api.AgroalDataSource;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.runtime.StartupEvent;
+import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The edge's persisted projection of successful deployments: where an environment's paths go, which
@@ -77,10 +79,67 @@ public class EdgeRoutes {
   @DataSource("edge")
   AgroalDataSource dataSource;
 
+  /** Whose class a write is fenced against: this process's, as configured. */
+  @Inject EdgeConfig config;
+
   private volatile View view = View.empty();
+
+  /**
+   * The stored class the last fenced write was refused under, so the WARN is said once per class.
+   */
+  private final AtomicReference<String> fencedUnder = new AtomicReference<>();
 
   void load(@Observes StartupEvent ignored) {
     view = readAll();
+  }
+
+  /**
+   * Re-reads the serving copy from PostgreSQL, whoever wrote it (qits-2120).
+   *
+   * <p>The view is otherwise refreshed only by THIS process's own writes. Two edge tasks overlap on
+   * every update — swarm starts the new one first and gives the old one a 10 m stop grace — and
+   * they share the projection database and the durable consumer's claim ledger, so a frame the
+   * other task claimed lands in the database and never in this view. The bootstrap calls this at
+   * the head; the {@link #refreshIfChanged} tick covers frames the other task claims after it.
+   */
+  public void reload() {
+    view = readAll();
+  }
+
+  /**
+   * The tick that converges the serving copy on the database when another process wrote it: cheap
+   * when nothing changed (one aggregate over the snapshot rows), a full {@link #reload} when it
+   * did.
+   */
+  @Scheduled(every = "15s", concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
+  void refreshIfChanged() {
+    try (Connection connection = dataSource.getConnection()) {
+      String stored = fingerprint(connection);
+      if (!stored.equals(view.fingerprint())) {
+        view = readAll(connection);
+      }
+    } catch (SQLException | RuntimeException failure) {
+      LOG.debugf("edge routing projection refresh skipped: %s", failure.getMessage());
+    }
+  }
+
+  /**
+   * A write refused because the projection was rebuilt under another class than this process's
+   * (qits-2120). It is not an {@link IllegalArgumentException}, so the subscriber does not settle
+   * it as poison: it propagates, the durable claim rolls back with it, and the frame stays owed to
+   * the process whose class the projection IS — the one that rebuilt it.
+   */
+  public static final class ProjectionFenced extends IllegalStateException {
+
+    ProjectionFenced(String message) {
+      super(message);
+    }
+
+    /** No stack: the durable funnel logs every refused attempt, and the message is the story. */
+    @Override
+    public synchronized Throwable fillInStackTrace() {
+      return this;
+    }
   }
 
   /**
@@ -126,14 +185,19 @@ public class EdgeRoutes {
     try (Connection connection = dataSource.getConnection()) {
       for (String statement :
           List.of(
+              // First, and in the same order every fenced write takes it: a write already holding
+              // its share lock commits before the truncate (and is truncated with the rest), and a
+              // write that comes after it reads the new class and is fenced.
+              "lock table edge_projection_class in exclusive mode",
               "delete from edge_navigation_entry",
               "delete from edge_endpoint",
               "delete from edge_deployment_snapshot",
               "delete from edge_projection_class")) {
         try (PreparedStatement delete = connection.prepareStatement(statement)) {
-          delete.executeUpdate();
+          delete.execute();
         }
       }
+      fencedUnder.set(null);
       try (PreparedStatement insert =
           connection.prepareStatement("insert into edge_projection_class (exposure) values (?)")) {
         insert.setString(1, exposure.name().toLowerCase(Locale.ROOT));
@@ -313,11 +377,12 @@ public class EdgeRoutes {
       Map<String, Map<String, String>> apiDocsPaths,
       Map<String, List<NavigationPlacement>> navigation,
       Set<String> landings,
-      Map<String, Map<String, Withdrawn>> withdrawn) {
+      Map<String, Map<String, Withdrawn>> withdrawn,
+      String fingerprint) {
 
     static View empty() {
       return new View(
-          Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Set.of(), Map.of());
+          Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Map.of(), Set.of(), Map.of(), null);
     }
   }
 
@@ -485,11 +550,42 @@ public class EdgeRoutes {
       String eventId,
       Instant occurredAt,
       Snapshot snapshot) {
+    return replace(
+        config.exposure(), environment, application, eventId, occurredAt, snapshot, null);
+  }
+
+  /**
+   * {@link #replace(String, String, String, Instant, Snapshot)} by a writer of class {@code
+   * writer}, recording the frame's declared {@code exposure} on the snapshot row.
+   *
+   * <p><b>Fenced on the stored class</b> (qits-2120). In the same transaction, under a share lock
+   * on {@code edge_projection_class} that {@link #resetProjection} takes exclusively, the write
+   * reads the class the projection was last rebuilt under; when one is recorded and it is not
+   * {@code writer}'s, nothing is written and {@link ProjectionFenced} is thrown. That is the old
+   * task of a class change: it runs beside the new one for up to the stop grace, on the same
+   * database and the same durable consumer, and the new task's epoch reset makes it replay too.
+   *
+   * @param exposure the frame's declared exposure, {@code public}, {@code private} or {@code both};
+   *     null only from a caller that has no frame, and such a row is rebuilt at the next boot — see
+   *     {@link #outsideClass}
+   * @throws ProjectionFenced when the projection belongs to another class than {@code writer}
+   */
+  @Transactional(Transactional.TxType.REQUIRES_NEW)
+  public boolean replace(
+      ExposureClass writer,
+      String environment,
+      String application,
+      String eventId,
+      Instant occurredAt,
+      Snapshot snapshot,
+      String exposure) {
     if (eventId == null || eventId.isBlank() || occurredAt == null) {
       throw new IllegalArgumentException("A DeploymentActive frame needs an id and occurredAt.");
     }
     validateSnapshot(environment, application, snapshot);
+    String declared = exposure == null ? null : ExposureClass.declared(exposure);
     try (Connection connection = dataSource.getConnection()) {
+      fence(connection, writer, eventId);
       if (!newer(connection, environment, application, eventId, occurredAt)) {
         return false;
       }
@@ -504,7 +600,7 @@ public class EdgeRoutes {
       }
       try (PreparedStatement insert =
           connection.prepareStatement(
-              "insert into edge_deployment_snapshot (environment_name, application_name, event_id, occurred_at, browser_host, api_docs_path, withdrawn_exposure, withdrawn_host) values (?, ?, ?, ?, ?, ?, ?, ?)")) {
+              "insert into edge_deployment_snapshot (environment_name, application_name, event_id, occurred_at, browser_host, api_docs_path, withdrawn_exposure, withdrawn_host, exposure) values (?, ?, ?, ?, ?, ?, ?, ?, ?)")) {
         insert.setString(1, environment);
         insert.setString(2, application);
         insert.setString(3, eventId);
@@ -513,6 +609,7 @@ public class EdgeRoutes {
         insert.setString(6, snapshot.apiDocsPath());
         insert.setString(7, snapshot.withdrawn() == null ? null : snapshot.withdrawn().exposure());
         insert.setString(8, snapshot.withdrawn() == null ? null : snapshot.withdrawn().host());
+        insert.setString(9, declared);
         insert.executeUpdate();
       }
       int ordinal = 0;
@@ -654,6 +751,116 @@ public class EdgeRoutes {
     }
   }
 
+  /**
+   * Refuses the write when the projection was rebuilt under another class than {@code writer}'s —
+   * see {@link #replace(ExposureClass, String, String, String, Instant, Snapshot, String)}. No
+   * recorded class fences nothing: the boot's reconcile truncates such a projection anyway.
+   */
+  private void fence(Connection connection, ExposureClass writer, String eventId)
+      throws SQLException {
+    if (writer == null) {
+      throw new IllegalStateException("A projection write needs the writer's exposure class.");
+    }
+    try (PreparedStatement lock =
+        connection.prepareStatement("lock table edge_projection_class in share mode")) {
+      lock.execute();
+    }
+    String stored;
+    try (PreparedStatement read =
+            connection.prepareStatement("select exposure from edge_projection_class");
+        ResultSet result = read.executeQuery()) {
+      stored = result.next() ? result.getString(1) : null;
+    }
+    String mine = writer.name().toLowerCase(Locale.ROOT);
+    if (stored == null || stored.equals(mine)) {
+      fencedUnder.set(null);
+      return;
+    }
+    String message =
+        "edge projection is class "
+            + stored
+            + ", this edge is "
+            + mine
+            + ": not writing DeploymentActive "
+            + eventId;
+    if (!stored.equals(fencedUnder.getAndSet(stored))) {
+      LOG.warnf(
+          "%s (the projection was rebuilt by an edge of class %s; this one leaves every frame owed"
+              + " to it until it stops)",
+          message, stored);
+    } else {
+      LOG.debug(message);
+    }
+    throw new ProjectionFenced(message);
+  }
+
+  /**
+   * Why the KEPT projection cannot be trusted under {@code exposure}, or null when it can
+   * (qits-2120) — what {@code DeploymentProjectionBootstrap} asks when the stored class is
+   * unchanged, and rebuilds on:
+   *
+   * <ul>
+   *   <li>an active snapshot that routes something and whose recorded exposure this class does not
+   *       keep — a private app on a public edge, written by an old task of another class;
+   *   <li>an active snapshot that routes something and records no exposure at all — every row
+   *       written before V12, which cannot be judged, so the first boot on V12 rebuilds once;
+   *   <li>a withdrawal whose exposure this class DOES keep — the same pollution the other way
+   *       round.
+   * </ul>
+   */
+  public String outsideClass(ExposureClass exposure) {
+    try (Connection connection = dataSource.getConnection();
+        PreparedStatement read =
+            connection.prepareStatement(
+                "select s.environment_name, s.application_name, s.exposure, s.withdrawn_exposure,"
+                    + " exists (select 1 from edge_endpoint e where e.environment_name ="
+                    + " s.environment_name and e.application_name = s.application_name)"
+                    + " from edge_deployment_snapshot s order by 1, 2");
+        ResultSet result = read.executeQuery()) {
+      while (result.next()) {
+        String where = result.getString(2) + " in " + result.getString(1);
+        String recorded = result.getString(3);
+        String withdrawn = result.getString(4);
+        boolean routes = result.getBoolean(5);
+        if (withdrawn != null) {
+          if (keeps(exposure, withdrawn)) {
+            return "kept projection withdrew "
+                + where
+                + ", exposure "
+                + withdrawn
+                + ", which the class keeps";
+          }
+          continue;
+        }
+        if (!routes) {
+          continue;
+        }
+        if (recorded == null) {
+          return "kept projection routes " + where + " with no recorded exposure";
+        }
+        if (!keeps(exposure, recorded)) {
+          return "kept projection routes "
+              + where
+              + ", exposure "
+              + recorded
+              + ", outside the class";
+        }
+      }
+      return null;
+    } catch (SQLException failure) {
+      throw new IllegalStateException("could not read the edge routing projection", failure);
+    }
+  }
+
+  /** {@link ExposureClass#keeps}, with a value it cannot read counted as kept by nobody. */
+  private static boolean keeps(ExposureClass exposure, String declared) {
+    try {
+      return exposure.keeps(declared);
+    } catch (IllegalArgumentException unreadable) {
+      return false;
+    }
+  }
+
   private static boolean newer(
       Connection connection,
       String environment,
@@ -778,6 +985,7 @@ public class EdgeRoutes {
   }
 
   private static View readAll(Connection connection) throws SQLException {
+    String fingerprint = fingerprint(connection);
     Map<String, List<EdgeEndpoint>> routes = new LinkedHashMap<>();
     Map<String, Map<String, Read>> applications = new LinkedHashMap<>();
     try (PreparedStatement query =
@@ -906,7 +1114,25 @@ public class EdgeRoutes {
         immutablePaths(apiDocsPaths),
         immutable(navigation),
         Set.copyOf(landings),
-        immutableWithdrawn(withdrawn));
+        immutableWithdrawn(withdrawn),
+        fingerprint);
+  }
+
+  /**
+   * What the snapshot rows are, in one string: every replace changes its application's event id,
+   * and a reset changes the set, so a view read under another fingerprint is out of date.
+   */
+  private static String fingerprint(Connection connection) throws SQLException {
+    try (PreparedStatement query =
+            connection.prepareStatement(
+                "select count(*) || ':' || coalesce(md5(string_agg(environment_name || '/' ||"
+                    + " application_name || '/' || event_id || '/' || coalesce(browser_host, ''),"
+                    + " ',' order by environment_name, application_name)), '') from"
+                    + " edge_deployment_snapshot");
+        ResultSet result = query.executeQuery()) {
+      result.next();
+      return result.getString(1);
+    }
   }
 
   private static Map<String, Map<String, Withdrawn>> immutableWithdrawn(

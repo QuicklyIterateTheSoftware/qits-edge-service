@@ -92,6 +92,10 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
    * the frame-time ordering still holds: a later frame back inside the class restores it. The one
    * thing it keeps is {@link EdgeRoutes.Withdrawn}: the host it declared and its exposure, which
    * route nothing and which only the navigation reads (qits-2061).
+   *
+   * <p><b>A write the projection fences is not settled</b> (qits-2120): {@link
+   * EdgeRoutes.ProjectionFenced} is no poison, so it propagates, the durable claim rolls back with
+   * it, and the frame stays owed to the edge whose class the projection was rebuilt under.
    */
   @Override
   public void onFrame(EventFrame frame) {
@@ -133,7 +137,13 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
                 navigation(active));
         boolean replaced =
             routes.replace(
-                environment, active.applicationName(), frame.id(), frame.occurredAt(), snapshot);
+                config.exposure(),
+                environment,
+                active.applicationName(),
+                frame.id(),
+                frame.occurredAt(),
+                snapshot,
+                ExposureClass.declared(active.exposure()));
         if (replaced) {
           LOG.infof(
               "activated %d direct routes for %s in %s from DeploymentActive %s%s",
@@ -156,12 +166,14 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
   private void withdraw(EventFrame frame, DeploymentActivePayload active, String environment) {
     boolean replaced =
         routes.replace(
+            config.exposure(),
             environment,
             active.applicationName(),
             frame.id(),
             frame.occurredAt(),
             EdgeRoutes.Snapshot.withdrawal(
-                withdrawnHost(frame, active, environment), active.exposure()));
+                withdrawnHost(frame, active, environment), active.exposure()),
+            ExposureClass.declared(active.exposure()));
     if (replaced) {
       LOG.infof(
           "withdrew %s in %s from DeploymentActive %s: its exposure is %s, outside this %s edge's"

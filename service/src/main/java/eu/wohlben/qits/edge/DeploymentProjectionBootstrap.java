@@ -178,6 +178,10 @@ public class DeploymentProjectionBootstrap {
     CatchupResult result = catchup.rebuildFromEpoch(DeploymentActiveSubscriber.CONSUMER_ID);
     while (!authoritative()) {
       if (result.reachedLogHead()) {
+        // The serving copy is refreshed by this process's own writes only, and a task of the same
+        // class running beside this one (start-first) shares the durable consumer: the frames it
+        // claimed are in the database and not in this view. Read the database whole at the head.
+        routes.reload();
         state.set(State.READY);
         LOG.infof(
             "deployment routing projection caught up to qits-events (%d frame(s) handled)",
@@ -196,25 +200,31 @@ public class DeploymentProjectionBootstrap {
 
   /**
    * Truncates the projection when it was built under another class than this edge's, or under none
-   * recorded, and records this one — so the replay that follows rebuilds every snapshot under the
-   * current class. An unchanged class keeps the projection as it is, and only such a projection is
-   * served during the catch-up ({@link #routable()}).
+   * recorded, or when under this same class it holds a snapshot the class would not have written
+   * ({@link EdgeRoutes#outsideClass}), and records this one — so the replay that follows rebuilds
+   * every snapshot under the current class. An unchanged class keeps the projection as it is, and
+   * only such a projection is served during the catch-up ({@link #routable()}).
    */
   private void reconcileClass() {
     ExposureClass exposure = exposure();
     String current = exposure.name().toLowerCase(Locale.ROOT);
     String stored = routes.projectionClass();
-    if (current.equals(stored)) {
+    String outside = current.equals(stored) ? routes.outsideClass(exposure) : null;
+    if (current.equals(stored) && outside == null) {
       // Kept, and served during the catch-up only when it routes something: an empty projection
       // (a first boot, a database wiped of its rows) has nothing to serve, and the replay filling
       // it is no complete view either — it waits for the head as before.
       snapshotKept = routes.storesRoutes();
       return;
     }
+    // An unchanged class whose kept projection holds a snapshot the class would not have written —
+    // an old task of another class wrote it beside a class change, before the write fence existed,
+    // or a row from before V12 records no exposure — is rebuilt exactly like a class change.
     snapshotKept = false;
     routes.resetProjection(exposure);
     LOG.infof(
-        "edge projection rebuilt: class %s -> %s", stored == null ? "<none>" : stored, current);
+        "edge projection rebuilt: class %s -> %s%s",
+        stored == null ? "<none>" : stored, current, outside == null ? "" : " (" + outside + ")");
   }
 
   private ExposureClass exposure() {

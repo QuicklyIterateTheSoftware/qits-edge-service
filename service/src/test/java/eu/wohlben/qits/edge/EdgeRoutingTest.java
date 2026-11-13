@@ -115,6 +115,7 @@ class EdgeRoutingTest {
   @BeforeEach
   void publishEnvironmentFixture() throws Exception {
     clearProjection();
+    storeProjectionClass(edgeConfig.exposure());
     publishProject();
     for (String environment : List.of("dev", "prod")) {
       routes.replace(
@@ -1930,6 +1931,219 @@ class EdgeRoutingTest {
     assertNotNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
   }
 
+  // --- a class change beside the old task: fence, self-heal, the serving copy (qits-2120) --------
+
+  @Test
+  void underAllAPrivateAppsHostIsProxiedEvenWhileAnOldPublicTaskReplaysBesideIt() throws Exception {
+    Instant at = Instant.now();
+    List<eu.wohlben.qits.eventstream.control.EventFrame> log = List.of(exposedCi("private", at));
+    try {
+      bootUnder(ExposureClass.PUBLIC, log);
+      EdgeClient.Answer refused = client().get("ci.dev.acme.example.com", "/ci/api/runs", token());
+      assertEquals(404, refused.status());
+      assertTrue(refused.body().contains("is not an application this edge routes"), refused.body());
+
+      // The break-glass task boots and rebuilds; the old public task is still running beside it and
+      // replays too, because the rebuild reset the durable consumer they share. Its writes are
+      // fenced and thrown — so its claim rolls back and the frame stays owed to the new task.
+      DeploymentActiveSubscriber oldTask = subscriberOf(ExposureClass.PUBLIC);
+      bootUnder(ExposureClass.ALL, log);
+      eu.wohlben.qits.eventstream.control.EventFrame later = exposedCi("private", at.plusMillis(1));
+      assertThrows(EdgeRoutes.ProjectionFenced.class, () -> oldTask.onFrame(log.get(0)));
+      assertThrows(EdgeRoutes.ProjectionFenced.class, () -> oldTask.onFrame(later));
+      subscriberOf(ExposureClass.ALL).onFrame(later);
+
+      EdgeClient.Answer routed = client().get("ci.dev.acme.example.com", "/ci/api/runs", token());
+      assertEquals(200, routed.status(), routed.body());
+      assertEquals("mirror-dev", routed.line("upstream"));
+      assertEquals("/ci/api/runs", routed.line("uri"));
+    } finally {
+      bootUnder(ExposureClass.PUBLIC, List.of());
+    }
+  }
+
+  @Test
+  void anEdgeOfAnotherClassThanTheStoredOneDoesNotWriteAndWarnsOnce() throws Exception {
+    List<java.util.logging.LogRecord> warnings = new java.util.ArrayList<>();
+    java.util.logging.Handler capture = capturing(java.util.logging.Level.WARNING, warnings);
+    java.util.logging.Logger logger =
+        java.util.logging.Logger.getLogger(EdgeRoutes.class.getName());
+    logger.addHandler(capture);
+    try {
+      bootUnder(ExposureClass.ALL, List.of());
+      DeploymentActiveSubscriber publicTask = subscriberOf(ExposureClass.PUBLIC);
+      Instant at = Instant.now();
+      eu.wohlben.qits.eventstream.control.EventFrame first = exposedCi("public", at);
+      assertThrows(EdgeRoutes.ProjectionFenced.class, () -> publicTask.onFrame(first));
+      assertThrows(
+          EdgeRoutes.ProjectionFenced.class,
+          () -> publicTask.onFrame(exposedCi("public", at.plusMillis(1))));
+      assertNull(routes.serviceHost("dev", "ci"), "the fenced frame wrote nothing");
+      assertEquals("all", routes.projectionClass());
+
+      List<String> fenced =
+          formatted(warnings).stream()
+              .filter(message -> message.contains("edge projection is class all"))
+              .toList();
+      assertEquals(1, fenced.size(), "said once, not per frame: " + fenced);
+      assertTrue(
+          fenced
+              .get(0)
+              .contains(
+                  "edge projection is class all, this edge is public: not writing DeploymentActive "
+                      + first.id()),
+          fenced.get(0));
+
+      // The edge of the stored class writes as ever.
+      subscriberOf(ExposureClass.ALL).onFrame(exposedCi("public", at.plusMillis(2)));
+      assertNotNull(routes.serviceHost("dev", "ci"));
+    } finally {
+      logger.removeHandler(capture);
+      bootUnder(ExposureClass.PUBLIC, List.of());
+    }
+  }
+
+  @Test
+  void aKeptProjectionRoutingAPrivateAppOnAPublicEdgeIsRebuiltAtBootAndACleanOneIsNot()
+      throws Exception {
+    List<java.util.logging.LogRecord> infos = new java.util.ArrayList<>();
+    java.util.logging.Handler capture = capturing(java.util.logging.Level.INFO, infos);
+    java.util.logging.Logger logger =
+        java.util.logging.Logger.getLogger(DeploymentProjectionBootstrap.class.getName());
+    logger.addHandler(capture);
+    try {
+      Instant at = Instant.now();
+      List<eu.wohlben.qits.eventstream.control.EventFrame> log = List.of(exposedCi("private", at));
+      bootUnder(ExposureClass.ALL, log);
+      bootUnder(ExposureClass.PUBLIC, log);
+      assertNull(routes.serviceHost("dev", "ci"));
+
+      // The drill's step 3: after the public task truncated, the old ALL task — without the fence —
+      // wrote the private frame back. The class is unchanged, so only the kept projection can say.
+      routes.replace(
+          ExposureClass.PUBLIC,
+          "dev",
+          "qits-ci",
+          "old-all-task",
+          at.plusMillis(1),
+          new EdgeRoutes.Snapshot(
+              List.of(
+                  new EdgeEndpoint(
+                      "dev", "qits-ci", "/ci", upstream("qits.edge.apps.mirror.hosts.dev"))),
+              "ci",
+              List.of()),
+          "private");
+      assertNotNull(routes.serviceHost("dev", "ci"), "the polluted projection routes it");
+
+      infos.clear();
+      bootUnder(ExposureClass.PUBLIC, log);
+      assertNull(routes.serviceHost("dev", "ci"), "rebuilt, the private app is withdrawn again");
+      assertEquals(
+          new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
+      assertEquals(404, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
+      assertTrue(
+          formatted(infos)
+              .contains(
+                  "edge projection rebuilt: class public -> public (kept projection routes qits-ci"
+                      + " in dev, exposure private, outside the class)"),
+          formatted(infos).toString());
+
+      // Clean and unchanged: kept as it is, nothing rebuilt.
+      infos.clear();
+      bootUnder(ExposureClass.PUBLIC, List.of());
+      assertEquals(
+          new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
+      assertTrue(
+          formatted(infos).stream().noneMatch(message -> message.contains("rebuilt")),
+          formatted(infos).toString());
+
+      // A row from before V12 records no exposure and cannot be judged: rebuilt once.
+      routes.replace(
+          "dev",
+          "qits-ci",
+          "pre-v12",
+          at.plusMillis(2),
+          EdgeRoutes.Snapshot.ofEndpoints(
+              List.of(
+                  new EdgeEndpoint(
+                      "dev", "qits-ci", "/ci", upstream("qits.edge.apps.mirror.hosts.dev")))));
+      infos.clear();
+      bootUnder(ExposureClass.PUBLIC, log);
+      assertTrue(
+          formatted(infos)
+              .contains(
+                  "edge projection rebuilt: class public -> public (kept projection routes qits-ci"
+                      + " in dev with no recorded exposure)"),
+          formatted(infos).toString());
+      assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
+    } finally {
+      logger.removeHandler(capture);
+    }
+  }
+
+  @Test
+  void theServingCopyFollowsWhatAnotherProcessWroteToTheDatabase() throws Exception {
+    deployments.onFrame(exposedCi("public", Instant.now()));
+    assertNotNull(routes.serviceHost("dev", "ci"));
+
+    // Another edge task on the same database withdrew it; this process's view did not see it.
+    try (java.sql.Connection connection = edgeDataSource.getConnection();
+        java.sql.PreparedStatement navigation =
+            connection.prepareStatement(
+                "delete from edge_navigation_entry where application_name = 'qits-ci'");
+        java.sql.PreparedStatement endpoints =
+            connection.prepareStatement(
+                "delete from edge_endpoint where application_name = 'qits-ci'");
+        java.sql.PreparedStatement snapshot =
+            connection.prepareStatement(
+                "update edge_deployment_snapshot set event_id = 'other-task', browser_host = null"
+                    + " where application_name = 'qits-ci'")) {
+      navigation.executeUpdate();
+      endpoints.executeUpdate();
+      snapshot.executeUpdate();
+    }
+    // (Not asserted stale here: the 15 s tick may already have run.)
+    routes.refreshIfChanged();
+    assertNull(routes.serviceHost("dev", "ci"));
+  }
+
+  /** A subscriber of {@code exposure} on this suite's projection: another edge task, in effect. */
+  private DeploymentActiveSubscriber subscriberOf(ExposureClass exposure) {
+    DeploymentActiveSubscriber subscriber = new DeploymentActiveSubscriber();
+    subscriber.routes = routes;
+    subscriber.config = exposedAs(exposure);
+    return subscriber;
+  }
+
+  private static java.util.logging.Handler capturing(
+      java.util.logging.Level level, List<java.util.logging.LogRecord> into) {
+    return new java.util.logging.Handler() {
+      @Override
+      public void publish(java.util.logging.LogRecord record) {
+        if (record.getLevel().intValue() >= level.intValue()) {
+          into.add(record);
+        }
+      }
+
+      @Override
+      public void flush() {}
+
+      @Override
+      public void close() {}
+    };
+  }
+
+  /** The captured records as the line they log. */
+  private static List<String> formatted(List<java.util.logging.LogRecord> records) {
+    return records.stream()
+        .map(
+            record ->
+                record.getParameters() == null || record.getParameters().length == 0
+                    ? record.getMessage()
+                    : String.format(record.getMessage(), record.getParameters()))
+        .toList();
+  }
+
   // --- the stored snapshot is served while catching up (qits-2160) -------------------------------
 
   @Test
@@ -2303,6 +2517,23 @@ class EdgeRoutingTest {
         false,
         java.util.UUID.randomUUID().toString(),
         Instant.now());
+  }
+
+  /**
+   * The class the projection is recorded as built under, set by hand: this suite's own before each
+   * test, so a test that rebooted under another class and failed half way cannot fence the next.
+   */
+  private void storeProjectionClass(ExposureClass exposure) throws java.sql.SQLException {
+    try (java.sql.Connection connection = edgeDataSource.getConnection();
+        java.sql.PreparedStatement delete =
+            connection.prepareStatement("delete from edge_projection_class");
+        java.sql.PreparedStatement insert =
+            connection.prepareStatement(
+                "insert into edge_projection_class (exposure) values (?)")) {
+      delete.executeUpdate();
+      insert.setString(1, exposure.name().toLowerCase(java.util.Locale.ROOT));
+      insert.executeUpdate();
+    }
   }
 
   private void clearProjection() throws java.sql.SQLException {
