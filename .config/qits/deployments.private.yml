@@ -26,8 +26,10 @@ image: qits-edge
 exposure: private
 
 # Its own databases, never the public edge's: `edge` holds the snapshots this edge keeps (private and
-# both), `eventstream` its claim ledger and watermark — a fresh database rebuilds from the epoch. The
-# idp client is its own too, dev-qits-edge-private.
+# both), `eventstream` its claim ledger and watermark — a fresh database rebuilds from the epoch. Both
+# live on the private Postgres (qits-oci-postgresql-private, on qits-private), because the exposure
+# is private (qits-2175); the public server is out of reach from here. The idp client is its own
+# too, dev-qits-edge-private.
 resources: postgresql:edge:qits_edge_private, postgresql:eventstream:qits_edge_private_eventstream, idp:client
 
 # A COMMAND, not a path, because HTTP listens on port 80 here rather than the image's 8080 (a peer
