@@ -3674,6 +3674,25 @@ class EdgeRoutingTest {
   }
 
   @Test
+  void theManagementSurfaceIsNeverOpenedByTheExemptionOnAReadOpenApp() {
+    // qits-2222: `/q/*` on an app vhost is routed through this same gate rather than answered by
+    // the edge itself, so the anonymous-read exemption would otherwise hand an internet caller
+    // `mirror`'s own Quarkus management routes. It must stay gated even though `mirror`'s ordinary
+    // reads are open.
+    EdgeClient.Answer metrics = client().get("mirror.dev.acme.example.com", "/q/metrics");
+    assertEquals(401, metrics.status());
+    assertNull(metrics.line("upstream"), "the request must never have reached the upstream");
+
+    assertEquals(401, client().get("mirror.dev.acme.example.com", "/q/openapi").status());
+    assertEquals(401, client().get("mirror.dev.acme.example.com", "/q/health/ready").status());
+    assertEquals(401, client().get("mirror.dev.acme.example.com", "/q").status());
+
+    // An ordinary read on the very same vhost still passes with no credential at all.
+    assertEquals(
+        "mirror-dev", client().get("mirror.dev.acme.example.com", "/v2/").line("upstream"));
+  }
+
+  @Test
   void anAppThatWasNotNamedStillRefusesAnAnonymousRead() {
     // Per app label: `registry` is not on the list, so its reads are gated exactly as before.
     assertEquals(401, client().get("registry.dev.acme.example.com", "/v2/").status());
