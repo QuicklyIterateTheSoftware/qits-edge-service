@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import eu.wohlben.qits.edge.HostEnvironments.Reading;
 import eu.wohlben.qits.edge.HostEnvironments.Route;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -149,5 +151,79 @@ class EdgeRouterNamesTest {
     assertTrue(
         EdgeRouter.unreadableBody(Route.unreadable("prod", "acme"), "wohlben.eu")
             .contains("does not have an environment by that name"));
+  }
+
+  // --- a private deployment's name on the public edge (qits-2223)
+  // ---------------------------------
+
+  private static Function<String, Map<String, EdgeRoutes.Withdrawn>> withdrawn(
+      String host, String exposure) {
+    Map<String, EdgeRoutes.Withdrawn> dev =
+        Map.of("qits-mcp", new EdgeRoutes.Withdrawn(host, exposure));
+    return environment -> "dev".equals(environment) ? dev : Map.of();
+  }
+
+  @Test
+  void aPrivateWithdrawalOnThePublicEdgeIsMisdirected() {
+    assertTrue(
+        EdgeRouter.withdrawnToPrivateEdge(
+            new Route("dev", null, "mcp"), ExposureClass.PUBLIC, withdrawn("mcp", "private")));
+    assertTrue(
+        EdgeRouter.withdrawnToPrivateEdge(
+            new Route("dev", null, "MCP"), ExposureClass.PUBLIC, withdrawn("Mcp", "private")),
+        "case-insensitive, as a DNS name is");
+    assertTrue(
+        EdgeRouter.withdrawnToPrivateEdge(
+            new Route("dev", null, "mcp", "acme", Reading.UNKNOWN_APP),
+            ExposureClass.PUBLIC,
+            withdrawn("mcp", "private")),
+        "a project's name the same");
+  }
+
+  @Test
+  void onlyThePublicEdgeAndOnlyAPrivateWithdrawalAreMisdirected() {
+    Route mcp = new Route("dev", null, "mcp");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.PRIVATE, withdrawn("mcp", "private")),
+        "the private edge withdraws public deployments; this rule is not about it");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.ALL, withdrawn("mcp", "private")));
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.PUBLIC, withdrawn("mcp", "public")),
+        "a public withdrawal is what the private edge stores, never a 421 here");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.PUBLIC, withdrawn(null, "private")),
+        "a withdrawal whose host failed the rules names nothing");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(
+            new Route("dev", null, "nosuch"), ExposureClass.PUBLIC, withdrawn("mcp", "private")),
+        "a label nobody publishes or withdraws keeps its 404");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(
+            new Route("prod", null, "mcp"), ExposureClass.PUBLIC, withdrawn("mcp", "private")),
+        "withdrawals are per environment");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(
+            Route.apex("dev"), ExposureClass.PUBLIC, withdrawn("mcp", "private")),
+        "a door is never misdirected");
+  }
+
+  @Test
+  void theMisdirectedAnswerNamesThePrivateEdgeAndLaundersTheLabel() {
+    String body = EdgeRouter.misdirectedBody(new Route("dev", null, "mcp"));
+    assertTrue(body.startsWith("`mcp` is served only by the private edge"), body);
+    assertTrue(body.contains("100.96.0.1"), body);
+    assertTrue(body.endsWith("\n"), body);
+    for (String label : new String[] {"", "<script>alert(1)</script>", "a b", null}) {
+      String laundered = EdgeRouter.misdirectedBody(new Route("dev", null, label));
+      assertTrue(laundered.startsWith("That first label is served only by"), laundered);
+      if (label != null && !label.isEmpty()) {
+        assertFalse(laundered.contains(label), laundered);
+      }
+    }
+    // And the 404 an unknown label gets is untouched by it.
+    assertTrue(
+        EdgeRouter.unknownAppBody(new Route("dev", null, "nosuch"), Set.of("registry"))
+            .startsWith("`nosuch` is not an application this edge routes. Configured: [registry]"));
   }
 }

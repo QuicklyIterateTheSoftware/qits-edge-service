@@ -233,8 +233,9 @@ class EdgeSessionGateTest {
                 .containsKey("session-test-stt"),
             anonymous.body());
       }
-      // The name itself routes nothing, session or not.
-      assertEquals(404, client().get("stt.dev.acme.example.com", "/stt/api", session()).status());
+      // The name itself routes nothing, session or not: it is the private edge's, so a request
+      // that reached this one is misdirected (qits-2223).
+      assertEquals(421, client().get("stt.dev.acme.example.com", "/stt/api", session()).status());
     } finally {
       routes.replace(
           "dev",

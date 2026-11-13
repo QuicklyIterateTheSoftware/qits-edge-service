@@ -287,9 +287,22 @@ built from the snapshots each edge holds.
 records the host the deployment declared — checked by the same rules as a served host, and simply
 dropped when it fails them, so a bad host can never keep an application routed — and its declared
 exposure (`withdrawn_host`, `withdrawn_exposure`; migration V10 resets the projection so the boot's
-replay fills them). Neither is a vhost, a route, a host claim or a certificate SAN: `stt.qits.<domain>`
-on the public edge is a 404 exactly as before, and `EdgeRoutes.applicationHosts` does not list it.
-Only `/main-navigation` reads them, through `EdgeRoutes.withdrawnHosts` — see below.
+replay fills them). Neither is a vhost, a route, a host claim or a certificate SAN, and
+`EdgeRoutes.applicationHosts` does not list it. `/main-navigation` reads them, through
+`EdgeRoutes.withdrawnHosts` — see below — and so does one refusal:
+
+**A private deployment's name on the public edge is `421 Misdirected Request`** (qits-2223), not
+the 404 an unknown label gets. A workspace resolves with the tunnel DNS at `100.96.0.1` first and
+the host resolver second, so while the private edge is down or catching up `mcp.qits.<domain>`
+resolves to the public address and lands here. The name does exist — on the other edge — so the
+answer says so: plain text naming the private edge and `100.96.0.1`, no `Retry-After`, logged at
+INFO, and on HTTP/1.x `Connection: close` with the connection actually closed, so a keep-alive
+client's next request dials and resolves again rather than reusing a socket to the wrong edge
+(RFC 9110 §15.5.20: another connection may succeed). On HTTP/2 the status alone is sent and the
+connection kept — a connection header is malformed there, and the connection carries other
+streams. Only a public edge answers it, and only for a withdrawal whose declared exposure is
+`private`; a label nobody publishes or withdraws keeps the 404. `EdgeRouter.reach`, and so the
+tunnel DNS, is unchanged.
 
 **The platform app labels are public-edge code.** On a private edge `registry`, `mirror`, `githost`
 and `idp` are ordinary unknown names — a 404 unless a private or `both` deployment publishes one —

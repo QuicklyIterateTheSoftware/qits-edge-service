@@ -1940,8 +1940,9 @@ class EdgeRoutingTest {
     try {
       bootUnder(ExposureClass.PUBLIC, log);
       EdgeClient.Answer refused = client().get("ci.dev.acme.example.com", "/ci/api/runs", token());
-      assertEquals(404, refused.status());
-      assertTrue(refused.body().contains("is not an application this edge routes"), refused.body());
+      // qits-2223: a private deployment's name on the public edge is misdirected, not unknown.
+      assertEquals(421, refused.status());
+      assertTrue(refused.body().contains("served only by the private edge"), refused.body());
 
       // The break-glass task boots and rebuilds; the old public task is still running beside it and
       // replays too, because the rebuild reset the durable consumer they share. Its writes are
@@ -2040,7 +2041,7 @@ class EdgeRoutingTest {
       assertNull(routes.serviceHost("dev", "ci"), "rebuilt, the private app is withdrawn again");
       assertEquals(
           new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
-      assertEquals(404, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
+      assertEquals(421, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
       assertTrue(
           formatted(infos)
               .contains(
@@ -2628,14 +2629,24 @@ class EdgeRoutingTest {
     assertNotNull(routes.serviceHost("dev", "ci"));
 
     // Stored, not skipped: the same empty snapshot a retirement is, so the host, the route and the
-    // navigation row all go — and the name is a 404 like any other nobody claims.
+    // navigation row all go. The name is not a 404, though: the withdrawal says the private edge
+    // serves it, so a request that reached this edge was misdirected by its resolver — 421, and the
+    // HTTP/1.1 connection closed so the client's next request resolves again (qits-2223).
     deployments.onFrame(exposedCi("private", at.plusMillis(1)));
     assertNull(routes.serviceHost("dev", "ci"));
     assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
     assertTrue(
         routes.navigation("dev").stream()
             .noneMatch(entry -> "qits-ci".equals(entry.application())));
-    assertEquals(404, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
+    EdgeClient.Answer misdirected =
+        client().get("ci.dev.acme.example.com", "/ci/api/runs", token());
+    assertEquals(421, misdirected.status(), misdirected.body());
+    assertEquals(List.of("close"), misdirected.headerValues("connection"));
+    assertTrue(misdirected.body().startsWith("`ci` is served only by the private edge"));
+    assertTrue(misdirected.body().contains("100.96.0.1"), misdirected.body());
+    assertTrue(misdirected.headerValues("retry-after").isEmpty(), "nothing to wait for here");
+    // A label nobody publishes or withdraws is still the ordinary 404.
+    assertEquals(404, client().get("nosuch.dev.acme.example.com", "/", token()).status());
 
     // Back inside the class, a later frame restores it: the frame-time order still decides.
     deployments.onFrame(exposedCi("both", at.plusMillis(2)));
@@ -2650,14 +2661,14 @@ class EdgeRoutingTest {
     deployments.onFrame(exposedCi("private", at.plusMillis(1)));
 
     // The withdrawal keeps the host for the navigation and nothing that routes: no vhost, no path,
-    // no applicationHosts row — the name is still a 404 to a caller with a good token.
+    // no applicationHosts row — the name is misdirected (421, qits-2223) even with a good token.
     assertEquals(
         new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
     assertNull(routes.serviceHost("dev", "ci"));
     assertNull(routes.applicationHost("dev", "qits-ci"));
     assertFalse(routes.applicationHosts("dev").containsKey("qits-ci"));
     assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
-    assertEquals(404, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
+    assertEquals(421, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
 
     // Anonymous, and with a token the gate refuses: exactly today's document, no private name.
     for (Map<String, String> credential :

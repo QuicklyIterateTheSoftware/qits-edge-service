@@ -12,6 +12,7 @@ import io.vertx.core.http.HttpConnection;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerRequest;
+import io.vertx.core.http.HttpVersion;
 import io.vertx.core.http.RequestOptions;
 import io.vertx.core.net.HostAndPort;
 import io.vertx.core.net.SocketAddress;
@@ -29,6 +30,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -617,6 +619,12 @@ public class EdgeRouter {
       // NOT a fall-through to the gateway. The name is app-shaped, so it was aimed at a service —
       // and no configuration and no deployment claims it. Answering here is the whole point: a
       // mistyped registry vhost must fail, not quietly reach an unauthenticated route.
+      if (withdrawnToPrivateEdge(named, config.exposure(), routes::withdrawnHosts)) {
+        // ...unless the name is a private deployment's, which this edge stores as a withdrawal: the
+        // caller's resolver sent it to the wrong edge, and the name does exist (qits-2223).
+        misdirected(request, named);
+        return;
+      }
       unknownApp(request, named);
       return;
     }
@@ -1554,6 +1562,107 @@ public class EdgeRouter {
    */
   String environment(HttpServerRequest request) {
     return hostEnvironments.route(authority(request), projects.projects()).environment();
+  }
+
+  /**
+   * Whether a name nobody here routes is one a <b>private</b> deployment declared, which this edge
+   * holds as a withdrawal ({@link EdgeRoutes#withdrawnHosts}) — so the request reached the public
+   * edge when it belonged on the private one (qits-2223).
+   *
+   * <p><b>How a request gets here.</b> A workspace resolves with the private edge's tunnel DNS at
+   * {@code 100.96.0.1} first and the host resolver second. While the private edge is down or still
+   * catching up, a lookup of {@code mcp.qits.<domain>} falls through to the public resolver, which
+   * answers the public edge's address — and the public edge, which never routes a withdrawn host,
+   * used to answer {@link #unknownApp}'s 404: a wrong answer, because the name exists on the other
+   * edge, and a terminal one, because a 404 tells a client there is nothing to retry. {@code 421
+   * Misdirected Request} (RFC 9110 §15.5.20) says exactly what happened — this server is not the
+   * one for that authority, another connection may succeed — see {@link #misdirected}.
+   *
+   * <p><b>Only on a {@link ExposureClass#PUBLIC} edge</b>, the one class whose withdrawals are
+   * private deployments'; {@code NavigationRoute} reads them on that class alone for the same
+   * reason. A private edge withdraws {@code public} deployments, and a public name that reaches it
+   * is a resolver answering the tunnel address for a name the private edge does not route — not
+   * this case. {@link ExposureClass#ALL} withdraws nothing. And only a withdrawal whose declared
+   * exposure is {@code private}: a name nobody publishes or withdraws keeps its 404 exactly as
+   * before. Static so it is asserted without a boot — see {@code EdgeRouterNamesTest}.
+   *
+   * @param withdrawn environment to its withdrawals by application — {@link
+   *     EdgeRoutes#withdrawnHosts}
+   */
+  static boolean withdrawnToPrivateEdge(
+      HostEnvironments.Route named,
+      ExposureClass exposure,
+      Function<String, Map<String, EdgeRoutes.Withdrawn>> withdrawn) {
+    if (exposure != ExposureClass.PUBLIC || named.unknownApp() == null) {
+      return false;
+    }
+    Map<String, EdgeRoutes.Withdrawn> absent = withdrawn.apply(named.environment());
+    if (absent == null) {
+      return false;
+    }
+    for (EdgeRoutes.Withdrawn entry : absent.values()) {
+      if (entry != null
+          && entry.host() != null
+          && entry.host().equalsIgnoreCase(named.unknownApp())
+          && "private".equals(entry.exposure())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The answer to {@link #withdrawnToPrivateEdge}: {@code 421}, no {@code Retry-After}, and on
+   * HTTP/1.x the connection closed behind it (qits-2223).
+   *
+   * <p><b>Closed, because the connection is the mistake.</b> A keep-alive client would send its
+   * next request down the same socket to the same wrong edge, however its resolver answers by then;
+   * dropped, it has to dial again and so to resolve again, which is when the tunnel DNS can answer
+   * the private address. Vert.x keeps an HTTP/1.1 connection open whatever header the response
+   * carries — its keep-alive is decided from the request alone — so {@code Connection: close} only
+   * tells the client, and the close after the write is what makes it true.
+   *
+   * <p><b>HTTP/2 gets the status alone.</b> A connection-specific header is malformed there (RFC
+   * 9113 §8.2.2), and the connection carries the client's other streams, possibly to names this
+   * edge does serve, so it is not torn down for one of them. A 421 on HTTP/2 is the signal clients
+   * already act on: retry the request on a fresh connection.
+   */
+  private void misdirected(HttpServerRequest request, HostEnvironments.Route named) {
+    LOG.infof(
+        "a private deployment's name reached the public edge, answered 421: %s %s on %s",
+        request.method(), request.path(), authority(request));
+    boolean http1 =
+        request.version() == HttpVersion.HTTP_1_1 || request.version() == HttpVersion.HTTP_1_0;
+    var response =
+        request
+            .response()
+            .setStatusCode(421)
+            .putHeader(HttpHeaders.CONTENT_TYPE, "text/plain; charset=utf-8");
+    if (http1) {
+      response.putHeader(HttpHeaders.CONNECTION, HttpHeaders.CLOSE);
+    }
+    response
+        .end(misdirectedBody(named))
+        .onComplete(
+            written -> {
+              if (http1) {
+                request.connection().close();
+              }
+            });
+  }
+
+  /**
+   * What a private deployment's name is told on the public edge, with the label laundered exactly
+   * as {@link #unknownAppBody} does — it is the first label of a {@code Host} header.
+   */
+  static String misdirectedBody(HostEnvironments.Route named) {
+    String label = named.unknownApp();
+    return (label != null && HostEnvironments.isLabel(label)
+            ? "`" + label + "`"
+            : "That first label")
+        + " is served only by the private edge, which is reached through the WireGuard tunnel"
+        + " (network access). This request reached the public edge because the resolver answered"
+        + " the public address: retry once the tunnel DNS at 100.96.0.1 answers.\n";
   }
 
   private void unknownApp(HttpServerRequest request, HostEnvironments.Route route) {
