@@ -1339,9 +1339,10 @@ class EdgeSessionGateTest {
   @Test
   void healthIsNeverGated() {
     // An orchestrator has no session and must never need one: a health probe that 302s to a login
-    // page is a container that never comes up.
+    // page is a container that never comes up. It asks on a name that means the edge — localhost,
+    // the apex reading — which is the only name the edge answers /q/* on (qits-2222).
     io.restassured.RestAssured.given()
-        .header("Host", "dev.acme.example.com")
+        .header("Host", "localhost")
         .when()
         .get("/q/health/ready")
         .then()

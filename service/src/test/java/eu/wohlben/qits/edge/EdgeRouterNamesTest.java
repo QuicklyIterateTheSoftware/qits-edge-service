@@ -59,6 +59,66 @@ class EdgeRouterNamesTest {
   }
 
   @Test
+  void onlyTheEdgesOwnNameAnswersItsManagementSurface() {
+    // qits-2222: answered whatever the Host said, an app's /q/health/ready reported the EDGE's
+    // health — a stopped app read healthy while every other path on its name 404ed. The apex
+    // reading is the edge's own name; every other reading routes /q/* like any other path.
+    HostEnvironments names =
+        HostEnvironments.of(
+            java.util.List.of("prod", "dev"), "prod", PlatformApps.labels(), "wohlben.eu");
+    java.util.Map<String, Boolean> projects = java.util.Map.of("qits", false, "acme", true);
+    String ready = "/q/health/ready";
+
+    for (String own :
+        new String[] {
+          null,
+          "",
+          "localhost",
+          "localhost:8080",
+          "dev-qits-edge",
+          "127.0.0.1",
+          "[::1]:443",
+          "wohlben.eu",
+          "WOHLBEN.eu."
+        }) {
+      Route named = names.route(own, projects);
+      assertEquals(Reading.APEX, named.reading(), String.valueOf(own));
+      assertTrue(EdgeRouter.answeredByTheEdge(named, ready, "/q"), String.valueOf(own));
+      assertTrue(EdgeRouter.answeredByTheEdge(named, "/q", "/q"), "the root itself");
+      assertTrue(EdgeRouter.answeredByTheEdge(named, "/q/health/live", "/q"));
+      assertFalse(
+          EdgeRouter.answeredByTheEdge(named, "/queue/items", "/q"),
+          "the prefix is a path segment, not a substring");
+      assertFalse(EdgeRouter.answeredByTheEdge(named, "/", "/q"), "only the management root");
+    }
+    assertTrue(
+        EdgeRouter.answeredByTheEdge(names.route("localhost", projects), "/mgmt/health", "/mgmt"),
+        "the configured root, not a literal /q");
+    assertFalse(
+        EdgeRouter.answeredByTheEdge(names.route("localhost", projects), ready, "/mgmt"),
+        "under another root /q is an ordinary path");
+
+    for (String other :
+        new String[] {
+          "orchestrator.qits.wohlben.eu", // a platform app
+          "idp.qits.wohlben.eu", // the one served before the catch-up
+          "ci.dev.acme.wohlben.eu", // a published app
+          "nosuchapp.dev.acme.wohlben.eu", // an app-shaped name nothing routes
+          "acme.wohlben.eu", // a project door
+          "dev.acme.wohlben.eu", // an environment door
+          "qits.wohlben.eu", // the platform project's door
+          "idp.nosuchproject.wohlben.eu", // an unknown project
+          "a.b.c.d.wohlben.eu", // unreadable
+          "example.org" // outside the domain
+        }) {
+      Route named = names.route(other, projects);
+      assertFalse(
+          EdgeRouter.answeredByTheEdge(named, ready, "/q"),
+          other + " reads " + named.reading() + " and must never report the edge's health");
+    }
+  }
+
+  @Test
   void onlyACredentialOnIdpsOwnRoutePassesThroughUnchecked() {
     io.vertx.core.MultiMap credential =
         io.vertx.core.MultiMap.caseInsensitiveMultiMap().add("authorization", "Basic eDp5");

@@ -15,16 +15,21 @@ application: qits-edge-private
 # uid 1001.
 image: qits-edge
 
-# BOTH NETWORKS. qits-net for egress only — its PostgreSQL, qits-events, idp's internal alias — and
-# qits-private to reach private upstreams. Being on qits-net gives nothing there a way in: the
-# listener closes every connection whose local address is outside 100.96.0.0/24 (wg0) and
-# 10.231.0.0/20 (qits-private), loopback aside. No `host:` and no routes, so neither edge serves a
-# vhost for this application itself.
-exposure: both
+# QITS-PRIVATE ALONE (owner rule, epic qits-2174): nothing private and nothing a private service
+# uses sits on qits-net. qits-private is an attachable overlay without --internal, so egress still
+# works through docker_gwbridge; idp, qits-events and observability are dialled by their public
+# names rather than the internal alias (see PrivateVariantConfigSource). Its databases live on the
+# private Postgres, qits-oci-postgresql-private, moved there by qits-deployments when the exposure
+# changed (qits-2175). The listener still closes every connection whose local address is outside
+# 100.96.0.0/24 (wg0) and 10.231.0.0/20 (qits-private), loopback aside. No `host:` and no routes, so
+# neither edge serves a vhost for this application itself.
+exposure: private
 
 # Its own databases, never the public edge's: `edge` holds the snapshots this edge keeps (private and
-# both), `eventstream` its claim ledger and watermark — a fresh database rebuilds from the epoch. The
-# idp client is its own too, dev-qits-edge-private.
+# both), `eventstream` its claim ledger and watermark — a fresh database rebuilds from the epoch. Both
+# live on the private Postgres (qits-oci-postgresql-private, on qits-private), because the exposure
+# is private (qits-2175); the public server is out of reach from here. The idp client is its own
+# too, dev-qits-edge-private.
 resources: postgresql:edge:qits_edge_private, postgresql:eventstream:qits_edge_private_eventstream, idp:client
 
 # A COMMAND, not a path, because HTTP listens on port 80 here rather than the image's 8080 (a peer

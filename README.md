@@ -69,7 +69,8 @@ catching up` once when it starts.
 
 A stored snapshot is served only when it is worth serving: the class reconcile at boot kept it (see
 the exposure class below — a reset truncates it), and it routes at least one endpoint. A first
-boot, a wiped database or a class reset therefore still answers every non-`/q` request, and
+boot, a wiped database or a class reset therefore still answers every request but the edge's own
+`/q` (on its own names — see below), and
 `/main-navigation`, with a retryable `503 Retry-After: 1` until the head — **except a platform app
 label's** (`PlatformApps`: `registry`, `mirror`, `githost`, `idp`), which is served from code
 throughout, exactly as if nothing had been published (qits-1403). The persisted snapshot is not
@@ -256,7 +257,10 @@ What the door answers is:
 - `GET /` (and `HEAD /`) — `302` to qits-projects' host once the projection names one: the `system`
   placement qits-projects publishes, or a host called `projects`. An anonymous visitor lands on the
   login through the host that owns it. `404` while no such host is known;
-- `/q`, `/main-navigation` and `/upstream-pools` — the edge's own surfaces;
+- `/main-navigation` and `/upstream-pools` — the edge's own surfaces. `/q` is NOT one of them on a
+  door (qits-2222): the edge answers it only on its own names — no `Host`, an address, a single
+  label such as `localhost` or the wire alias, the bare domain — so a door answers it `404` like
+  any other path;
 - everything else — `404` in plain text, naming `<app>.<authority>`, logged at INFO so anything
   still dialling the door can be found.
 
@@ -307,7 +311,8 @@ tunnel DNS, is unchanged.
 **The platform app labels are public-edge code.** On a private edge `registry`, `mirror`, `githost`
 and `idp` are ordinary unknown names — a 404 unless a private or `both` deployment publishes one —
 and the qits-1403 exception that answers them before the catch-up does not apply: the private edge
-dials qits-events and idp on their internal aliases and never waits for itself.
+is off `qits-net` (qits-2174) and dials qits-events and idp by their PUBLIC names, over the apex the
+public edge routes, and never waits for itself.
 
 **The listener allow-list.** `qits.edge.listen.allowed-local-cidrs` lists the LOCAL addresses a
 connection may arrive on — the interface it reached, not the caller. Empty, the default, accepts
@@ -318,8 +323,8 @@ the earliest hook there is: the TLS handshake and the request head have been rea
 `127.0.0.0/8` and `::1` are always admitted, because the deployer's health check is `curl
 http://localhost…` inside the container, and an IPv4-mapped address (`::ffff:100.96.0.2`) is read
 as its IPv4 address. A refusal is logged at DEBUG. The private edge states
-`100.96.0.0/24,10.231.0.0/20` — the tunnel and the `qits-private` overlay — which is what keeps a
-public service on `qits-net`, where the private edge only dials out, from walking in.
+`100.96.0.0/24,10.231.0.0/20` — the tunnel and the `qits-private` overlay, the only two networks this
+edge sits on (qits-2174) — which is what keeps anything else from walking in.
 
 **The peer log.** On a private edge every request this process answers or proxies writes one INFO
 line on the logger `eu.wohlben.qits.edge.peer`:
@@ -340,10 +345,18 @@ without checking.
 
 `qits-edge-private` is a second application from this same image and release:
 `.config/qits/deployments.yml` says `variants: private`, and `.config/qits/deployments.private.yml`
-declares it — `exposure: both`, its own databases, `cap_add: NET_ADMIN`, `publish_mode: host`
+declares it — `exposure: private`, its own databases, `cap_add: NET_ADMIN`, `publish_mode: host`
 (`update_order: stop-first`, because a host-mode port has one binder), `47812:47812/udp` published
 and nothing else, its own `private:wireguard` volume and the public edge's
 `qits-edge-letsencrypt` read-only.
+
+**`qits-private` alone, not `qits-net` too** (owner ruling, epic qits-2174): nothing private and
+nothing a private service uses sits on `qits-net`. `qits-private` is an attachable overlay without
+`--internal`, so egress still works through `docker_gwbridge`; idp, qits-events and
+qits-observability are dialled by their PUBLIC names rather than the internal `<env>-qits-<app>:8080`
+alias (see `PrivateVariantConfigSource` below), and this application's own databases live on the
+private Postgres, `qits-oci-postgresql-private`, moved there by qits-deployments when the exposure
+changed (qits-2175).
 
 **No settings: `QITS_VARIANT=private` is the whole configuration.** qits-deployments puts that
 variable in a variant's container and in nothing else, and `PrivateVariantConfigSource` — a
@@ -362,6 +375,9 @@ Without the variable it is empty and the edge is the public one, unchanged.
 | `qits.edge.dns.overlay-cidr` | `10.231.0.0/20` — the tunnel DNS responder answers on `qits-private` too |
 | `qits.edge.listen.allowed-local-cidrs` | `100.96.0.0/24,10.231.0.0/20` |
 | `qits.edge.acme.enabled` | `false` — it orders nothing, it serves the public edge's certificate |
+| `qits.edge.idp.dial-url` | `https://idp.qits.<domain>/idp` — idp's public name; this edge is off `qits-net` |
+| `qits.events.url` | `https://events.qits.<domain>` — qits-events' public name, same reason |
+| `qits.observability.url` | `https://observability.qits.<domain>` — qits-observability's public name, same reason |
 | `quarkus.http.port` / `quarkus.http.ssl-port` | `80` / `443` — a peer dials `https://<app>.qits.<domain>` with no port |
 | `quarkus.tls.key-store.pem.acme.cert` / `.key` | `/work/.letsencrypt/current/lets-encrypt.crt` / `.key` |
 | `quarkus.tls.reload-period` | `1m` — follows the public edge's renewals |
@@ -527,7 +543,8 @@ On the platform host, as a user with the docker socket. The service name is `<en
   after the strip is attribution: `X-Qits-Caller` for a platform page, and a `qits:system` bearer's
   own `X-Qits-Causation-Id`, `X-Qits-Caller` and `X-Qits-Environment` (see *A service's own name,
   gated per request*). `Authorization`, `Cookie` and every custom header pass through untouched.
-- **No UI, no SPA, no landing page, no `/api`.** The paths this process answers are `/q`,
+- **No UI, no SPA, no landing page, no `/api`.** The paths this process answers are `/q` (on its own
+  names only),
   `/main-navigation`, `/upstream-pools`, and, on a configured application vhost only, `/token`. It knows nothing about
   projects or repositories: a navigation slot says WHERE the shell hangs an entry, and the shell
   decides what hangs there.
@@ -645,7 +662,11 @@ On the platform host, as a user with the docker socket. The service name is `<en
   edge would let through to a service — a machine credential carrying the platform audience, or,
   with the browser gate on, a live `qits-session` — and `401` (a `Bearer` challenge, never `Basic`)
   to everybody else.
-- **Answers `/q/health/{live,ready}` itself**, never proxied, whatever the `Host` says. Readiness
+- **Answers `/q/health/{live,ready}` itself**, never proxied — but only on a name that means the edge:
+  the apex reading (no `Host`, an address literal, a single label such as `localhost` or the wire
+  alias, the bare domain). On any other name `/q/*` is an ordinary path: an app's vhost proxies it
+  to the app behind the gate, a name nothing routes answers `404`. An app's name never reports the
+  edge's health — it did until qits-2222, and a stopped app read healthy. Readiness
   reports the resolved environment → upstream map as health data and stays DOWN until the
   deployment projection has reached qits-events' confirmed head.
 
