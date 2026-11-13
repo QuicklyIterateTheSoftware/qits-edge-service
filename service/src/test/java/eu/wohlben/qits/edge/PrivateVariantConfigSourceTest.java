@@ -26,6 +26,10 @@ class PrivateVariantConfigSourceTest {
     assertEquals(
         "100.96.0.0/24,10.231.0.0/20", source.getValue("qits.edge.listen.allowed-local-cidrs"));
     assertEquals("false", source.getValue("qits.edge.acme.enabled"));
+    assertEquals("https://idp.qits.${QITS_DOMAIN}/idp", source.getValue("qits.edge.idp.dial-url"));
+    assertEquals("https://events.qits.${QITS_DOMAIN}", source.getValue("qits.events.url"));
+    assertEquals(
+        "https://observability.qits.${QITS_DOMAIN}", source.getValue("qits.observability.url"));
     assertEquals("80", source.getValue("quarkus.http.port"));
     assertEquals("443", source.getValue("quarkus.http.ssl-port"));
     assertEquals(
@@ -35,7 +39,7 @@ class PrivateVariantConfigSourceTest {
         "/work/.letsencrypt/current/lets-encrypt.key",
         source.getValue("quarkus.tls.key-store.pem.acme.key"));
     assertEquals("1m", source.getValue("quarkus.tls.reload-period"));
-    assertEquals(12, source.getPropertyNames().size());
+    assertEquals(15, source.getPropertyNames().size());
     assertEquals(source.getPropertyNames(), source.getProperties().keySet());
     assertNull(source.getValue("qits.edge.domain"), "anything else keeps its default");
     assertNull(
@@ -84,6 +88,58 @@ class PrivateVariantConfigSourceTest {
     assertEquals("false", config.getRawValue("qits.edge.acme.enabled"));
     assertEquals("private", config.getRawValue("qits.edge.exposure"));
     assertEquals("8081", config.getRawValue("quarkus.http.port"), "an env var still wins");
+  }
+
+  @Test
+  void thePublicNamesExpandQitsDomainOnlyForThePrivateVariant() {
+    SmallRyeConfig privateConfig =
+        new SmallRyeConfigBuilder()
+            .addDefaultInterceptors()
+            .withSources(
+                new PropertiesConfigSource(
+                    Map.of(
+                        "qits.edge.idp.dial-url", "http://dev-qits-idp:8080/idp",
+                        "qits.events.url", "http://dev-qits-events:8080",
+                        "qits.observability.url", "http://dev-qits-observability:8080"),
+                    "application.properties",
+                    250))
+            .withSources(new EnvConfigSource(Map.of("QITS_DOMAIN", "example.test"), 300))
+            .withSources(new PrivateVariantConfigSource(() -> "private"))
+            .build();
+
+    assertEquals(
+        "https://idp.qits.example.test/idp",
+        privateConfig.getValue("qits.edge.idp.dial-url", String.class));
+    assertEquals(
+        "https://events.qits.example.test",
+        privateConfig.getValue("qits.events.url", String.class));
+    assertEquals(
+        "https://observability.qits.example.test",
+        privateConfig.getValue("qits.observability.url", String.class));
+
+    SmallRyeConfig publicConfig =
+        new SmallRyeConfigBuilder()
+            .addDefaultInterceptors()
+            .withSources(
+                new PropertiesConfigSource(
+                    Map.of(
+                        "qits.edge.idp.dial-url", "http://dev-qits-idp:8080/idp",
+                        "qits.events.url", "http://dev-qits-events:8080",
+                        "qits.observability.url", "http://dev-qits-observability:8080"),
+                    "application.properties",
+                    250))
+            .withSources(new EnvConfigSource(Map.of("QITS_DOMAIN", "example.test"), 300))
+            .withSources(new PrivateVariantConfigSource(() -> null))
+            .build();
+
+    assertEquals(
+        "http://dev-qits-idp:8080/idp",
+        publicConfig.getValue("qits.edge.idp.dial-url", String.class));
+    assertEquals(
+        "http://dev-qits-events:8080", publicConfig.getValue("qits.events.url", String.class));
+    assertEquals(
+        "http://dev-qits-observability:8080",
+        publicConfig.getValue("qits.observability.url", String.class));
   }
 
   @Test

@@ -294,7 +294,8 @@ Only `/main-navigation` reads them, through `EdgeRoutes.withdrawnHosts` — see 
 **The platform app labels are public-edge code.** On a private edge `registry`, `mirror`, `githost`
 and `idp` are ordinary unknown names — a 404 unless a private or `both` deployment publishes one —
 and the qits-1403 exception that answers them before the catch-up does not apply: the private edge
-dials qits-events and idp on their internal aliases and never waits for itself.
+is off `qits-net` (qits-2174) and dials qits-events and idp by their PUBLIC names, over the apex the
+public edge routes, and never waits for itself.
 
 **The listener allow-list.** `qits.edge.listen.allowed-local-cidrs` lists the LOCAL addresses a
 connection may arrive on — the interface it reached, not the caller. Empty, the default, accepts
@@ -305,8 +306,8 @@ the earliest hook there is: the TLS handshake and the request head have been rea
 `127.0.0.0/8` and `::1` are always admitted, because the deployer's health check is `curl
 http://localhost…` inside the container, and an IPv4-mapped address (`::ffff:100.96.0.2`) is read
 as its IPv4 address. A refusal is logged at DEBUG. The private edge states
-`100.96.0.0/24,10.231.0.0/20` — the tunnel and the `qits-private` overlay — which is what keeps a
-public service on `qits-net`, where the private edge only dials out, from walking in.
+`100.96.0.0/24,10.231.0.0/20` — the tunnel and the `qits-private` overlay, the only two networks this
+edge sits on (qits-2174) — which is what keeps anything else from walking in.
 
 **The peer log.** On a private edge every request this process answers or proxies writes one INFO
 line on the logger `eu.wohlben.qits.edge.peer`:
@@ -327,10 +328,18 @@ without checking.
 
 `qits-edge-private` is a second application from this same image and release:
 `.config/qits/deployments.yml` says `variants: private`, and `.config/qits/deployments.private.yml`
-declares it — `exposure: both`, its own databases, `cap_add: NET_ADMIN`, `publish_mode: host`
+declares it — `exposure: private`, its own databases, `cap_add: NET_ADMIN`, `publish_mode: host`
 (`update_order: stop-first`, because a host-mode port has one binder), `47812:47812/udp` published
 and nothing else, its own `private:wireguard` volume and the public edge's
 `qits-edge-letsencrypt` read-only.
+
+**`qits-private` alone, not `qits-net` too** (owner ruling, epic qits-2174): nothing private and
+nothing a private service uses sits on `qits-net`. `qits-private` is an attachable overlay without
+`--internal`, so egress still works through `docker_gwbridge`; idp, qits-events and
+qits-observability are dialled by their PUBLIC names rather than the internal `<env>-qits-<app>:8080`
+alias (see `PrivateVariantConfigSource` below), and this application's own databases live on the
+private Postgres, `qits-oci-postgresql-private`, moved there by qits-deployments when the exposure
+changed (qits-2175).
 
 **No settings: `QITS_VARIANT=private` is the whole configuration.** qits-deployments puts that
 variable in a variant's container and in nothing else, and `PrivateVariantConfigSource` — a
@@ -349,6 +358,9 @@ Without the variable it is empty and the edge is the public one, unchanged.
 | `qits.edge.dns.overlay-cidr` | `10.231.0.0/20` — the tunnel DNS responder answers on `qits-private` too |
 | `qits.edge.listen.allowed-local-cidrs` | `100.96.0.0/24,10.231.0.0/20` |
 | `qits.edge.acme.enabled` | `false` — it orders nothing, it serves the public edge's certificate |
+| `qits.edge.idp.dial-url` | `https://idp.qits.<domain>/idp` — idp's public name; this edge is off `qits-net` |
+| `qits.events.url` | `https://events.qits.<domain>` — qits-events' public name, same reason |
+| `qits.observability.url` | `https://observability.qits.<domain>` — qits-observability's public name, same reason |
 | `quarkus.http.port` / `quarkus.http.ssl-port` | `80` / `443` — a peer dials `https://<app>.qits.<domain>` with no port |
 | `quarkus.tls.key-store.pem.acme.cert` / `.key` | `/work/.letsencrypt/current/lets-encrypt.crt` / `.key` |
 | `quarkus.tls.reload-period` | `1m` — follows the public edge's renewals |

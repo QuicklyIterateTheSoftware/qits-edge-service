@@ -51,6 +51,17 @@ public class PrivateVariantConfigSource implements ConfigSource {
     values.put("qits.edge.dns.overlay-cidr", "10.231.0.0/20");
     values.put("qits.edge.listen.allowed-local-cidrs", "100.96.0.0/24,10.231.0.0/20");
     values.put("qits.edge.acme.enabled", "false");
+    // THE PUBLIC NAMES, not the internal wire aliases application.properties states for a main
+    // deployment: this edge left qits-net (epic qits-2174, qits-2188), so dialling idp, qits-events
+    // or qits-observability by their `<env>-qits-<app>:8080` alias would reach a network it is no
+    // longer on. Each is a peer this edge calls over qits-private or the WireGuard tunnel like any
+    // other client, through the apex the public edge routes. `${QITS_DOMAIN}` is expanded by
+    // SmallRye at lookup time like any other source's value; an operator's explicit
+    // QITS_EDGE_IDP_DIAL_URL/QITS_EVENTS_URL/QITS_OBSERVABILITY_URL (ordinal 300) still wins over
+    // this source's 275.
+    values.put("qits.edge.idp.dial-url", "https://idp.qits.${QITS_DOMAIN}/idp");
+    values.put("qits.events.url", "https://events.qits.${QITS_DOMAIN}");
+    values.put("qits.observability.url", "https://observability.qits.${QITS_DOMAIN}");
     values.put("quarkus.http.port", "80");
     values.put("quarkus.http.ssl-port", "443");
     // The public edge's own TLS settings, QUARKUS_TLS_KEY_STORE_PEM_ACME_CERT/_KEY and
