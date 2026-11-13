@@ -1,0 +1,17 @@
+-- The declared exposure of the frame each snapshot was written from (qits-2120): `public`,
+-- `private` or `both`, normalised as ExposureClass.declared does — on active snapshots as well as
+-- on withdrawals, which already carry theirs in withdrawn_exposure.
+--
+-- Why it is needed: on a class change the old edge task runs beside the new one (start-first, 10 m
+-- stop grace), sharing this database and the durable consumer, and before the write fence it kept
+-- writing under its old class. The break-glass drill left a `private` qits-stt routed on the public
+-- edge that way. At boot, DeploymentProjectionBootstrap now rebuilds an unchanged class too when the
+-- kept projection routes a snapshot whose exposure the class does not keep (EdgeRoutes.outsideClass).
+--
+-- No backfill, on purpose: a row written before this column is null, and an active row that routes
+-- something with a null exposure cannot be judged, so the reconcile counts it as outside the class.
+-- Each edge therefore rebuilds once at its first boot on V12 — which is also what clears the routes
+-- the drill left behind — and again only if a task without this code wrote beside it. Clearing
+-- edge_projection_class here instead would rebuild once too, but would then trust null rows forever,
+-- including ones such a task writes after this migration ran.
+alter table edge_deployment_snapshot add column exposure text;

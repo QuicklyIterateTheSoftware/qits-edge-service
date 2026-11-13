@@ -453,9 +453,31 @@ The class is re-derived at boot (qits-2120). `edge_projection_class` holds the c
 was last rebuilt under; when it is absent or differs from `qits.edge.exposure`,
 `DeploymentProjectionBootstrap` deletes the projection and writes the new class in one transaction,
 replays from the epoch, and logs `edge projection rebuilt: class <old> -> <new>` (`<none>` the first
-time). An unchanged class keeps the projection as it is. Without the truncate, a snapshot withdrawn
-under the old class would survive the replay, because `EdgeRoutes.replace` writes only a strictly
-newer frame.
+time). Without the truncate, a snapshot withdrawn under the old class would survive the replay,
+because `EdgeRoutes.replace` writes only a strictly newer frame.
+
+**The old task runs beside the new one.** `docker service update` starts the new task first and
+gives the old one a 10 m stop grace; both share the edge database and the durable consumer
+`edge-active-endpoints`, so the new task's epoch reset makes the old one replay too, under its old
+class. The first drill (qits-2121) showed what that does without a guard: the old public task
+re-withdrew qits-stt under `all` (404), and the old `all` task re-activated it after the way back
+(still routed on the public edge). Three things hold it now:
+
+- **The write fence.** Every projection write reads `edge_projection_class` in its own transaction,
+  under a share lock the reset takes exclusively; when the stored class is not this edge's, it
+  writes nothing, logs once at WARN `edge projection is class <stored>, this edge is <mine>: not
+  writing DeploymentActive <id>`, and throws, so the durable claim rolls back and the frame stays
+  owed to the task that rebuilt the projection. Until it stops, the old task's eventstream log
+  shows those frames as failed and owed — expected, and harmless.
+- **Self-heal at boot.** An unchanged class is rebuilt too when the kept projection holds a
+  snapshot the class would not have written: an active one whose exposure (`edge_deployment_snapshot.exposure`,
+  V12) the class does not keep, one that routes with no recorded exposure (every row from before
+  V12, so each edge rebuilds once on it), or a withdrawal the class would keep. The reason is
+  logged: `edge projection rebuilt: class public -> public (kept projection routes qits-stt in dev,
+  exposure private, outside the class)`.
+- **The serving copy follows the database.** The in-memory view is re-read whole when the replay
+  reaches the head, and a 15 s tick re-reads it whenever the snapshot rows changed under it — a
+  frame the other task of the same class claimed lands in the database, not in this process's view.
 
 On the platform host, as a user with the docker socket. The service name is `<env>-qits-edge`, `dev-qits-edge` on this estate; `docker service ls --filter label=qits.platform.deployments.app-name=qits-edge` confirms it:
 
