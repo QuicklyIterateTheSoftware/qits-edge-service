@@ -82,7 +82,7 @@
         <qits.events-frontend-pacts-qits-edge-service.version>2026.1113.110709</qits.events-frontend-pacts-qits-edge-service.version>
         <qits.githost-frontend-pacts-qits-edge-service.version>2026.1113.93300</qits.githost-frontend-pacts-qits-edge-service.version>
         <qits.maintenance-frontend-pacts-qits-edge-service.version>2026.1113.93349</qits.maintenance-frontend-pacts-qits-edge-service.version>
-        <qits.artifacts-frontend-pacts-qits-edge-service.version>2026.1113.93010</qits.artifacts-frontend-pacts-qits-edge-service.version>
+        <qits.artifacts-frontend-pacts-qits-edge-service.version>2026.1113.113903</qits.artifacts-frontend-pacts-qits-edge-service.version>
         <qits.deployments-frontend-pacts-qits-edge-service.version>2026.1113.110705</qits.deployments-frontend-pacts-qits-edge-service.version>
         <qits.mirror-frontend-pacts-qits-edge-service.version>2026.1113.93405</qits.mirror-frontend-pacts-qits-edge-service.version>
         <qits.observability-frontend-pacts-qits-edge-service.version>2026.1113.105418</qits.observability-frontend-pacts-qits-edge-service.version>
