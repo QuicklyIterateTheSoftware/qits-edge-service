@@ -69,7 +69,8 @@ catching up` once when it starts.
 
 A stored snapshot is served only when it is worth serving: the class reconcile at boot kept it (see
 the exposure class below — a reset truncates it), and it routes at least one endpoint. A first
-boot, a wiped database or a class reset therefore still answers every non-`/q` request, and
+boot, a wiped database or a class reset therefore still answers every request but the edge's own
+`/q` (on its own names — see below), and
 `/main-navigation`, with a retryable `503 Retry-After: 1` until the head — **except a platform app
 label's** (`PlatformApps`: `registry`, `mirror`, `githost`, `idp`), which is served from code
 throughout, exactly as if nothing had been published (qits-1403). The persisted snapshot is not
@@ -256,7 +257,10 @@ What the door answers is:
 - `GET /` (and `HEAD /`) — `302` to qits-projects' host once the projection names one: the `system`
   placement qits-projects publishes, or a host called `projects`. An anonymous visitor lands on the
   login through the host that owns it. `404` while no such host is known;
-- `/q`, `/main-navigation` and `/upstream-pools` — the edge's own surfaces;
+- `/main-navigation` and `/upstream-pools` — the edge's own surfaces. `/q` is NOT one of them on a
+  door (qits-2222): the edge answers it only on its own names — no `Host`, an address, a single
+  label such as `localhost` or the wire alias, the bare domain — so a door answers it `404` like
+  any other path;
 - everything else — `404` in plain text, naming `<app>.<authority>`, logged at INFO so anything
   still dialling the door can be found.
 
@@ -513,7 +517,8 @@ On the platform host, as a user with the docker socket. The service name is `<en
   after the strip is attribution: `X-Qits-Caller` for a platform page, and a `qits:system` bearer's
   own `X-Qits-Causation-Id`, `X-Qits-Caller` and `X-Qits-Environment` (see *A service's own name,
   gated per request*). `Authorization`, `Cookie` and every custom header pass through untouched.
-- **No UI, no SPA, no landing page, no `/api`.** The paths this process answers are `/q`,
+- **No UI, no SPA, no landing page, no `/api`.** The paths this process answers are `/q` (on its own
+  names only),
   `/main-navigation`, `/upstream-pools`, and, on a configured application vhost only, `/token`. It knows nothing about
   projects or repositories: a navigation slot says WHERE the shell hangs an entry, and the shell
   decides what hangs there.
@@ -631,7 +636,11 @@ On the platform host, as a user with the docker socket. The service name is `<en
   edge would let through to a service — a machine credential carrying the platform audience, or,
   with the browser gate on, a live `qits-session` — and `401` (a `Bearer` challenge, never `Basic`)
   to everybody else.
-- **Answers `/q/health/{live,ready}` itself**, never proxied, whatever the `Host` says. Readiness
+- **Answers `/q/health/{live,ready}` itself**, never proxied — but only on a name that means the edge:
+  the apex reading (no `Host`, an address literal, a single label such as `localhost` or the wire
+  alias, the bare domain). On any other name `/q/*` is an ordinary path: an app's vhost proxies it
+  to the app behind the gate, a name nothing routes answers `404`. An app's name never reports the
+  edge's health — it did until qits-2222, and a stopped app read healthy. Readiness
   reports the resolved environment → upstream map as health data and stays DOWN until the
   deployment projection has reached qits-events' confirmed head.
 
