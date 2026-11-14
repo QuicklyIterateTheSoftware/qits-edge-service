@@ -12,6 +12,7 @@ import io.vertx.core.http.HttpConnection;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerRequest;
+import io.vertx.core.http.HttpVersion;
 import io.vertx.core.http.RequestOptions;
 import io.vertx.core.net.HostAndPort;
 import io.vertx.core.net.SocketAddress;
@@ -29,6 +30,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -86,11 +88,26 @@ public class EdgeRouter {
    * /q}. Nothing is layered behind it: the edge has no static content and no SPA, so this route is
    * genuinely last and a request that reaches it is proxied.
    *
-   * <p>{@link #handle} also passes {@code /q} to {@code next()} explicitly rather than relying on
-   * this number. Route order decides who runs first; the explicit skip decides who <i>answers</i>,
-   * and it keeps the health surface local even if a future Quarkus moved its own routes.
+   * <p>{@code /q} reaches this route on the edge's own names only by falling through Quarkus — a
+   * management path nothing registered — and {@link #handle} passes it to {@code next()} explicitly
+   * rather than relying on this number, so it keeps Quarkus' own answer. On every other name {@code
+   * /q} never gets this far: {@link #NON_APPLICATION_ROUTE_ORDER} has already routed it.
    */
   public static final int ROUTE_ORDER = RouteConstants.ROUTE_ORDER_AFTER_DEFAULT;
+
+  /**
+   * Ahead of Quarkus' own {@code /q} routes — which sit at order 0 or above, Vert.x's running
+   * sequence for a route registered without one — and behind every bookkeeping handler it orders at
+   * {@code Integer.MIN_VALUE} and its neighbours, {@link EdgeListener}'s among them (qits-2222).
+   *
+   * <p>Quarkus answers {@code /q/*} long before {@link #ROUTE_ORDER}, so a skip inside {@link
+   * #handle} alone decides nothing: whatever the Host said, its health handler had already answered
+   * — measured, an app vhost's {@code /q/health/ready} still read the edge's UP with only that skip
+   * narrowed ({@code EdgeRoutingTest#anApplicationsNameNeverReportsTheEdgesHealth}). This route is
+   * what reads the name first, hands {@code /q/*} on to Quarkus only on the edge's own names
+   * ({@link #answeredByTheEdge}), and routes it like every other path everywhere else.
+   */
+  static final int NON_APPLICATION_ROUTE_ORDER = RouteConstants.ROUTE_ORDER_COMPRESSION - 1;
 
   private static final Logger LOG = Logger.getLogger(EdgeRouter.class);
 
@@ -335,6 +352,7 @@ public class EdgeRouter {
         registerApp(app + "." + environment, appUpstream(app, environment, config.apps()));
       }
     }
+    router.route().order(NON_APPLICATION_ROUTE_ORDER).handler(this::nonApplication);
     router.route().order(ROUTE_ORDER).handler(this::handle);
   }
 
@@ -545,13 +563,39 @@ public class EdgeRouter {
     }
   }
 
+  /**
+   * The {@link #NON_APPLICATION_ROUTE_ORDER} route: {@code /q/*} on a name that is not the edge's
+   * own goes down the ordinary path here, before Quarkus' management routes can answer it. Every
+   * other request — any other path, or {@code /q/*} on the edge's own name — moves on untouched.
+   */
+  private void nonApplication(RoutingContext rc) {
+    String path = rc.request().path();
+    if (!path.equals(nonApplicationRootPath) && !path.startsWith(nonApplicationRootPath + "/")) {
+      rc.next();
+      return;
+    }
+    handle(rc);
+  }
+
   private void handle(RoutingContext rc) {
     HttpServerRequest request = rc.request();
-    String path = request.path();
-    if (path.equals(nonApplicationRootPath) || path.startsWith(nonApplicationRootPath + "/")) {
-      // The edge's own management surface — health above all — is answered by this process whatever
-      // the Host name says. It is the one thing an orchestrator must be able to ask the edge about
-      // itself rather than about an environment behind it.
+    // Read first: route() is a pure function of the name and two projection snapshots — no I/O, no
+    // await, no state written — so asking it before the bypass below costs nothing and changes
+    // nothing for the requests that do not take it.
+    HostEnvironments.Route named =
+        hostEnvironments.route(
+            authority(request), projects.projects(), routes.landingEnvironments());
+    if (answeredByTheEdge(named, request.path(), nonApplicationRootPath)) {
+      // The edge's own management surface — health above all — is answered by this process, but
+      // only on a name that means the edge itself (answeredByTheEdge): the loopback, an address,
+      // the wire alias, the bare domain. On an app's name /q/* is that app's path like any other,
+      // so it is routed, gated and proxied or refused below exactly as /anything would be.
+      // Answering it regardless of the Host is what made a stopped app read healthy: its vhost's
+      // /q/health/ready reported the edge's health while every other path on it 404ed (qits-2222).
+      // Ahead of the catch-up barrier on purpose: while catching up, the edge's own readiness says
+      // so in its health JSON, not in the router's admission 503. Reached from both routes: from
+      // nonApplication() this hands the request on to Quarkus' /q routes; from the catch-all it is
+      // a management path nothing registered, and Quarkus' own 404 answers it.
       rc.next();
       return;
     }
@@ -566,9 +610,6 @@ public class EdgeRouter {
       request.pause();
     }
 
-    HostEnvironments.Route named =
-        hostEnvironments.route(
-            authority(request), projects.projects(), routes.landingEnvironments());
     boolean authoritative = projectionBootstrap.authoritative();
     if (!authoritative && !servedBeforeCatchUp(named) && !projectionBootstrap.routable()) {
       // Until the startup replay has reached qits-events' confirmed head the persisted snapshot can
@@ -617,6 +658,12 @@ public class EdgeRouter {
       // NOT a fall-through to the gateway. The name is app-shaped, so it was aimed at a service —
       // and no configuration and no deployment claims it. Answering here is the whole point: a
       // mistyped registry vhost must fail, not quietly reach an unauthenticated route.
+      if (withdrawnToPrivateEdge(named, config.exposure(), routes::withdrawnHosts)) {
+        // ...unless the name is a private deployment's, which this edge stores as a withdrawal: the
+        // caller's resolver sent it to the wrong edge, and the name does exist (qits-2223).
+        misdirected(request, named);
+        return;
+      }
       unknownApp(request, named);
       return;
     }
@@ -701,6 +748,25 @@ public class EdgeRouter {
         && PlatformApps.IDP.equals(route.app())
         && PlatformApps.owns(PlatformApps.IDP, path)
         && headers.contains(HttpHeaders.AUTHORIZATION);
+  }
+
+  /**
+   * Whether this request is the edge's own to answer in-process — Quarkus' non-application root
+   * ({@code /q}, health above all) asked on a name that means this edge rather than something
+   * behind it: the {@link HostEnvironments.Reading#APEX} reading, which is a missing Host, an
+   * address literal, a single label such as {@code localhost} or the wire alias, or the bare domain
+   * (qits-2222).
+   *
+   * <p>On every other reading {@code /q/*} is an ordinary path: an app vhost proxies it to the app
+   * behind the gate, a name nothing routes answers 404, an unreadable name its own refusal. An
+   * app's name must never report the edge's health — answered here whatever the Host said, a
+   * stopped app read healthy while every other path on its name 404ed. Static so it is asserted
+   * without a boot — see {@code EdgeRouterNamesTest}.
+   */
+  static boolean answeredByTheEdge(
+      HostEnvironments.Route named, String path, String nonApplicationRoot) {
+    return named.reading() == HostEnvironments.Reading.APEX
+        && (path.equals(nonApplicationRoot) || path.startsWith(nonApplicationRoot + "/"));
   }
 
   /**
@@ -1554,6 +1620,107 @@ public class EdgeRouter {
    */
   String environment(HttpServerRequest request) {
     return hostEnvironments.route(authority(request), projects.projects()).environment();
+  }
+
+  /**
+   * Whether a name nobody here routes is one a <b>private</b> deployment declared, which this edge
+   * holds as a withdrawal ({@link EdgeRoutes#withdrawnHosts}) — so the request reached the public
+   * edge when it belonged on the private one (qits-2223).
+   *
+   * <p><b>How a request gets here.</b> A workspace resolves with the private edge's tunnel DNS at
+   * {@code 100.96.0.1} first and the host resolver second. While the private edge is down or still
+   * catching up, a lookup of {@code mcp.qits.<domain>} falls through to the public resolver, which
+   * answers the public edge's address — and the public edge, which never routes a withdrawn host,
+   * used to answer {@link #unknownApp}'s 404: a wrong answer, because the name exists on the other
+   * edge, and a terminal one, because a 404 tells a client there is nothing to retry. {@code 421
+   * Misdirected Request} (RFC 9110 §15.5.20) says exactly what happened — this server is not the
+   * one for that authority, another connection may succeed — see {@link #misdirected}.
+   *
+   * <p><b>Only on a {@link ExposureClass#PUBLIC} edge</b>, the one class whose withdrawals are
+   * private deployments'; {@code NavigationRoute} reads them on that class alone for the same
+   * reason. A private edge withdraws {@code public} deployments, and a public name that reaches it
+   * is a resolver answering the tunnel address for a name the private edge does not route — not
+   * this case. {@link ExposureClass#ALL} withdraws nothing. And only a withdrawal whose declared
+   * exposure is {@code private}: a name nobody publishes or withdraws keeps its 404 exactly as
+   * before. Static so it is asserted without a boot — see {@code EdgeRouterNamesTest}.
+   *
+   * @param withdrawn environment to its withdrawals by application — {@link
+   *     EdgeRoutes#withdrawnHosts}
+   */
+  static boolean withdrawnToPrivateEdge(
+      HostEnvironments.Route named,
+      ExposureClass exposure,
+      Function<String, Map<String, EdgeRoutes.Withdrawn>> withdrawn) {
+    if (exposure != ExposureClass.PUBLIC || named.unknownApp() == null) {
+      return false;
+    }
+    Map<String, EdgeRoutes.Withdrawn> absent = withdrawn.apply(named.environment());
+    if (absent == null) {
+      return false;
+    }
+    for (EdgeRoutes.Withdrawn entry : absent.values()) {
+      if (entry != null
+          && entry.host() != null
+          && entry.host().equalsIgnoreCase(named.unknownApp())
+          && "private".equals(entry.exposure())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The answer to {@link #withdrawnToPrivateEdge}: {@code 421}, no {@code Retry-After}, and on
+   * HTTP/1.x the connection closed behind it (qits-2223).
+   *
+   * <p><b>Closed, because the connection is the mistake.</b> A keep-alive client would send its
+   * next request down the same socket to the same wrong edge, however its resolver answers by then;
+   * dropped, it has to dial again and so to resolve again, which is when the tunnel DNS can answer
+   * the private address. Vert.x keeps an HTTP/1.1 connection open whatever header the response
+   * carries — its keep-alive is decided from the request alone — so {@code Connection: close} only
+   * tells the client, and the close after the write is what makes it true.
+   *
+   * <p><b>HTTP/2 gets the status alone.</b> A connection-specific header is malformed there (RFC
+   * 9113 §8.2.2), and the connection carries the client's other streams, possibly to names this
+   * edge does serve, so it is not torn down for one of them. A 421 on HTTP/2 is the signal clients
+   * already act on: retry the request on a fresh connection.
+   */
+  private void misdirected(HttpServerRequest request, HostEnvironments.Route named) {
+    LOG.infof(
+        "a private deployment's name reached the public edge, answered 421: %s %s on %s",
+        request.method(), request.path(), authority(request));
+    boolean http1 =
+        request.version() == HttpVersion.HTTP_1_1 || request.version() == HttpVersion.HTTP_1_0;
+    var response =
+        request
+            .response()
+            .setStatusCode(421)
+            .putHeader(HttpHeaders.CONTENT_TYPE, "text/plain; charset=utf-8");
+    if (http1) {
+      response.putHeader(HttpHeaders.CONNECTION, HttpHeaders.CLOSE);
+    }
+    response
+        .end(misdirectedBody(named))
+        .onComplete(
+            written -> {
+              if (http1) {
+                request.connection().close();
+              }
+            });
+  }
+
+  /**
+   * What a private deployment's name is told on the public edge, with the label laundered exactly
+   * as {@link #unknownAppBody} does — it is the first label of a {@code Host} header.
+   */
+  static String misdirectedBody(HostEnvironments.Route named) {
+    String label = named.unknownApp();
+    return (label != null && HostEnvironments.isLabel(label)
+            ? "`" + label + "`"
+            : "That first label")
+        + " is served only by the private edge, which is reached through the WireGuard tunnel"
+        + " (network access). This request reached the public edge because the resolver answered"
+        + " the public address: retry once the tunnel DNS at 100.96.0.1 answers.\n";
   }
 
   private void unknownApp(HttpServerRequest request, HostEnvironments.Route route) {

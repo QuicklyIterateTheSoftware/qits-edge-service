@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import eu.wohlben.qits.edge.HostEnvironments.Reading;
 import eu.wohlben.qits.edge.HostEnvironments.Route;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -54,6 +56,66 @@ class EdgeRouterNamesTest {
     assertFalse(
         EdgeRouter.servedBeforeCatchUp(names.route("idp.nosuchproject.wohlben.eu", projects)),
         "an unknown project is no application position");
+  }
+
+  @Test
+  void onlyTheEdgesOwnNameAnswersItsManagementSurface() {
+    // qits-2222: answered whatever the Host said, an app's /q/health/ready reported the EDGE's
+    // health — a stopped app read healthy while every other path on its name 404ed. The apex
+    // reading is the edge's own name; every other reading routes /q/* like any other path.
+    HostEnvironments names =
+        HostEnvironments.of(
+            java.util.List.of("prod", "dev"), "prod", PlatformApps.labels(), "wohlben.eu");
+    java.util.Map<String, Boolean> projects = java.util.Map.of("qits", false, "acme", true);
+    String ready = "/q/health/ready";
+
+    for (String own :
+        new String[] {
+          null,
+          "",
+          "localhost",
+          "localhost:8080",
+          "dev-qits-edge",
+          "127.0.0.1",
+          "[::1]:443",
+          "wohlben.eu",
+          "WOHLBEN.eu."
+        }) {
+      Route named = names.route(own, projects);
+      assertEquals(Reading.APEX, named.reading(), String.valueOf(own));
+      assertTrue(EdgeRouter.answeredByTheEdge(named, ready, "/q"), String.valueOf(own));
+      assertTrue(EdgeRouter.answeredByTheEdge(named, "/q", "/q"), "the root itself");
+      assertTrue(EdgeRouter.answeredByTheEdge(named, "/q/health/live", "/q"));
+      assertFalse(
+          EdgeRouter.answeredByTheEdge(named, "/queue/items", "/q"),
+          "the prefix is a path segment, not a substring");
+      assertFalse(EdgeRouter.answeredByTheEdge(named, "/", "/q"), "only the management root");
+    }
+    assertTrue(
+        EdgeRouter.answeredByTheEdge(names.route("localhost", projects), "/mgmt/health", "/mgmt"),
+        "the configured root, not a literal /q");
+    assertFalse(
+        EdgeRouter.answeredByTheEdge(names.route("localhost", projects), ready, "/mgmt"),
+        "under another root /q is an ordinary path");
+
+    for (String other :
+        new String[] {
+          "orchestrator.qits.wohlben.eu", // a platform app
+          "idp.qits.wohlben.eu", // the one served before the catch-up
+          "ci.dev.acme.wohlben.eu", // a published app
+          "nosuchapp.dev.acme.wohlben.eu", // an app-shaped name nothing routes
+          "acme.wohlben.eu", // a project door
+          "dev.acme.wohlben.eu", // an environment door
+          "qits.wohlben.eu", // the platform project's door
+          "idp.nosuchproject.wohlben.eu", // an unknown project
+          "a.b.c.d.wohlben.eu", // unreadable
+          "example.org" // outside the domain
+        }) {
+      Route named = names.route(other, projects);
+      assertFalse(
+          EdgeRouter.answeredByTheEdge(named, ready, "/q"),
+          other + " reads " + named.reading() + " and must never report the edge's health");
+    }
   }
 
   @Test
@@ -149,5 +211,79 @@ class EdgeRouterNamesTest {
     assertTrue(
         EdgeRouter.unreadableBody(Route.unreadable("prod", "acme"), "wohlben.eu")
             .contains("does not have an environment by that name"));
+  }
+
+  // --- a private deployment's name on the public edge (qits-2223)
+  // ---------------------------------
+
+  private static Function<String, Map<String, EdgeRoutes.Withdrawn>> withdrawn(
+      String host, String exposure) {
+    Map<String, EdgeRoutes.Withdrawn> dev =
+        Map.of("qits-mcp", new EdgeRoutes.Withdrawn(host, exposure));
+    return environment -> "dev".equals(environment) ? dev : Map.of();
+  }
+
+  @Test
+  void aPrivateWithdrawalOnThePublicEdgeIsMisdirected() {
+    assertTrue(
+        EdgeRouter.withdrawnToPrivateEdge(
+            new Route("dev", null, "mcp"), ExposureClass.PUBLIC, withdrawn("mcp", "private")));
+    assertTrue(
+        EdgeRouter.withdrawnToPrivateEdge(
+            new Route("dev", null, "MCP"), ExposureClass.PUBLIC, withdrawn("Mcp", "private")),
+        "case-insensitive, as a DNS name is");
+    assertTrue(
+        EdgeRouter.withdrawnToPrivateEdge(
+            new Route("dev", null, "mcp", "acme", Reading.UNKNOWN_APP),
+            ExposureClass.PUBLIC,
+            withdrawn("mcp", "private")),
+        "a project's name the same");
+  }
+
+  @Test
+  void onlyThePublicEdgeAndOnlyAPrivateWithdrawalAreMisdirected() {
+    Route mcp = new Route("dev", null, "mcp");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.PRIVATE, withdrawn("mcp", "private")),
+        "the private edge withdraws public deployments; this rule is not about it");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.ALL, withdrawn("mcp", "private")));
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.PUBLIC, withdrawn("mcp", "public")),
+        "a public withdrawal is what the private edge stores, never a 421 here");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.PUBLIC, withdrawn(null, "private")),
+        "a withdrawal whose host failed the rules names nothing");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(
+            new Route("dev", null, "nosuch"), ExposureClass.PUBLIC, withdrawn("mcp", "private")),
+        "a label nobody publishes or withdraws keeps its 404");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(
+            new Route("prod", null, "mcp"), ExposureClass.PUBLIC, withdrawn("mcp", "private")),
+        "withdrawals are per environment");
+    assertFalse(
+        EdgeRouter.withdrawnToPrivateEdge(
+            Route.apex("dev"), ExposureClass.PUBLIC, withdrawn("mcp", "private")),
+        "a door is never misdirected");
+  }
+
+  @Test
+  void theMisdirectedAnswerNamesThePrivateEdgeAndLaundersTheLabel() {
+    String body = EdgeRouter.misdirectedBody(new Route("dev", null, "mcp"));
+    assertTrue(body.startsWith("`mcp` is served only by the private edge"), body);
+    assertTrue(body.contains("100.96.0.1"), body);
+    assertTrue(body.endsWith("\n"), body);
+    for (String label : new String[] {"", "<script>alert(1)</script>", "a b", null}) {
+      String laundered = EdgeRouter.misdirectedBody(new Route("dev", null, label));
+      assertTrue(laundered.startsWith("That first label is served only by"), laundered);
+      if (label != null && !label.isEmpty()) {
+        assertFalse(laundered.contains(label), laundered);
+      }
+    }
+    // And the 404 an unknown label gets is untouched by it.
+    assertTrue(
+        EdgeRouter.unknownAppBody(new Route("dev", null, "nosuch"), Set.of("registry"))
+            .startsWith("`nosuch` is not an application this edge routes. Configured: [registry]"));
   }
 }

@@ -28,6 +28,16 @@ import org.eclipse.microprofile.config.spi.ConfigSource;
  * build time and instantiates in the native image too; the variable is read in each call and never
  * cached, so whatever the image build saw (no {@code QITS_VARIANT}) cannot leak into the running
  * process. It is deliberately not {@code @StaticInitSafe}.
+ *
+ * <p><b>A drain of 30s, not the public edge's 9m30s</b> (qits-2223). {@code
+ * quarkus.shutdown.timeout} in {@code application.properties} is the public edge's budget: it
+ * updates start-first behind the ingress, so its successor is already serving while it drains and a
+ * long drain costs nothing. The private edge updates stop-first (host-mode ports have one binder),
+ * so there is no successor while it drains, and every second of the drain is downtime for every
+ * private name and the tunnel itself — a stuck drain made one redeploy 9m51s of it. The bound is a
+ * runtime key, so this source overrides it. A long transfer through the private edge is cut at 30s
+ * by a redeploy; that is accepted. The linger, {@code qits.edge.shutdown.linger=10s}, is kept, and
+ * {@code stop_grace_period: 1m} in {@code .config/qits/deployments.private.yml} covers both.
  */
 public class PrivateVariantConfigSource implements ConfigSource {
 
@@ -72,6 +82,9 @@ public class PrivateVariantConfigSource implements ConfigSource {
         "quarkus.tls.key-store.pem.acme.cert", "/work/.letsencrypt/current/lets-encrypt.crt");
     values.put("quarkus.tls.key-store.pem.acme.key", "/work/.letsencrypt/current/lets-encrypt.key");
     values.put("quarkus.tls.reload-period", "1m");
+    // Stop-first: no successor serves while this drains, so the drain is pure downtime (qits-2223).
+    // 30s + the 10s linger stays under deployments.private.yml's 1m stop_grace_period.
+    values.put("quarkus.shutdown.timeout", "30s");
     VALUES = Collections.unmodifiableMap(values);
   }
 

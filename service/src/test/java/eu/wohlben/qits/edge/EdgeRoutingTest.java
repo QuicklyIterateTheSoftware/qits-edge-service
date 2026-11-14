@@ -1242,7 +1242,7 @@ class EdgeRoutingTest {
           "navigation is answered from the stored snapshot: " + navigation.body());
 
       RestAssured.given()
-          .header("Host", "dev.acme.example.com")
+          .header("Host", "localhost")
           .when()
           .get("/q/health/ready")
           .then()
@@ -1257,7 +1257,7 @@ class EdgeRoutingTest {
       routingBootstrap.snapshotKept(false);
     }
     RestAssured.given()
-        .header("Host", "dev.acme.example.com")
+        .header("Host", "localhost")
         .when()
         .get("/q/health/ready")
         .then()
@@ -1276,6 +1276,23 @@ class EdgeRoutingTest {
       EdgeClient.Answer ci = client().get("ci.dev." + PROJECT + ".example.com", "/", token());
       assertEquals(503, ci.status(), ci.body());
       assertEquals("1", ci.headers().get("retry-after"));
+      // The app's own health path is the app's, so it waits behind the same barrier — never the
+      // edge's health answered in its place (qits-2222) — while the edge's own name still reports
+      // its readiness in the health JSON rather than in the router's admission 503.
+      EdgeClient.Answer ciHealth =
+          client().get("ci.dev." + PROJECT + ".example.com", "/q/health/ready", token());
+      assertEquals(503, ciHealth.status(), ciHealth.body());
+      assertEquals("1", ciHealth.headers().get("retry-after"));
+      assertFalse(ciHealth.body().contains("edge upstreams"), ciHealth.body());
+      RestAssured.given()
+          .header("Host", "localhost")
+          .when()
+          .get("/q/health/ready")
+          .then()
+          .statusCode(503)
+          .body(
+              "checks.find { it.name == 'edge upstreams' }.data.'deployment-projection'",
+              is("catching-up"));
       EdgeClient.Answer navigation = client().get("dev.acme.example.com", "/main-navigation");
       assertEquals(503, navigation.status());
       assertEquals("1", navigation.headers().get("retry-after"));
@@ -1940,8 +1957,9 @@ class EdgeRoutingTest {
     try {
       bootUnder(ExposureClass.PUBLIC, log);
       EdgeClient.Answer refused = client().get("ci.dev.acme.example.com", "/ci/api/runs", token());
-      assertEquals(404, refused.status());
-      assertTrue(refused.body().contains("is not an application this edge routes"), refused.body());
+      // qits-2223: a private deployment's name on the public edge is misdirected, not unknown.
+      assertEquals(421, refused.status());
+      assertTrue(refused.body().contains("served only by the private edge"), refused.body());
 
       // The break-glass task boots and rebuilds; the old public task is still running beside it and
       // replays too, because the rebuild reset the durable consumer they share. Its writes are
@@ -2040,7 +2058,7 @@ class EdgeRoutingTest {
       assertNull(routes.serviceHost("dev", "ci"), "rebuilt, the private app is withdrawn again");
       assertEquals(
           new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
-      assertEquals(404, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
+      assertEquals(421, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
       assertTrue(
           formatted(infos)
               .contains(
@@ -2628,14 +2646,24 @@ class EdgeRoutingTest {
     assertNotNull(routes.serviceHost("dev", "ci"));
 
     // Stored, not skipped: the same empty snapshot a retirement is, so the host, the route and the
-    // navigation row all go — and the name is a 404 like any other nobody claims.
+    // navigation row all go. The name is not a 404, though: the withdrawal says the private edge
+    // serves it, so a request that reached this edge was misdirected by its resolver — 421, and the
+    // HTTP/1.1 connection closed so the client's next request resolves again (qits-2223).
     deployments.onFrame(exposedCi("private", at.plusMillis(1)));
     assertNull(routes.serviceHost("dev", "ci"));
     assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
     assertTrue(
         routes.navigation("dev").stream()
             .noneMatch(entry -> "qits-ci".equals(entry.application())));
-    assertEquals(404, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
+    EdgeClient.Answer misdirected =
+        client().get("ci.dev.acme.example.com", "/ci/api/runs", token());
+    assertEquals(421, misdirected.status(), misdirected.body());
+    assertEquals(List.of("close"), misdirected.headerValues("connection"));
+    assertTrue(misdirected.body().startsWith("`ci` is served only by the private edge"));
+    assertTrue(misdirected.body().contains("100.96.0.1"), misdirected.body());
+    assertTrue(misdirected.headerValues("retry-after").isEmpty(), "nothing to wait for here");
+    // A label nobody publishes or withdraws is still the ordinary 404.
+    assertEquals(404, client().get("nosuch.dev.acme.example.com", "/", token()).status());
 
     // Back inside the class, a later frame restores it: the frame-time order still decides.
     deployments.onFrame(exposedCi("both", at.plusMillis(2)));
@@ -2650,14 +2678,14 @@ class EdgeRoutingTest {
     deployments.onFrame(exposedCi("private", at.plusMillis(1)));
 
     // The withdrawal keeps the host for the navigation and nothing that routes: no vhost, no path,
-    // no applicationHosts row — the name is still a 404 to a caller with a good token.
+    // no applicationHosts row — the name is misdirected (421, qits-2223) even with a good token.
     assertEquals(
         new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
     assertNull(routes.serviceHost("dev", "ci"));
     assertNull(routes.applicationHost("dev", "qits-ci"));
     assertFalse(routes.applicationHosts("dev").containsKey("qits-ci"));
     assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
-    assertEquals(404, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
+    assertEquals(421, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
 
     // Anonymous, and with a token the gate refuses: exactly today's document, no private name.
     for (Map<String, String> credential :
@@ -3265,18 +3293,61 @@ class EdgeRoutingTest {
 
   @Test
   void healthIsAnsweredByTheEdgeItself() {
-    // /q never leaves this process, whatever the Host name says and whatever the environment list
-    // holds — it is the one thing an orchestrator asks the EDGE about, not an environment behind
-    // it. The upstream marker below is what proves it was not proxied: a stub gateway names itself
-    // in every answer, so its absence is the assertion.
-    RestAssured.given()
-        .header("Host", "dev.acme.example.com")
-        .when()
-        .get("/q/health/ready")
-        .then()
-        .statusCode(200)
-        .body("status", is("UP"))
-        .body("checks.find { it.name == 'edge upstreams' }.data.default", is("prod"));
+    // /q never leaves this process on a name that means the edge itself — the apex reading: no
+    // Host, an address, a single label such as localhost or the wire alias, the bare domain. It is
+    // the one thing an orchestrator asks the EDGE about, not an environment behind it. The health
+    // JSON is what proves it was not proxied: a stub gateway answers with its own marker lines.
+    for (String host : List.of("localhost", "dev-qits-edge", "127.0.0.1", "example.com")) {
+      RestAssured.given()
+          .header("Host", host)
+          .when()
+          .get("/q/health/ready")
+          .then()
+          .statusCode(200)
+          .body("status", is("UP"))
+          .body("checks.find { it.name == 'edge upstreams' }.data.default", is("prod"));
+    }
+  }
+
+  @Test
+  void anApplicationsNameNeverReportsTheEdgesHealth() {
+    // qits-2222: answered whatever the Host said, ci's own /q/health/ready read UP from the EDGE
+    // while ci itself was stopped and every other path on its name 404ed. On an app's name /q/* is
+    // that app's path, proxied behind the gate like /queue/items is.
+    activateCi();
+    EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", "/q/health/ready", token());
+    assertEquals("mirror-dev", answer.line("upstream"), answer.body());
+    assertEquals("/q/health/ready", answer.line("uri"));
+  }
+
+  @Test
+  void anApplicationsNameIsGatedOnItsHealthPathToo() {
+    // The ordinary path includes the gate: an anonymous caller gets the refusal any other path on
+    // the vhost gets, never the edge's health and never the app's.
+    activateCi();
+    EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", "/q/health/ready");
+    assertEquals(401, answer.status(), answer.body());
+    assertNull(answer.line("upstream"), "an anonymous request must not reach the application");
+  }
+
+  @Test
+  void aNameNothingRoutesIs404OnItsHealthPathToo() {
+    // The stopped app's case: nothing publishes the name, so /q/health/ready is the 404 every other
+    // path on it is — not the edge's UP.
+    EdgeClient.Answer answer =
+        client().get("nosuchapp.dev." + PROJECT + ".example.com", "/q/health/ready", token());
+    assertEquals(404, answer.status(), answer.body());
+    assertNull(answer.line("upstream"));
+    assertTrue(answer.body().contains("`nosuchapp` is not an application"), answer.body());
+  }
+
+  @Test
+  void anEnvironmentDoorIsNoNameForTheEdgesHealth() {
+    // A door is not the edge either: it answers /q/health/ready as it answers any other path —
+    // the door's own 404, which serves nothing.
+    EdgeClient.Answer answer = client().get("dev." + PROJECT + ".example.com", "/q/health/ready");
+    assertEquals(404, answer.status(), answer.body());
+    assertFalse(answer.body().contains("edge upstreams"), answer.body());
   }
 
   @Test
@@ -3611,6 +3682,25 @@ class EdgeRoutingTest {
                     "theme=dark; qits-session=" + StubGateways.SESSION + "; locale=en"));
     assertEquals("registry-dev", answer.line("upstream"));
     assertEquals("theme=dark; locale=en", answer.upstreamHeader("Cookie"));
+  }
+
+  @Test
+  void theManagementSurfaceIsNeverOpenedByTheExemptionOnAReadOpenApp() {
+    // qits-2222: `/q/*` on an app vhost is routed through this same gate rather than answered by
+    // the edge itself, so the anonymous-read exemption would otherwise hand an internet caller
+    // `mirror`'s own Quarkus management routes. It must stay gated even though `mirror`'s ordinary
+    // reads are open.
+    EdgeClient.Answer metrics = client().get("mirror.dev.acme.example.com", "/q/metrics");
+    assertEquals(401, metrics.status());
+    assertNull(metrics.line("upstream"), "the request must never have reached the upstream");
+
+    assertEquals(401, client().get("mirror.dev.acme.example.com", "/q/openapi").status());
+    assertEquals(401, client().get("mirror.dev.acme.example.com", "/q/health/ready").status());
+    assertEquals(401, client().get("mirror.dev.acme.example.com", "/q").status());
+
+    // An ordinary read on the very same vhost still passes with no credential at all.
+    assertEquals(
+        "mirror-dev", client().get("mirror.dev.acme.example.com", "/v2/").line("upstream"));
   }
 
   @Test

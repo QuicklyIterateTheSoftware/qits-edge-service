@@ -207,19 +207,21 @@ class EdgeChallengeTest {
 
   // --- the anonymous-read exemption --------------------------------------------------------------
 
+  private static final String Q = "/q";
+
   @Test
   void anExemptedAppServesTheTwoReadingMethodsAndNoOthers() {
     // The whole shape of the decision: reads are the bootstrap steps that happen before there is a
     // token to hold, writes change what the platform will run and keep the check.
     Set<String> open = Set.of("mirror");
-    assertTrue(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, open));
-    assertTrue(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.HEAD, open));
+    assertTrue(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/v2/", open, Q));
+    assertTrue(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.HEAD, "/v2/", open, Q));
     for (HttpMethod method :
         new HttpMethod[] {
           HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH, HttpMethod.DELETE, HttpMethod.OPTIONS
         }) {
       assertFalse(
-          EdgeAuth.anonymousRead(app("mirror", "dev"), method, open),
+          EdgeAuth.anonymousRead(app("mirror", "dev"), method, "/v2/", open, Q),
           method + " is not a read and must still need a token");
     }
   }
@@ -227,9 +229,12 @@ class EdgeChallengeTest {
   @Test
   void theExemptionIsPerAppLabel() {
     // An app that was not named is gated on every method, which is the pre-exemption edge exactly.
-    assertFalse(EdgeAuth.anonymousRead(app("registry", "dev"), HttpMethod.GET, Set.of("mirror")));
+    assertFalse(
+        EdgeAuth.anonymousRead(
+            app("registry", "dev"), HttpMethod.GET, "/v2/", Set.of("mirror"), Q));
     // Every environment of a named app, from one entry — the label is the whole key.
-    assertTrue(EdgeAuth.anonymousRead(app("mirror", "prod"), HttpMethod.GET, Set.of("mirror")));
+    assertTrue(
+        EdgeAuth.anonymousRead(app("mirror", "prod"), HttpMethod.GET, "/v2/", Set.of("mirror"), Q));
   }
 
   @Test
@@ -238,15 +243,45 @@ class EdgeChallengeTest {
     // traffic. No value in this list may widen it — not even one that spells an environment name.
     assertFalse(
         EdgeAuth.anonymousRead(
-            HostEnvironments.Route.apex("dev"), HttpMethod.GET, Set.of("mirror", "dev")));
+            HostEnvironments.Route.apex("dev"),
+            HttpMethod.GET,
+            "/v2/",
+            Set.of("mirror", "dev"),
+            Q));
   }
 
   @Test
   void anEmptyListGatesEverything() {
     // Today's behaviour, and the shipped default: with nothing named, every method on every app
     // vhost needs a token.
-    assertFalse(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, Set.of()));
-    assertFalse(EdgeAuth.anonymousRead(app("registry", "dev"), HttpMethod.HEAD, Set.of()));
+    assertFalse(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/v2/", Set.of(), Q));
+    assertFalse(
+        EdgeAuth.anonymousRead(app("registry", "dev"), HttpMethod.HEAD, "/v2/", Set.of(), Q));
+  }
+
+  @Test
+  void theManagementSurfaceIsNeverPartOfTheOpening() {
+    // qits-2222: /q on an app vhost now reaches that app's own Quarkus management routes
+    // (EdgeRouter's early non-application route), so the exemption must never cover it, however
+    // the app's reads are otherwise opened.
+    Set<String> open = Set.of("mirror");
+    assertFalse(
+        EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/q/metrics", open, Q));
+    assertFalse(
+        EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/q/openapi", open, Q));
+    assertFalse(
+        EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/q/health/ready", open, Q));
+    assertFalse(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/q", open, Q));
+    // Ordinary paths on the same app, and a path that merely starts with "/q" without being the
+    // management root, still read the exemption normally.
+    assertTrue(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/queue/x", open, Q));
+    assertTrue(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/v2/", open, Q));
+    // A custom non-application root is matched, not the default: "/q" is then an ordinary path.
+    assertTrue(
+        EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/q", open, "/management"));
+    assertFalse(
+        EdgeAuth.anonymousRead(
+            app("mirror", "dev"), HttpMethod.GET, "/management/metrics", open, "/management"));
   }
 
   @Test

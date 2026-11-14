@@ -233,8 +233,9 @@ class EdgeSessionGateTest {
                 .containsKey("session-test-stt"),
             anonymous.body());
       }
-      // The name itself routes nothing, session or not.
-      assertEquals(404, client().get("stt.dev.acme.example.com", "/stt/api", session()).status());
+      // The name itself routes nothing, session or not: it is the private edge's, so a request
+      // that reached this one is misdirected (qits-2223).
+      assertEquals(421, client().get("stt.dev.acme.example.com", "/stt/api", session()).status());
     } finally {
       routes.replace(
           "dev",
@@ -1338,9 +1339,10 @@ class EdgeSessionGateTest {
   @Test
   void healthIsNeverGated() {
     // An orchestrator has no session and must never need one: a health probe that 302s to a login
-    // page is a container that never comes up.
+    // page is a container that never comes up. It asks on a name that means the edge — localhost,
+    // the apex reading — which is the only name the edge answers /q/* on (qits-2222).
     io.restassured.RestAssured.given()
-        .header("Host", "dev.acme.example.com")
+        .header("Host", "localhost")
         .when()
         .get("/q/health/ready")
         .then()

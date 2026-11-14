@@ -69,7 +69,8 @@ catching up` once when it starts.
 
 A stored snapshot is served only when it is worth serving: the class reconcile at boot kept it (see
 the exposure class below — a reset truncates it), and it routes at least one endpoint. A first
-boot, a wiped database or a class reset therefore still answers every non-`/q` request, and
+boot, a wiped database or a class reset therefore still answers every request but the edge's own
+`/q` (on its own names — see below), and
 `/main-navigation`, with a retryable `503 Retry-After: 1` until the head — **except a platform app
 label's** (`PlatformApps`: `registry`, `mirror`, `githost`, `idp`), which is served from code
 throughout, exactly as if nothing had been published (qits-1403). The persisted snapshot is not
@@ -256,7 +257,10 @@ What the door answers is:
 - `GET /` (and `HEAD /`) — `302` to qits-projects' host once the projection names one: the `system`
   placement qits-projects publishes, or a host called `projects`. An anonymous visitor lands on the
   login through the host that owns it. `404` while no such host is known;
-- `/q`, `/main-navigation` and `/upstream-pools` — the edge's own surfaces;
+- `/main-navigation` and `/upstream-pools` — the edge's own surfaces. `/q` is NOT one of them on a
+  door (qits-2222): the edge answers it only on its own names — no `Host`, an address, a single
+  label such as `localhost` or the wire alias, the bare domain — so a door answers it `404` like
+  any other path;
 - everything else — `404` in plain text, naming `<app>.<authority>`, logged at INFO so anything
   still dialling the door can be found.
 
@@ -287,9 +291,22 @@ built from the snapshots each edge holds.
 records the host the deployment declared — checked by the same rules as a served host, and simply
 dropped when it fails them, so a bad host can never keep an application routed — and its declared
 exposure (`withdrawn_host`, `withdrawn_exposure`; migration V10 resets the projection so the boot's
-replay fills them). Neither is a vhost, a route, a host claim or a certificate SAN: `stt.qits.<domain>`
-on the public edge is a 404 exactly as before, and `EdgeRoutes.applicationHosts` does not list it.
-Only `/main-navigation` reads them, through `EdgeRoutes.withdrawnHosts` — see below.
+replay fills them). Neither is a vhost, a route, a host claim or a certificate SAN, and
+`EdgeRoutes.applicationHosts` does not list it. `/main-navigation` reads them, through
+`EdgeRoutes.withdrawnHosts` — see below — and so does one refusal:
+
+**A private deployment's name on the public edge is `421 Misdirected Request`** (qits-2223), not
+the 404 an unknown label gets. A workspace resolves with the tunnel DNS at `100.96.0.1` first and
+the host resolver second, so while the private edge is down or catching up `mcp.qits.<domain>`
+resolves to the public address and lands here. The name does exist — on the other edge — so the
+answer says so: plain text naming the private edge and `100.96.0.1`, no `Retry-After`, logged at
+INFO, and on HTTP/1.x `Connection: close` with the connection actually closed, so a keep-alive
+client's next request dials and resolves again rather than reusing a socket to the wrong edge
+(RFC 9110 §15.5.20: another connection may succeed). On HTTP/2 the status alone is sent and the
+connection kept — a connection header is malformed there, and the connection carries other
+streams. Only a public edge answers it, and only for a withdrawal whose declared exposure is
+`private`; a label nobody publishes or withdraws keeps the 404. `EdgeRouter.reach`, and so the
+tunnel DNS, is unchanged.
 
 **The platform app labels are public-edge code.** On a private edge `registry`, `mirror`, `githost`
 and `idp` are ordinary unknown names — a 404 unless a private or `both` deployment publishes one —
@@ -364,6 +381,7 @@ Without the variable it is empty and the edge is the public one, unchanged.
 | `quarkus.http.port` / `quarkus.http.ssl-port` | `80` / `443` — a peer dials `https://<app>.qits.<domain>` with no port |
 | `quarkus.tls.key-store.pem.acme.cert` / `.key` | `/work/.letsencrypt/current/lets-encrypt.crt` / `.key` |
 | `quarkus.tls.reload-period` | `1m` — follows the public edge's renewals |
+| `quarkus.shutdown.timeout` | `30s` — stop-first, so the drain is downtime for every private name; the public edge's 9m30s is for a start-first update (qits-2223) |
 
 The TLS keys are the public edge's own deployment settings (`QUARKUS_TLS_KEY_STORE_PEM_ACME_CERT`,
 `…_KEY`, `QUARKUS_TLS_RELOAD_PERIOD`) in dotted form: the default TLS configuration's PEM pair named
@@ -525,7 +543,8 @@ On the platform host, as a user with the docker socket. The service name is `<en
   after the strip is attribution: `X-Qits-Caller` for a platform page, and a `qits:system` bearer's
   own `X-Qits-Causation-Id`, `X-Qits-Caller` and `X-Qits-Environment` (see *A service's own name,
   gated per request*). `Authorization`, `Cookie` and every custom header pass through untouched.
-- **No UI, no SPA, no landing page, no `/api`.** The paths this process answers are `/q`,
+- **No UI, no SPA, no landing page, no `/api`.** The paths this process answers are `/q` (on its own
+  names only),
   `/main-navigation`, `/upstream-pools`, and, on a configured application vhost only, `/token`. It knows nothing about
   projects or repositories: a navigation slot says WHERE the shell hangs an entry, and the shell
   decides what hangs there.
@@ -643,7 +662,11 @@ On the platform host, as a user with the docker socket. The service name is `<en
   edge would let through to a service — a machine credential carrying the platform audience, or,
   with the browser gate on, a live `qits-session` — and `401` (a `Bearer` challenge, never `Basic`)
   to everybody else.
-- **Answers `/q/health/{live,ready}` itself**, never proxied, whatever the `Host` says. Readiness
+- **Answers `/q/health/{live,ready}` itself**, never proxied — but only on a name that means the edge:
+  the apex reading (no `Host`, an address literal, a single label such as `localhost` or the wire
+  alias, the bare domain). On any other name `/q/*` is an ordinary path: an app's vhost proxies it
+  to the app behind the gate, a name nothing routes answers `404`. An app's name never reports the
+  edge's health — it did until qits-2222, and a stopped app read healthy. Readiness
   reports the resolved environment → upstream map as health data and stays DOWN until the
   deployment projection has reached qits-events' confirmed head.
 
@@ -715,7 +738,11 @@ take it out of the ingress balancer, so nothing new reaches it. What happens to 
   fails, and from the splice when the inbound socket closes.
 - **Transfers finish.** Ordinary requests drain for up to `quarkus.shutdown.timeout=9m30s`, inside
   the `stop_grace_period: 10m` that `.config/qits/deployments.yml` hands the deployer. Keep the two
-  in step: a timeout at or over the grace is SIGKILL mid-transfer.
+  in step: a timeout at or over the grace is SIGKILL mid-transfer. **That is the public edge's
+  budget.** The private edge updates stop-first, so nothing serves its names while it drains: it
+  drains for `30s` at most (`PrivateVariantConfigSource`) inside a `stop_grace_period: 1m`, and a
+  longer transfer through it is cut by a redeploy — accepted, against the 9m51s outage a stuck
+  drain cost (qits-2223).
 - **Then it lingers.** After the drain the process waits `qits.edge.shutdown.linger=10s` before
   exiting (`ShutdownLinger`): a response Quarkus calls complete may still sit in the kernel's send
   buffer, and exiting at once lets swarm tear down the network namespace under it — a 201 MB jar
