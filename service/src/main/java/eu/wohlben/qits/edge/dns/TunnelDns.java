@@ -8,6 +8,7 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.AddressedEnvelope;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -16,6 +17,7 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.DatagramChannel;
+import io.netty.channel.socket.DatagramPacket;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioDatagramChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
@@ -90,15 +92,27 @@ import org.jboss.logging.Logger;
  * <ul>
  *   <li>A record type other than A for an in-zone name: NOERROR with no answer — this edge has no
  *       IPv6 and no other records, and saying NXDOMAIN would deny the A record too.
- *   <li>A name outside the zone: REFUSED. This is not a recursive resolver.
+ *   <li>A name outside the zone, asked on the tunnel socket: forwarded to the container's own
+ *       resolver and the upstream's answer relayed as it came, rcode included ({@link Forwarder},
+ *       qits-2262). A WireGuard phone app sets one {@code DNS = 100.96.0.1} for the whole device,
+ *       with no split DNS, so a refusal here would take the phone off the internet. The upstreams
+ *       are the {@code nameserver} lines of {@code /etc/resolv.conf}, or {@code
+ *       qits.edge.dns.upstream} when set, never one of this responder's own sockets; an upstream
+ *       that fails or misses {@code qits.edge.dns.upstream-timeout} is SERVFAIL. Forwarding does
+ *       not wait for the routes view: an outside name's answer owes nothing to it, and a phone
+ *       should keep the internet while the edge catches up. With no usable upstream it is REFUSED,
+ *       as on the overlay.
+ *   <li>A name outside the zone, asked on an overlay socket: REFUSED, so docker's embedded resolver
+ *       asks the container's next {@code --dns}. The overlay never forwards.
  *   <li>A query with other than one question: FORMERR. A packet the codec cannot read at all is
  *       dropped: there is no header to answer it under.
  *   <li>An in-zone name this edge does not route, while no public address is known: SERVFAIL.
  *   <li>Until the routes view is routable — caught up to the head {@code /q/health/ready} reports,
- *       or serving the stored snapshot while it catches up (qits-2160) — every query is SERVFAIL.
- *       While the stored snapshot is served, a name it routes is answered locally and every other
- *       name is still SERVFAIL, so a private name that has not been read yet is never sent to the
- *       public address.
+ *       or serving the stored snapshot while it catches up (qits-2160) — every query is SERVFAIL,
+ *       but a name outside the zone asked on the tunnel, which is forwarded regardless. While the
+ *       stored snapshot is served, a name it routes is answered locally and every other name is
+ *       still SERVFAIL, so a private name that has not been read yet is never sent to the public
+ *       address.
  * </ul>
  *
  * <p>It runs on a small event loop group of its own, closed at shutdown, with netty's DNS codec
@@ -183,8 +197,9 @@ public class TunnelDns {
                   case SNAPSHOT -> Reach.HERE;
                   case ELSEWHERE -> Reach.ELSEWHERE;
                 });
+    Forwarder forwarder = forwarder(zone, bind);
     try {
-      server = Server.listen(bind, config.port(), answers);
+      server = Server.listen(bind, config.port(), answers, forwarder);
     } catch (Exception failed) {
       LOG.errorf(
           failed,
@@ -208,7 +223,8 @@ public class TunnelDns {
       refresher = schedule;
     }
     LOG.infof(
-        "tunnel DNS responder on %s:%d%s (UDP and TCP): zone %s, public address %s, ttl %ds",
+        "tunnel DNS responder on %s:%d%s (UDP and TCP): zone %s, public address %s, ttl %ds;"
+            + " other names on the tunnel %s",
         bind.getHostAddress(),
         config.port(),
         overlaid.isEmpty()
@@ -218,7 +234,45 @@ public class TunnelDns {
                 .collect(Collectors.joining(", ", " and overlay ", "")),
         zone,
         override != null ? override.getHostAddress() : "the A record of " + zone + ", looked up",
-        config.ttl().toSeconds());
+        config.ttl().toSeconds(),
+        forwarder == null
+            ? "REFUSED"
+            : forwarder.upstreams().stream()
+                .map(InetSocketAddress::toString)
+                .collect(Collectors.joining(", ", "forwarded to ", "")));
+  }
+
+  /**
+   * The tunnel's forwarder, or null — names outside the zone then REFUSED — when no upstream is
+   * usable. Its loop guard is every address of this container on the responder's port: the tunnel
+   * and the overlay sockets are among them, and nothing else in this container answers DNS there.
+   */
+  Forwarder forwarder(String zone, Inet4Address bind) {
+    List<InetSocketAddress> own = new ArrayList<>();
+    own.add(new InetSocketAddress(bind, config.port()));
+    try {
+      interfaces.get().forEach(address -> own.add(new InetSocketAddress(address, config.port())));
+    } catch (RuntimeException unreadable) {
+      // the tunnel's own address is still guarded
+    }
+    List<InetSocketAddress> upstreams =
+        Forwarder.upstreams(
+            config.upstream(),
+            config.upstream().filter(value -> !value.isBlank()).isPresent()
+                ? null
+                : Forwarder.resolvConf(),
+            own);
+    if (upstreams.isEmpty()) {
+      LOG.warnf(
+          "the tunnel DNS responder has no upstream resolver (%s): names outside %s are REFUSED on"
+              + " the tunnel, so a peer whose only DNS is this one resolves nothing else",
+          config.upstream().filter(value -> !value.isBlank()).isPresent()
+              ? "qits.edge.dns.upstream"
+              : "/etc/resolv.conf",
+          zone);
+      return null;
+    }
+    return new Forwarder(zone, upstreams, config.upstreamTimeout());
   }
 
   void stop(@Observes ShutdownEvent ignored) {
@@ -481,7 +535,7 @@ public class TunnelDns {
         return code(response, DnsResponseCode.SERVFAIL);
       }
       String name = normalise(question.name());
-      if (!name.equals(zone) && !name.endsWith("." + zone)) {
+      if (!inZone(name, zone)) {
         return code(response, DnsResponseCode.REFUSED);
       }
       Inet4Address answer;
@@ -514,6 +568,11 @@ public class TunnelDns {
   private static <R extends DnsResponse> R code(R response, DnsResponseCode code) {
     response.setCode(code);
     return response;
+  }
+
+  /** Whether a normalised {@code name} is {@code zone} or under it. */
+  static boolean inZone(String name, String zone) {
+    return name.equals(zone) || name.endsWith("." + zone);
   }
 
   /** Lower case, no trailing root dot: the spelling the zone and the router compare. */
@@ -562,6 +621,15 @@ public class TunnelDns {
      * own — {@link #udpPort()} and {@link #tcpPort()} say which.
      */
     static Server listen(Inet4Address bind, int port, Answers answers) throws InterruptedException {
+      return listen(bind, port, answers, null);
+    }
+
+    /**
+     * As {@link #listen(Inet4Address, int, Answers)}, with names outside the zone handed to {@code
+     * forwarder} — the tunnel's sockets — or REFUSED by {@code answers} when it is null.
+     */
+    static Server listen(Inet4Address bind, int port, Answers answers, Forwarder forwarder)
+        throws InterruptedException {
       EventLoopGroup group =
           new NioEventLoopGroup(1, new DefaultThreadFactory("edge-tunnel-dns", true));
       try {
@@ -569,7 +637,7 @@ public class TunnelDns {
             new Bootstrap()
                 .group(group)
                 .channelFactory(NioDatagramChannel::new)
-                .handler(new UdpInitializer(new UdpHandler(answers, bind)))
+                .handler(new UdpInitializer(new UdpHandler(answers, bind, forwarder)))
                 .bind(bind, port)
                 .sync()
                 .channel();
@@ -579,7 +647,7 @@ public class TunnelDns {
               new ServerBootstrap()
                   .group(group)
                   .channelFactory(NioServerSocketChannel::new)
-                  .childHandler(new TcpInitializer(new TcpHandler(answers, bind)))
+                  .childHandler(new TcpInitializer(new TcpHandler(answers, bind, forwarder)))
                   .bind(bind, port)
                   .sync()
                   .channel();
@@ -626,9 +694,22 @@ public class TunnelDns {
 
     @Override
     protected void initChannel(DatagramChannel channel) {
-      channel
-          .pipeline()
-          .addLast(new DatagramDnsQueryDecoder(), new DatagramDnsResponseEncoder(), handler);
+      channel.pipeline().addLast(new DatagramDnsQueryDecoder(), new ResponseEncoder(), handler);
+    }
+  }
+
+  /**
+   * netty's response encoder, but only for a DNS response: a forwarded answer is a {@link
+   * DatagramPacket} of the upstream's own bytes and goes past it to the socket as it is. The stock
+   * encoder takes any addressed envelope and would cast that packet's buffer to a response.
+   */
+  @RegisterForReflection(methods = true, fields = false)
+  static final class ResponseEncoder extends DatagramDnsResponseEncoder {
+
+    @Override
+    public boolean acceptOutboundMessage(Object msg) {
+      return msg instanceof AddressedEnvelope<?, ?> envelope
+          && envelope.content() instanceof DnsResponse;
     }
   }
 
@@ -654,13 +735,21 @@ public class TunnelDns {
     private final Answers answers;
     private final Inet4Address bind;
 
-    UdpHandler(Answers answers, Inet4Address bind) {
+    /** The tunnel's forwarder; null on an overlay socket, which refuses outside names. */
+    private final Forwarder forwarder;
+
+    UdpHandler(Answers answers, Inet4Address bind, Forwarder forwarder) {
       this.answers = answers;
       this.bind = bind;
+      this.forwarder = forwarder;
     }
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, DatagramDnsQuery query) {
+      if (forwarder != null && forwarder.forwards(query)) {
+        forwarder.udp(ctx, query);
+        return;
+      }
       DatagramDnsResponse response =
           answers.respond(
               query,
@@ -685,13 +774,21 @@ public class TunnelDns {
     private final Answers answers;
     private final Inet4Address bind;
 
-    TcpHandler(Answers answers, Inet4Address bind) {
+    /** The tunnel's forwarder; null on an overlay socket, which refuses outside names. */
+    private final Forwarder forwarder;
+
+    TcpHandler(Answers answers, Inet4Address bind, Forwarder forwarder) {
       this.answers = answers;
       this.bind = bind;
+      this.forwarder = forwarder;
     }
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, DnsQuery query) {
+      if (forwarder != null && forwarder.forwards(query)) {
+        forwarder.tcp(ctx, query);
+        return;
+      }
       DefaultDnsResponse response =
           answers.respond(
               query,

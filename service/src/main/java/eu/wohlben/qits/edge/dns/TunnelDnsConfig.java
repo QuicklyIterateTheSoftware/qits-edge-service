@@ -44,6 +44,19 @@ public interface TunnelDnsConfig {
    */
   Optional<String> publicAddress();
 
+  /**
+   * The resolvers a name outside the zone, asked on the tunnel, is forwarded to (qits-2262): a
+   * comma list of {@code address[:port]}, IPv6 as {@code [address]:port}, port 53 when none is
+   * given. Unset, the normal case, they are the {@code nameserver} lines of {@code
+   * /etc/resolv.conf}, the container's own resolver. Address literals only, and never one of this
+   * responder's own sockets. The overlay sockets never forward.
+   */
+  Optional<String> upstream();
+
+  /** How long a forwarded query waits for an upstream before it is answered SERVFAIL. */
+  @WithDefault("2s")
+  Duration upstreamTimeout();
+
   /** The TTL of every answer, short so a deployment changing exposure is followed quickly. */
   @WithDefault("30s")
   Duration ttl();

@@ -395,6 +395,22 @@ A record, looked up through the container's resolver at start and every five min
 (`qits.edge.dns.public-address` overrides it), and SERVFAIL while none is known. Private upstreams
 are reached on `qits-private`, `10.231.0.0/20`.
 
+**A name outside the zone is forwarded on the tunnel** (qits-2262). A WireGuard phone app sets one
+`DNS = 100.96.0.1` for the whole device — there is no split DNS — so the tunnel socket passes any
+other name to the container's own resolver, the `nameserver` lines of `/etc/resolv.conf`
+(`qits.edge.dns.upstream`, a comma list of `address[:port]`, overrides them), and relays the
+upstream's message as it came: its records, flags and rcode, NXDOMAIN included, under the client's
+id. UDP is forwarded over UDP and TCP over TCP. An upstream that fails, or does not answer within
+`qits.edge.dns.upstream-timeout` (`2s`), is SERVFAIL; one that is this responder's own socket is
+never used. Forwarding does not wait for the routes view: an outside name owes nothing to it, and a
+peer keeps the internet while the edge catches up. With no usable upstream such names are REFUSED,
+logged as a WARN at start. The start line says which:
+
+    … ttl 30s; other names on the tunnel forwarded to /127.0.0.11:53
+
+A workspace that names `100.96.0.1` first now gets its outside names answered here too, rather than
+by its next resolver.
+
 **The responder answers the overlay too** (qits-1991). A host container on `qits-private` — a
 DIRECT admin workspace — names the private edge's swarm VIP there as its first `--dns`, and
 `100.96.0.1` is not on that network. So `qits.edge.dns.overlay-cidr` (`10.231.0.0/20` on the
@@ -407,9 +423,9 @@ block — the edge's task address on the overlay — beside the tunnel's:
 One socket per address rather than `0.0.0.0`, because netty reads no `IP_PKTINFO`: a UDP socket on
 the wildcard cannot say which address a datagram was sent to, and a private name would be answered
 with the tunnel's `100.96.0.1`, which the overlay cannot route. Bound to one address, a routed name
-is answered with that address, the one the caller asked. The rules are otherwise the tunnel's — and
-a name outside the zone is REFUSED, which sends docker's embedded resolver on to the container's
-next `--dns`. The addresses are read once: swarm attaches a task's networks before the entrypoint,
+is answered with that address, the one the caller asked. The rules are otherwise the tunnel's — but
+a name outside the zone is REFUSED, never forwarded, which sends docker's embedded resolver on to
+the container's next `--dns`. The addresses are read once: swarm attaches a task's networks before the entrypoint,
 and a task's address changes only with the task. An address that cannot be bound is an ERROR and is
 skipped, a block with none of this container's addresses a WARN; either way the tunnel is served.
 
