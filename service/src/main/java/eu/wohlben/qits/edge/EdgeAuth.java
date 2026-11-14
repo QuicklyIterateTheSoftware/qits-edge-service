@@ -266,6 +266,14 @@ public class EdgeAuth {
    * matter which app is named — the management surface is never part of a bootstrap read, so it
    * stays gated even on an app whose ordinary reads are open.
    *
+   * <p><b>And only on a {@link EdgePaths#canonical} path</b> (qits-2229). The {@code /q} test reads
+   * the raw path, but Vert.x — the edge's router and the app's — matches on the normalised one, so
+   * {@code //q/metrics}, {@code /%71/metrics} or {@code /x/../q/metrics} would pass the prefix test
+   * here and still reach {@code /q/metrics} upstream, where the raw path is forwarded verbatim. A
+   * path spelled any way a normaliser could rewrite is therefore simply not exempt: it falls
+   * through to the credential check, which no bootstrap client meets, because none spells its paths
+   * so.
+   *
    * <p>Package-private and static so it can be asserted without booting an application.
    */
   static boolean anonymousRead(
@@ -277,6 +285,7 @@ public class EdgeAuth {
     return route.toApp()
         && (method == HttpMethod.GET || method == HttpMethod.HEAD)
         && readApps.contains(route.app())
+        && EdgePaths.canonical(path)
         && !path.equals(nonApplicationRootPath)
         && !path.startsWith(nonApplicationRootPath + "/");
   }

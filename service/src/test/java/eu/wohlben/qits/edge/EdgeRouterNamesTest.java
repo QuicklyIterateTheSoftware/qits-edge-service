@@ -119,6 +119,39 @@ class EdgeRouterNamesTest {
   }
 
   @Test
+  void theManagementDecisionIsHandedTheNormalisedPath() {
+    // qits-2229: answeredByTheEdge compares a prefix and nothing more, so it is only as good as the
+    // spelling it is handed. Quarkus' /q routes are matched by Vert.x on normalizedPath(), so that
+    // is what EdgeRouter passes — never request.path(). These rows pin the contract: the raw
+    // spellings below all normalise to /q/health/ready, and read raw they would not be recognised
+    // as
+    // management at all — which on an app's name is exactly how they used to slip past the
+    // non-application route and reach the edge's own health.
+    HostEnvironments names =
+        HostEnvironments.of(
+            java.util.List.of("prod", "dev"), "prod", PlatformApps.labels(), "wohlben.eu");
+    java.util.Map<String, Boolean> projects = java.util.Map.of("qits", false, "acme", true);
+    String normalised = io.vertx.core.http.impl.HttpUtils.normalizePath("/q/health/ready");
+    Route apex = names.route("localhost", projects);
+    Route app = names.route("ci.dev.acme.wohlben.eu", projects);
+
+    for (String raw :
+        new String[] {"/%71/health/ready", "//q/health/ready", "/x/../q/health/ready"}) {
+      assertEquals(
+          normalised,
+          io.vertx.core.http.impl.HttpUtils.normalizePath(raw),
+          raw + " is /q/health/ready to the router");
+      assertFalse(
+          EdgeRouter.answeredByTheEdge(apex, raw, "/q"),
+          raw + " read raw is not recognised, which is why the caller normalises first");
+    }
+    assertTrue(EdgeRouter.answeredByTheEdge(apex, normalised, "/q"));
+    assertFalse(
+        EdgeRouter.answeredByTheEdge(app, normalised, "/q"),
+        "an app's name never answers the edge's health, however it was spelled");
+  }
+
+  @Test
   void onlyACredentialOnIdpsOwnRoutePassesThroughUnchecked() {
     io.vertx.core.MultiMap credential =
         io.vertx.core.MultiMap.caseInsensitiveMultiMap().add("authorization", "Basic eDp5");

@@ -285,6 +285,97 @@ class EdgeChallengeTest {
   }
 
   @Test
+  void aSpellingTheRouterWouldNormaliseIsNeverPartOfTheOpening() {
+    // qits-2229: every one of these is /q/metrics to Vert.x — the edge's router and the app's,
+    // which
+    // receives the raw path verbatim — while the raw-path /q test above reads it as something else.
+    // Not canonical, so not exempt: each meets the credential check like any other gated path.
+    Set<String> open = Set.of("mirror");
+    for (String path :
+        List.of(
+            "//q/metrics",
+            "/%71/metrics",
+            "/q%2Fmetrics",
+            "/x/../q/metrics",
+            "/%2Fq/metrics",
+            "/q/./metrics")) {
+      assertFalse(
+          EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, path, open, Q),
+          path + " is not canonical and must not be read anonymously");
+    }
+    // The opening itself is untouched on the paths it was made for.
+    assertTrue(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/v2/", open, Q));
+    assertTrue(EdgeAuth.anonymousRead(app("mirror", "dev"), HttpMethod.GET, "/queue/x", open, Q));
+  }
+
+  @Test
+  void aCanonicalPathIsTheOneSpellingEveryNormaliserAgreesOn() {
+    // One row per rule in EdgePaths.canonical, each side of it.
+    // Starts with a slash.
+    assertTrue(EdgePaths.canonical("/"));
+    assertTrue(EdgePaths.canonical("/v2/library/alpine/manifests/3.20"));
+    assertFalse(EdgePaths.canonical("v2/"));
+    assertFalse(EdgePaths.canonical(""));
+    assertFalse(EdgePaths.canonical(null));
+    // No empty segment: Vert.x collapses //.
+    assertFalse(EdgePaths.canonical("//q/health"));
+    assertFalse(EdgePaths.canonical("/v2//x"));
+    assertFalse(EdgePaths.canonical("/v2/x//"));
+    // No backslash.
+    assertFalse(EdgePaths.canonical("/q\\health"));
+    assertFalse(EdgePaths.canonical("/\\q/health"));
+    // No dot segment, literal or escaped in any case or mix.
+    assertFalse(EdgePaths.canonical("/x/../q/health"));
+    assertFalse(EdgePaths.canonical("/q/./health"));
+    assertFalse(EdgePaths.canonical("/q/health/.."));
+    assertFalse(EdgePaths.canonical("/x/%2e%2e/q/health"));
+    assertFalse(EdgePaths.canonical("/x/%2E%2E/q/health"));
+    assertFalse(EdgePaths.canonical("/x/.%2e/q/health"));
+    assertFalse(EdgePaths.canonical("/x/%2E./q/health"));
+    assertFalse(EdgePaths.canonical("/q/%2e/health"));
+    // ...while a dot inside a name is just a character.
+    assertTrue(EdgePaths.canonical("/assets/main-ab12cd.js"));
+    assertTrue(EdgePaths.canonical("/x/.well-known/y"));
+    assertTrue(EdgePaths.canonical("/x/.../y"));
+    // No escape a normaliser decodes in place: unreserved characters, a slash, a backslash.
+    assertFalse(EdgePaths.canonical("/%71/health"));
+    assertFalse(EdgePaths.canonical("/%51/health"));
+    assertFalse(EdgePaths.canonical("/v%32/"));
+    assertFalse(EdgePaths.canonical("/a%2Db"));
+    assertFalse(EdgePaths.canonical("/a%5fb"));
+    assertFalse(EdgePaths.canonical("/a%7Eb"));
+    assertFalse(EdgePaths.canonical("/q%2Fhealth"));
+    assertFalse(EdgePaths.canonical("/q%2fhealth"));
+    assertFalse(EdgePaths.canonical("/q%5Chealth"));
+    // Any other escape means the same thing to every parser, so it stays canonical.
+    assertTrue(EdgePaths.canonical("/a%20b"));
+    assertTrue(EdgePaths.canonical("/sha256%3Aabc"));
+    assertTrue(EdgePaths.canonical("/caf%C3%A9"));
+    assertTrue(EdgePaths.canonical("/a%25b"));
+    // A malformed escape is read differently by every parser that meets one.
+    assertFalse(EdgePaths.canonical("/a%"));
+    assertFalse(EdgePaths.canonical("/a%2"));
+    assertFalse(EdgePaths.canonical("/a%zzb"));
+    assertFalse(EdgePaths.canonical("/a%2gb"));
+  }
+
+  @Test
+  void theSessionGatesAnonymousPrefixCannotBeSteppedOutOf() {
+    // qits-2229: /idp/ is the session gate's anonymous prefix, compared with the raw path, and
+    // idp's
+    // own Vert.x normalises what it receives. Each of these starts with /idp/ and is /q/health (or
+    // could be) to idp, so EdgeRouter.noSession requires the canonical spelling before the prefix.
+    List<String> idp = List.of("/idp/");
+    for (String path : List.of("/idp/../q/health", "/idp/%2e%2e/q/health", "/idp/..%2Fq/health")) {
+      assertTrue(EdgeSessions.anonymous(path, idp), path + " does match the bare prefix");
+      assertFalse(EdgePaths.canonical(path), path + " must lose the carve-out");
+    }
+    assertTrue(EdgePaths.canonical("/idp/login"));
+    assertTrue(EdgePaths.canonical("/idp/assets/main-ab12cd.js"));
+    assertTrue(EdgePaths.canonical("/idp/api/auth/login"));
+  }
+
+  @Test
   void theShippedDefaultNamesNoApp() throws Exception {
     // A default here would open reads on a deployment that never asked, and the names it would open
     // are exactly the ones worth closing. Pinned rather than assumed: absent means empty.

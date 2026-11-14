@@ -1104,6 +1104,42 @@ class EdgeSessionGateTest {
             .line("upstream"));
   }
 
+  @Test
+  void theLoginPrefixCannotBeSteppedOutOfByADotSegment() {
+    // qits-2229: each of these starts with /idp/, the raw-path prefix the carve-out compares, and
+    // is (or may be) /q/health to idp's own router, which receives the raw path verbatim. Not
+    // canonical, so the carve-out does not apply: the caller meets the gate an ungated path meets,
+    // and nothing reaches idp. Both on the host idp published and on its platform label before the
+    // catch-up, which is the other owner rule.
+    List<String> paths =
+        List.of("/idp/../q/health", "/idp/%2e%2e/q/health", "/idp/..%2Fq/health", "/idp/./login");
+    publishIdpHost();
+    for (String path : paths) {
+      EdgeClient.Answer answer = client().get("idp.dev.acme.example.com", path);
+      assertTrue(
+          answer.status() == 401 || answer.status() == 302,
+          path + ": " + answer.status() + " " + answer.body());
+      assertNull(answer.line("upstream"), path + " must not have been proxied anonymously");
+    }
+    withdrawIdpHost();
+    routingBootstrap.authoritative(false);
+    try {
+      for (String path : paths) {
+        EdgeClient.Answer answer = client().get("idp.dev.acme.example.com", path);
+        assertTrue(
+            answer.status() == 401 || answer.status() == 302,
+            path + ": " + answer.status() + " " + answer.body());
+        assertNull(answer.line("upstream"), path + " must not have been proxied anonymously");
+      }
+    } finally {
+      routingBootstrap.authoritative(true);
+    }
+    // The canonical spelling is still the login page.
+    publishIdpHost();
+    assertEquals(
+        IDP_UPSTREAM, client().get("idp.dev.acme.example.com", "/idp/login").line("upstream"));
+  }
+
   // --- machine credentials, unchanged
   // -------------------------------------------------------------
 

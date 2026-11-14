@@ -3364,6 +3364,69 @@ class EdgeRoutingTest {
     assertEquals("/queue/items", answer.line("uri"));
   }
 
+  /**
+   * Spellings Vert.x normalises to {@code /q/health/ready} — it decodes an unreserved escape,
+   * collapses {@code //} and removes dot segments before it matches a route (qits-2229).
+   */
+  private static final List<String> SPELLED_HEALTH =
+      List.of("/%71/health/ready", "//q/health/ready", "/x/../q/health/ready");
+
+  @Test
+  void anApplicationsNameNeverReportsTheEdgesHealthHoweverThePathIsSpelled() {
+    // qits-2229: the qits-2222 guard read the raw path while Quarkus' /q routes match the
+    // normalised one, so each of these on an app's name stepped past it and was answered 200 by
+    // the edge's own health — live, on every app Host. Anonymous, each is the 401 the canonical
+    // spelling gets.
+    activateCi();
+    for (String path : SPELLED_HEALTH) {
+      EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", path);
+      assertEquals(401, answer.status(), path + ": " + answer.body());
+      assertFalse(answer.body().contains("edge upstreams"), path + ": " + answer.body());
+      assertNull(answer.line("upstream"), path + " must not reach the application anonymously");
+    }
+  }
+
+  @Test
+  void aSpelledHealthPathIsForwardedVerbatimToTheApplication() {
+    // With a credential it is the app's path like any other, and the edge rewrites nothing: the
+    // raw spelling arrives upstream, where the app's own router makes of it what it will.
+    activateCi();
+    for (String path : SPELLED_HEALTH) {
+      EdgeClient.Answer answer = client().get("ci.dev.acme.example.com", path, token());
+      assertEquals("mirror-dev", answer.line("upstream"), path + ": " + answer.body());
+      assertEquals(path, answer.line("uri"), "forwarded as sent, not normalised");
+    }
+  }
+
+  @Test
+  void aNameNothingRoutesIs404OnASpelledHealthPathToo() {
+    for (String path : SPELLED_HEALTH) {
+      EdgeClient.Answer answer =
+          client().get("nosuchapp.dev." + PROJECT + ".example.com", path, token());
+      assertEquals(404, answer.status(), path + ": " + answer.body());
+      assertNull(answer.line("upstream"));
+      assertFalse(answer.body().contains("edge upstreams"), path + ": " + answer.body());
+    }
+  }
+
+  @Test
+  void theEdgesOwnNameStillAnswersItsHealthUnderTheNormalisedRoute() {
+    // The guard now reads normalizedPath(); on the edge's own name that changes nothing — the
+    // canonical path and every spelling of it reach Quarkus' health, as they always did.
+    RestAssured.given()
+        .header("Host", "localhost")
+        .when()
+        .get("/q/health/ready")
+        .then()
+        .statusCode(200)
+        .body("status", is("UP"));
+    for (String path : SPELLED_HEALTH) {
+      EdgeClient.Answer answer = client().get("localhost", path);
+      assertEquals(200, answer.status(), path + ": " + answer.body());
+      assertTrue(answer.body().contains("edge upstreams"), path + ": " + answer.body());
+    }
+  }
+
   // --- idp auth, terminated here ---------------------------------------------------------------
 
   @Test
@@ -3701,6 +3764,20 @@ class EdgeRoutingTest {
     // An ordinary read on the very same vhost still passes with no credential at all.
     assertEquals(
         "mirror-dev", client().get("mirror.dev.acme.example.com", "/v2/").line("upstream"));
+  }
+
+  @Test
+  void aSpelledManagementPathIsNeverOpenedByTheExemptionEither() {
+    // qits-2229: every one of these is (or may be) /q/metrics to mirror's own router, which gets
+    // the raw path verbatim, while the raw /q test read them as ordinary paths. Not canonical, so
+    // not exempt: each meets the gate like any other path with no credential.
+    for (String path :
+        List.of(
+            "//q/metrics", "/%71/metrics", "/q%2Fmetrics", "/x/../q/metrics", "/%2Fq/metrics")) {
+      EdgeClient.Answer answer = client().get("mirror.dev.acme.example.com", path);
+      assertEquals(401, answer.status(), path + ": " + answer.body());
+      assertNull(answer.line("upstream"), path + " must never have reached the upstream");
+    }
   }
 
   @Test

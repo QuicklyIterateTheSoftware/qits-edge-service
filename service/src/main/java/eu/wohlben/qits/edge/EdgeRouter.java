@@ -567,9 +567,16 @@ public class EdgeRouter {
    * The {@link #NON_APPLICATION_ROUTE_ORDER} route: {@code /q/*} on a name that is not the edge's
    * own goes down the ordinary path here, before Quarkus' management routes can answer it. Every
    * other request — any other path, or {@code /q/*} on the edge's own name — moves on untouched.
+   *
+   * <p>The test reads {@code rc.normalizedPath()}, not the raw {@code request.path()} (qits-2229):
+   * Quarkus' {@code /q} routes are matched by Vert.x on the normalised path, which decodes {@code
+   * %71}, removes dot segments and collapses {@code //}. Reading the raw one, {@code /%71/health},
+   * {@code //q/health} or {@code /x/../q/health} on any app's name stepped past this route and was
+   * answered by the edge's own health with a 200. This guard has to see the path the routes it
+   * guards will see; what goes upstream is still the raw path, untouched — see {@link EdgePaths}.
    */
   private void nonApplication(RoutingContext rc) {
-    String path = rc.request().path();
+    String path = rc.normalizedPath();
     if (!path.equals(nonApplicationRootPath) && !path.startsWith(nonApplicationRootPath + "/")) {
       rc.next();
       return;
@@ -585,7 +592,10 @@ public class EdgeRouter {
     HostEnvironments.Route named =
         hostEnvironments.route(
             authority(request), projects.projects(), routes.landingEnvironments());
-    if (answeredByTheEdge(named, request.path(), nonApplicationRootPath)) {
+    // The normalised path, as nonApplication() reads it: on the edge's own name rc.next() hands the
+    // request to whichever Quarkus route matches, and Vert.x matches on this spelling, not the raw
+    // one (qits-2229). Everything below still reads, and forwards, the raw request.path().
+    if (answeredByTheEdge(named, rc.normalizedPath(), nonApplicationRootPath)) {
       // The edge's own management surface — health above all — is answered by this process, but
       // only on a name that means the edge itself (answeredByTheEdge): the loopback, an address,
       // the wire alias, the bare domain. On an app's name /q/* is that app's path like any other,
@@ -762,6 +772,10 @@ public class EdgeRouter {
    * app's name must never report the edge's health — answered here whatever the Host said, a
    * stopped app read healthy while every other path on its name 404ed. Static so it is asserted
    * without a boot — see {@code EdgeRouterNamesTest}.
+   *
+   * @param path the NORMALISED path — {@code RoutingContext.normalizedPath()} — because that is
+   *     what Quarkus' routes are matched on; a raw spelling such as {@code /%71/health} would read
+   *     as an ordinary path here and still reach the {@code /q/health} route (qits-2229)
    */
   static boolean answeredByTheEdge(
       HostEnvironments.Route named, String path, String nonApplicationRoot) {
@@ -1332,10 +1346,17 @@ public class EdgeRouter {
    * <p>Ordered ahead of the refusal for the same reason as {@link #unauthenticated}: a browser
    * holding a session idp has since revoked must reach the login page too, not only one carrying no
    * cookie at all.
+   *
+   * <p><b>Only on a {@link EdgePaths#canonical} path</b> (qits-2229). The prefix is compared with
+   * the raw path, and the raw path is what goes upstream — where the service's own router
+   * normalises it. {@code /idp/../q/health} starts with {@code /idp/} and is {@code /q/health} to
+   * idp, so without this a caller holding nothing read idp's management surface. A spelling a
+   * normaliser could rewrite loses the carve-out and meets the machine gate like any other path.
    */
   private void noSession(HttpServerRequest request, Target target) {
     if (sessions.enabled()
         && !EdgeAuth.carriesCredential(request)
+        && EdgePaths.canonical(request.path())
         && sessions.anonymous(request.path())
         && ownsAnonymousPath(target, request.path())) {
       // Nobody vouched for this caller, so no identity may arrive upstream — proxy() strips the
