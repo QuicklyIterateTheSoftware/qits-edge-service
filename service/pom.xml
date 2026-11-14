@@ -38,6 +38,14 @@
         <spotless-plugin.version>2.44.5</spotless-plugin.version>
         <google-java-format.version>1.28.0</google-java-format.version>
         <qits.eventstream.version>2026.1110.232501</qits.eventstream.version>
+        <!-- qits-telemetry-core (epic qits-428, qits-2188): the three OTLP/HTTP exporters as CDI
+             beans whose header supplier attaches the `qits` oidc client's current bearer, so
+             traces, logs and metrics reach qits-observability however this process is dialling it
+             today — the internal alias for the public edge, the public name for the private
+             variant (qits.telemetry.endpoint in application.properties). No BOM here, so the
+             version is a property like qits.eventstream.version above; pinned to the same release
+             qits-orchestrator-service carries. Published by qits-integrations-quarkus. -->
+        <qits.telemetry-core.version>2026.1106.507</qits.telemetry-core.version>
 
         <!-- The user-story framework (TEST SCOPE ONLY): ForwardAuthBootstrapIT is written as
              @UserStory methods, so the packaged forward-auth proof doubles as documentation —
@@ -187,11 +195,21 @@
             <artifactId>quarkus-smallrye-openapi</artifactId>
         </dependency>
         <dependency>
-            <!-- OTLP export to qits-observability. The extension is what instruments the process;
-                 the endpoint and protocol in application.properties are what make it arrive, since
-                 the defaults are gRPC to localhost:4317 and the receiver speaks HTTP/protobuf. -->
+            <!-- The instrumentation. The extension makes the spans, log records and metrics; the
+                 exporters that ship them are qits-telemetry-core's, below. -->
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-opentelemetry</artifactId>
+        </dependency>
+        <dependency>
+            <!-- OTLP export to qits-observability (epic qits-428, qits-2188): replaces all three of
+                 Quarkus' own OTLP exporters with CDI beans that attach the `qits` oidc client's
+                 bearer on every export. qits.telemetry.endpoint in application.properties;
+                 quarkus.otel.exporter.otlp.* no longer reaches anything. This is what fixes the
+                 private edge, whose receiver is qits-observability's public host and 401s an
+                 anonymous POST same as any other peer's. -->
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-telemetry-core</artifactId>
+            <version>${qits.telemetry-core.version}</version>
         </dependency>
         <dependency>
             <!-- The private edge's tunnel DNS responder (TunnelDns, epic qits-1976): netty's DNS

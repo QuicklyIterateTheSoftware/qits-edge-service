@@ -360,7 +360,7 @@ Without the variable it is empty and the edge is the public one, unchanged.
 | `qits.edge.acme.enabled` | `false` — it orders nothing, it serves the public edge's certificate |
 | `qits.edge.idp.dial-url` | `https://idp.qits.<domain>/idp` — idp's public name; this edge is off `qits-net` |
 | `qits.events.url` | `https://events.qits.<domain>` — qits-events' public name, same reason |
-| `qits.observability.url` | `https://observability.qits.<domain>` — qits-observability's public name, same reason |
+| `qits.observability.url` | `https://observability.qits.<domain>` — qits-observability's public name, same reason; `qits.telemetry.endpoint` derives from this key, so the exporter follows it there too, now carrying the `qits` oidc client's bearer (qits-2188) |
 | `quarkus.http.port` / `quarkus.http.ssl-port` | `80` / `443` — a peer dials `https://<app>.qits.<domain>` with no port |
 | `quarkus.tls.key-store.pem.acme.cert` / `.key` | `/work/.letsencrypt/current/lets-encrypt.crt` / `.key` |
 | `quarkus.tls.reload-period` | `1m` — follows the public edge's renewals |
@@ -765,9 +765,11 @@ a file.
 | `qits.edge.idp.client-secret` | `QITS_RESOURCE_IDP_CLIENT_SECRET` | — | Its secret; `QITS_EDGE_SESSIONS_CLIENT_SECRET` is not read any more. Unset is "no credential", which fails startup if the gate is on. These three keys were `qits.idp.dial-url` and `qits.edge.sessions.client-*`, whose environment spellings ARE the older variable names — and an environment variable outranks `application.properties`, so with both injected the old one won (qits-163). They stay under `qits.edge.idp` so a container still carrying the older names cannot set them. Nothing injects `QITS_EDGE_IDP_*` |
 | `quarkus.oidc-client.qits.auth-server-url` | — (follows `qits.edge.idp.dial-url`) | `qits.edge.idp.dial-url`'s own value | **The token this service PRESENTS** (qits-543/qits-1330): the named client `qits`'s own `qits:system` bearer, minted by client credentials from the same `idp:client` resource as the two rows above — one credential at idp, two consumers of it here. Dials the SAME address as every other call this process makes to idp, by reference rather than by a second literal: this is the one service that derives the issuer from the domain in code (`Idp#issuer`), and restating `https://idp.qits.<domain>` here would be refused outright by `EdgeChallengeTest#theShippedFileStatesNoIssuer`. No class of this source tree spends the token today; the qits-eventstream library's calls do, through `OidcClients.getClient("qits")` (qits-1328). Off under `%dev` and `%test` |
 | `quarkus.oidc-client.qits.client-id` / `.credentials.secret` | `QITS_RESOURCE_IDP_CLIENT_ID` / `QITS_RESOURCE_IDP_CLIENT_SECRET` | `dev-qits-edge` / — | The same pair `qits.edge.idp.client-id`/`-secret` read, reused rather than duplicated |
-| `qits.observability.url` | `QITS_OBSERVABILITY_URL` | `http://qits-observability:8080` | Where telemetry goes; the OTLP endpoint is derived from it |
+| `qits.observability.url` | `QITS_OBSERVABILITY_URL` | `http://qits-observability:8080` | Where telemetry goes; `qits.telemetry.endpoint` (qits-telemetry-core, qits-2188) derives the OTLP endpoint from it, bearer attached |
 | `qits.events.url` | `QITS_EVENTS_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-events:8080` | Where the edge's durable consumers read qits-events. **Pinned in this repository's `application.properties`** (qits-1403, exception E1), above the qits-eventstream jar's own default, which is to move to qits-events' public name — through the edge, whose catch-up is what that name waits behind |
-| `qits.observability.url` (as shipped) | `QITS_OBSERVABILITY_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-observability:8080` | The row above names the old bare default; the shipped one is the internal alias, for the same reason as `qits.events.url`: the edge's telemetry must not loop through its own listener (qits-1403, exception E1) |
+| `qits.observability.url` (as shipped) | `QITS_OBSERVABILITY_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-observability:8080` | The row above names the old bare default; the shipped one is the internal alias for the public edge — it has not left qits-net, so its own telemetry must not loop through its own listener (qits-1403, exception E1). The private variant overrides this same key to the public name instead (see "The private edge" above); either way `qits.telemetry.endpoint` follows it with a bearer attached |
+| `qits.telemetry.endpoint` | — (derived) | `${qits.observability.url}/observability/api/otel` | qits-telemetry-core's own default, restated here unchanged: the module's three CDI exporters append `/v1/<signal>`. Not a second address to keep in step — only `qits.observability.url` above ever moves |
+| `qits.telemetry.bearer.enabled` / `.client` | — | `true` / `qits` | The exporters attach the named oidc client's (`qits`, configured above for qits-eventstream) current bearer to every export — on both variants, since the internal alias accepts an authenticated request as readily as an anonymous one |
 
 Six things fail **at startup** rather than per request, deliberately: an environment or application
 name that could not be a DNS label, a default that is not in the list, an application that shares an
@@ -1103,11 +1105,22 @@ past the session's own `expiresAt`, so it widens no door that was open.
 
 ### Telemetry
 
-Traces, logs and metrics leave over OTLP `http/protobuf` to qits-observability, the same block every
-qits service carries. One key names the receiver — `qits.observability.url`, host and port with no
-path — and the ingest path is derived from it, because that path belongs to the receiver rather than
-to the deployment. `OtelLogConfigTest` pins the endpoint and the four log keys so a changed Quarkus
-default cannot switch log export off with a green build.
+Traces, logs and metrics leave over OTLP `http/protobuf` to qits-observability, exported by
+qits-telemetry-core's three CDI beans rather than Quarkus' own exporter (epic qits-428, then
+qits-2188) — the beans attach the `qits` oidc client's current bearer to every export, which
+Quarkus' own exporter never could. One key names the receiver — `qits.observability.url`, host and
+port with no path — and `qits.telemetry.endpoint` derives the ingest path from it, because that path
+belongs to the receiver rather than to the deployment. `OtelLogConfigTest` pins the endpoint, the
+bearer settings and the four log keys so a changed Quarkus default cannot switch log export off with
+a green build.
+
+**The bearer is why the private edge exports at all (qits-2188).** The public edge still dials the
+internal `qits.observability.url` alias below and never left qits-net, so an authenticated export
+costs it nothing extra; the private edge's `qits.observability.url` is qits-observability's public
+name (see "The private edge" above), which answers an anonymous POST with 401 same as any other
+peer's. Both variants read the identical `qits.telemetry.endpoint` key — only
+`qits.observability.url` underneath it moves — so there is one exporter configuration for both,
+not two.
 
 The SDK is **disabled under `%dev` and `%test`**: a clone-alone `./mvnw verify` has no receiver to
 reach, and an exporter retrying against an unresolvable name turns the suite into a wall of export

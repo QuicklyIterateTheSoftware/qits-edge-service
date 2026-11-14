@@ -100,7 +100,9 @@ class PrivateVariantConfigSourceTest {
                     Map.of(
                         "qits.edge.idp.dial-url", "http://dev-qits-idp:8080/idp",
                         "qits.events.url", "http://dev-qits-events:8080",
-                        "qits.observability.url", "http://dev-qits-observability:8080"),
+                        "qits.observability.url", "http://dev-qits-observability:8080",
+                        "qits.telemetry.endpoint",
+                            "${qits.observability.url}/observability/api/otel"),
                     "application.properties",
                     250))
             .withSources(new EnvConfigSource(Map.of("QITS_DOMAIN", "example.test"), 300))
@@ -116,6 +118,12 @@ class PrivateVariantConfigSourceTest {
     assertEquals(
         "https://observability.qits.example.test",
         privateConfig.getValue("qits.observability.url", String.class));
+    // qits-2188: the private edge left qits-net, so its OTLP exporter must resolve the SAME key
+    // (qits.telemetry.endpoint, read by qits-telemetry-core) to the public name too — it is
+    // qits.observability.url moving underneath it that does this, not a second override.
+    assertEquals(
+        "https://observability.qits.example.test/observability/api/otel",
+        privateConfig.getValue("qits.telemetry.endpoint", String.class));
 
     SmallRyeConfig publicConfig =
         new SmallRyeConfigBuilder()
@@ -125,7 +133,9 @@ class PrivateVariantConfigSourceTest {
                     Map.of(
                         "qits.edge.idp.dial-url", "http://dev-qits-idp:8080/idp",
                         "qits.events.url", "http://dev-qits-events:8080",
-                        "qits.observability.url", "http://dev-qits-observability:8080"),
+                        "qits.observability.url", "http://dev-qits-observability:8080",
+                        "qits.telemetry.endpoint",
+                            "${qits.observability.url}/observability/api/otel"),
                     "application.properties",
                     250))
             .withSources(new EnvConfigSource(Map.of("QITS_DOMAIN", "example.test"), 300))
@@ -140,6 +150,12 @@ class PrivateVariantConfigSourceTest {
     assertEquals(
         "http://dev-qits-observability:8080",
         publicConfig.getValue("qits.observability.url", String.class));
+    // The public edge keeps dialling the internal alias — it never left qits-net, and this is the
+    // defect qits-2188 fixed: the exporter now carries a bearer either way, but the public edge's
+    // own telemetry still must not loop through its own listener (qits-1403, exception E1).
+    assertEquals(
+        "http://dev-qits-observability:8080/observability/api/otel",
+        publicConfig.getValue("qits.telemetry.endpoint", String.class));
   }
 
   @Test
