@@ -14,49 +14,18 @@
 # decommission the running service and start a stranger beside it.
 application: qits-edge
 
-# WHAT THIS APPLICATION USED TO BE CALLED. See qits-376: this transfers the database claim and the
-# credential with it, so the predecessor keeps serving on its open pools while the successor comes up.
-renamed_from: qits-platform-edge
-
-# THE EDGE IS THE ONE RENAME WITH A HOST-PORT HANDOVER, and the order matters more than it looks.
-#
-# This service publishes 8080 and 443 in ingress mode, and two swarm services cannot hold one ingress
-# port. So the successor's task cannot be SCHEDULED while the predecessor runs — but its service can
-# be CREATED, and that distinction is the whole plan.
-#
-# WHY THE PORTS MUST BE ON THE FIRST DEPLOY. A swarm service keeps its published ports across an
-# update: `buildUpdateArgv` changes the image, the labels, the environment and the update policy and
-# nothing else, so "another port" is a change of SHAPE, and a change of shape is a `service rm` and a
-# create rather than a deployment. A successor created without its ports could therefore never gain
-# them through the ordinary flow — only by removing the service by hand. The create path DOES apply
-# them, and extras are read at deploy time, so they have to be in the store before this deploys.
-#
-# WHAT THEREFORE HAPPENS, deliberately: this deploy creates dev-qits-edge with both ports, swarm
-# accepts the spec, and the task sits Pending because the predecessor holds them. The deployment row
-# goes FAILED on convergence — which is the expected reading, not a fault. The SERVICE survives, with
-# the right shape. Scaling the predecessor to zero then lets swarm place the task it is already
-# trying to place, and the door comes back on the new service within seconds. A rerun of the deploy
-# phase afterwards records the ACTIVE row.
-#
-# AND THE PREDECESSOR CANNOT GO FIRST. It fronts `registry.qits.<domain>`, which is what the docker
-# daemon pulls every image through, and the deployer runs an explicit `docker pull` whose failure is
-# a FAILED deployment with no local-image fallback. Stop the edge before the image is on the host and
-# the successor's own pull fails. Creating the service first is what puts the image there.
-#
-# ACME IS OFF ON THE SUCCESSOR for this deploy, and it can be turned on by an ordinary redeploy
-# afterwards because environment IS something an update carries. Both services mount the one
-# qits-edge-letsencrypt volume and ACME here is mode=production against a real domain with a DNS
-# token: two reconcilers would order against Let's Encrypt production at once, where the weekly
-# duplicate-certificate limit is five and a shared account directory written by two processes is not
-# something a redeploy repairs. Off, the successor still serves TLS — it reads the certificate the
-# predecessor renews.
-
 # The edge is now a durable projection consumer. `edge` holds its active endpoint snapshots;
 # `eventstream` is qits-eventstream's claim ledger and catch-up watermark. They cannot share a
 # database or Flyway history: both start at V1 and both must survive an edge replacement. The names
 # become QITS_RESOURCE_EDGE_* and QITS_RESOURCE_EVENTSTREAM_* respectively, which the two shipped
-# datasource blocks read. Explicit database names keep this platform-wide process from colliding
-# with the per-environment edge test/projection stores or a future edge variant.
+# datasource blocks read. Explicit database names keep this process from colliding with the private
+# variant's (qits_edge_private, deployments.private.yml).
+#
+# THE NAMES FOLLOW THE APPLICATION (epic qits-2174, task qits-2196). Until 2026-11-14 both were the
+# predecessor's `qits_platform_edge` and `qits_platform_edge_eventstream`, kept with a
+# `renamed_from: qits-platform-edge` that is gone with them. qits-deployments renames a database whose
+# name changes on the same server in place (qits-2193): the edge stops for the rename, which takes
+# seconds, and everything else it provisions (its idp client) is done before the stop (qits-2249).
 #
 # idp:client ASKS QITS-DEPLOYMENTS TO PROVISION THIS APPLICATION'S OWN QITS-IDP SERVICE CLIENT — id
 # `dev-qits-edge` (derived from env + application), roles `qits:system`, fixed in qits-idp code. The
@@ -67,7 +36,7 @@ renamed_from: qits-platform-edge
 # alias instead (qits.edge.idp.dial-url, qits-1403).
 #
 # Ticket qits-162, epic qits-540 contract C3.
-resources: postgresql:edge:qits_platform_edge, postgresql:eventstream:qits_platform_edge_eventstream, idp:client
+resources: postgresql:edge:qits_edge, postgresql:eventstream:qits_edge_eventstream, idp:client
 
 # LIVENESS, NOT READINESS (qits-2160). The deployer turns this path into the swarm HEALTHCHECK, and
 # swarm routes the published port only to a healthy task and kills an unhealthy one. A not-ready edge
