@@ -66,14 +66,25 @@ class OtelLogConfigTest {
   }
 
   @Test
-  void theExporterAimsAtTheQitsReceiverOverHttpProtobuf() {
-    // The receiver is an HTTP resource; the SDK default is gRPC to localhost:4317.
-    assertEquals("http/protobuf", value("quarkus.otel.exporter.otlp.protocol"));
-    // The exporter appends /v1/<signal> to this base. Asserted EXPANDED —
-    // qits.observability.url is the one key a deployment moves, and this is what it resolves to
-    // when it does not.
+  void theExporterAimsAtTheQitsReceiverWithABearer() {
+    // qits-telemetry-core's exporters (qits-2188), not Quarkus' own; quarkus.otel.exporter.otlp.*
+    // reaches nothing any more. The receiver's address is qits.observability.url plus the ingest
+    // path. Asserted EXPANDED — qits.observability.url is the one key a deployment (or the
+    // private variant) moves, and this is what it resolves to when it does not, with no
+    // QITS_DOMAIN needed for this, the public edge.
     assertEquals(
         "http://dev-qits-observability:8080/observability/api/otel",
-        value("quarkus.otel.exporter.otlp.endpoint"));
+        value("qits.telemetry.endpoint"));
+    assertEquals("true", value("qits.telemetry.bearer.enabled"));
+    assertEquals("qits", value("qits.telemetry.bearer.client"));
+  }
+
+  @Test
+  void everySignalGoesThroughTheCdiExporters() {
+    // `cdi` is Quarkus' default for all three; spelled out so a changed default is a diff and not
+    // a silence (the same reasoning as the logs keys above).
+    assertEquals("cdi", value("quarkus.otel.traces.exporter"));
+    assertEquals("cdi", value("quarkus.otel.logs.exporter"));
+    assertEquals("cdi", value("quarkus.otel.metrics.exporter"));
   }
 }
