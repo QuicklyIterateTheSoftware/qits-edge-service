@@ -491,6 +491,324 @@ class TunnelDnsTest {
     assertTrue(TunnelDns.interfaceAddresses().contains(TUNNEL));
   }
 
+  // --- forwarding outside the zone, the tunnel only (qits-2262)
+  // ---------------------------------------------------------------------------------------------
+
+  private static final byte[] FORWARDED = {(byte) 198, 51, 100, 4};
+
+  /**
+   * A fake upstream resolver on the loopback, UDP and TCP on ports of their own: it answers every
+   * query with a message it writes by hand — one A record {@link #FORWARDED}, or NXDOMAIN with an
+   * SOA whose names are compression pointers into its own message — or not at all.
+   */
+  private static final class FakeUpstream implements AutoCloseable {
+
+    enum Mode {
+      ANSWER,
+      NXDOMAIN,
+      SILENT
+    }
+
+    volatile Mode mode = Mode.ANSWER;
+    final List<byte[]> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
+    final java.net.DatagramSocket udp;
+    final java.net.ServerSocket tcp;
+
+    FakeUpstream() throws Exception {
+      udp = new java.net.DatagramSocket(new InetSocketAddress(TUNNEL, 0));
+      tcp = new java.net.ServerSocket(0, 8, TUNNEL);
+      Thread.ofVirtual().start(this::serveUdp);
+      Thread.ofVirtual().start(this::serveTcp);
+    }
+
+    InetSocketAddress udpAddress() {
+      return new InetSocketAddress(TUNNEL, udp.getLocalPort());
+    }
+
+    InetSocketAddress tcpAddress() {
+      return new InetSocketAddress(TUNNEL, tcp.getLocalPort());
+    }
+
+    private void serveUdp() {
+      byte[] buffer = new byte[4096];
+      while (!udp.isClosed()) {
+        try {
+          java.net.DatagramPacket packet = new java.net.DatagramPacket(buffer, buffer.length);
+          udp.receive(packet);
+          byte[] query = java.util.Arrays.copyOf(packet.getData(), packet.getLength());
+          asked.add(query);
+          byte[] reply = reply(query);
+          if (reply != null) {
+            udp.send(new java.net.DatagramPacket(reply, reply.length, packet.getSocketAddress()));
+          }
+        } catch (java.io.IOException closed) {
+          return;
+        }
+      }
+    }
+
+    private void serveTcp() {
+      while (!tcp.isClosed()) {
+        try (java.net.Socket connection = tcp.accept()) {
+          java.io.DataInputStream in = new java.io.DataInputStream(connection.getInputStream());
+          byte[] query = new byte[in.readUnsignedShort()];
+          in.readFully(query);
+          asked.add(query);
+          byte[] reply = reply(query);
+          if (reply == null) {
+            Thread.sleep(5_000);
+            continue;
+          }
+          java.io.DataOutputStream out = new java.io.DataOutputStream(connection.getOutputStream());
+          out.writeShort(reply.length);
+          out.write(reply);
+          out.flush();
+        } catch (java.io.IOException | InterruptedException closed) {
+          if (tcp.isClosed()) {
+            return;
+          }
+        }
+      }
+    }
+
+    /** The answer to {@code query}, its id and question copied; null when silent. */
+    private byte[] reply(byte[] query) {
+      Mode now = mode;
+      if (now == Mode.SILENT) {
+        return null;
+      }
+      int end = 12;
+      while (query[end] != 0) {
+        end += (query[end] & 0xFF) + 1;
+      }
+      end += 1 + 4; // the root label, then QTYPE and QCLASS
+      java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+      java.nio.ByteBuffer header = java.nio.ByteBuffer.allocate(12);
+      header.put(query, 0, 2); // the id
+      header.putShort((short) (now == Mode.NXDOMAIN ? 0x8183 : 0x8180)); // QR RD RA, rcode
+      header.putShort((short) 1); // QDCOUNT
+      header.putShort((short) (now == Mode.ANSWER ? 1 : 0)); // ANCOUNT
+      header.putShort((short) (now == Mode.NXDOMAIN ? 1 : 0)); // NSCOUNT
+      header.putShort((short) 0); // ARCOUNT
+      out.writeBytes(header.array());
+      out.write(query, 12, end - 12);
+      java.nio.ByteBuffer record = java.nio.ByteBuffer.allocate(64);
+      record.putShort((short) 0xC00C); // the question's name, by pointer
+      if (now == Mode.ANSWER) {
+        record.putShort((short) 1).putShort((short) 1).putInt(60).putShort((short) 4);
+        record.put(FORWARDED);
+      } else {
+        record.putShort((short) 6).putShort((short) 1).putInt(60).putShort((short) 24);
+        record.putShort((short) 0xC00C).putShort((short) 0xC00C); // MNAME, RNAME by pointer
+        record.putInt(1).putInt(2).putInt(3).putInt(4).putInt(5);
+      }
+      out.write(record.array(), 0, record.position());
+      return out.toByteArray();
+    }
+
+    @Override
+    public void close() throws Exception {
+      udp.close();
+      tcp.close();
+    }
+  }
+
+  private static Forwarder forwarder(InetSocketAddress upstream, long timeoutMillis) {
+    return new Forwarder(
+        "wohlben.eu", List.of(upstream), java.time.Duration.ofMillis(timeoutMillis));
+  }
+
+  @Test
+  void outsideTheZoneOnTheTunnelIsForwardedOverUdpAndTcp() throws Exception {
+    EventLoopGroup client = new NioEventLoopGroup(1);
+    try (FakeUpstream upstream = new FakeUpstream();
+        TunnelDns.Server udpTunnel =
+            TunnelDns.Server.listen(TUNNEL, 0, answers, forwarder(upstream.udpAddress(), 2_000));
+        TunnelDns.Server tcpTunnel =
+            TunnelDns.Server.listen(TUNNEL, 0, answers, forwarder(upstream.tcpAddress(), 2_000))) {
+      DnsResponse viaUdp = udp(client, TUNNEL, udpTunnel.udpPort(), "Example.COM");
+      assertEquals(9, viaUdp.id(), "the client's id, not the upstream exchange's");
+      assertEquals(DnsResponseCode.NOERROR, viaUdp.code());
+      assertFalse(viaUdp.isAuthoritativeAnswer(), "the upstream's flags, not this zone's");
+      assertArrayEquals(FORWARDED, wireAddress(viaUdp));
+
+      DnsResponse viaTcp = tcp(client, TUNNEL, tcpTunnel.tcpPort(), "example.com");
+      assertEquals(10, viaTcp.id());
+      assertEquals(DnsResponseCode.NOERROR, viaTcp.code());
+      assertArrayEquals(FORWARDED, wireAddress(viaTcp));
+
+      assertEquals(2, upstream.asked.size(), "one exchange per query, each its own transport");
+      assertArrayEquals(
+          TUNNEL.getAddress(),
+          wireAddress(udp(client, TUNNEL, udpTunnel.udpPort(), "ci.dev.acme.wohlben.eu")),
+          "the zone is still answered here, never forwarded");
+      assertEquals(2, upstream.asked.size());
+    } finally {
+      client.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+    }
+  }
+
+  @Test
+  void anUpstreamNxdomainIsRelayedWithItsAuthority() throws Exception {
+    EventLoopGroup client = new NioEventLoopGroup(1);
+    try (FakeUpstream upstream = new FakeUpstream();
+        TunnelDns.Server udpTunnel =
+            TunnelDns.Server.listen(TUNNEL, 0, answers, forwarder(upstream.udpAddress(), 2_000));
+        TunnelDns.Server tcpTunnel =
+            TunnelDns.Server.listen(TUNNEL, 0, answers, forwarder(upstream.tcpAddress(), 2_000))) {
+      upstream.mode = FakeUpstream.Mode.NXDOMAIN;
+      for (DnsResponse response :
+          List.of(
+              udp(client, TUNNEL, udpTunnel.udpPort(), "nothing.example"),
+              tcp(client, TUNNEL, tcpTunnel.tcpPort(), "nothing.example"))) {
+        assertEquals(DnsResponseCode.NXDOMAIN, response.code());
+        assertEquals(0, response.count(DnsSection.ANSWER));
+        assertEquals(
+            1,
+            response.count(DnsSection.AUTHORITY),
+            "the SOA, its compressed names still pointing into the relayed message");
+      }
+    } finally {
+      client.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+    }
+  }
+
+  @Test
+  void forwardingDoesNotWaitForTheRoutesView() throws Exception {
+    ready.set(false);
+    EventLoopGroup client = new NioEventLoopGroup(1);
+    try (FakeUpstream upstream = new FakeUpstream();
+        TunnelDns.Server tunnel =
+            TunnelDns.Server.listen(TUNNEL, 0, answers, forwarder(upstream.udpAddress(), 2_000))) {
+      assertArrayEquals(
+          FORWARDED, wireAddress(udp(client, TUNNEL, tunnel.udpPort(), "example.com")));
+      assertEquals(
+          DnsResponseCode.SERVFAIL,
+          udp(client, TUNNEL, tunnel.udpPort(), "ci.dev.acme.wohlben.eu").code(),
+          "the zone still waits");
+    } finally {
+      client.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+    }
+  }
+
+  @Test
+  void anUpstreamThatIsDownOrSilentIsServfail() throws Exception {
+    EventLoopGroup client = new NioEventLoopGroup(1);
+    InetSocketAddress nobody;
+    try (java.net.DatagramSocket taken = new java.net.DatagramSocket(0, TUNNEL)) {
+      nobody = new InetSocketAddress(TUNNEL, taken.getLocalPort()); // closed again: nothing there
+    }
+    try (FakeUpstream upstream = new FakeUpstream();
+        TunnelDns.Server down =
+            TunnelDns.Server.listen(TUNNEL, 0, answers, forwarder(nobody, 5_000));
+        TunnelDns.Server silentUdp =
+            TunnelDns.Server.listen(TUNNEL, 0, answers, forwarder(upstream.udpAddress(), 300));
+        TunnelDns.Server silentTcp =
+            TunnelDns.Server.listen(TUNNEL, 0, answers, forwarder(upstream.tcpAddress(), 300))) {
+      long before = System.nanoTime();
+      DnsResponse refused = udp(client, TUNNEL, down.udpPort(), "example.com");
+      assertEquals(DnsResponseCode.SERVFAIL, refused.code());
+      assertEquals(9, refused.id());
+      assertEquals(
+          DnsResponseCode.SERVFAIL, tcp(client, TUNNEL, down.tcpPort(), "example.com").code());
+      assertTrue(
+          System.nanoTime() - before < TimeUnit.SECONDS.toNanos(4),
+          "an upstream that refuses outright is not waited for");
+
+      upstream.mode = FakeUpstream.Mode.SILENT;
+      assertEquals(
+          DnsResponseCode.SERVFAIL, udp(client, TUNNEL, silentUdp.udpPort(), "example.com").code());
+      assertEquals(
+          DnsResponseCode.SERVFAIL, tcp(client, TUNNEL, silentTcp.tcpPort(), "example.com").code());
+    } finally {
+      client.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+    }
+  }
+
+  @Test
+  void theOverlayStillRefusesOutsideTheZoneWhileTheTunnelForwards() throws Exception {
+    EventLoopGroup client = new NioEventLoopGroup(1);
+    try (FakeUpstream upstream = new FakeUpstream();
+        TunnelDns.Server tunnel =
+            TunnelDns.Server.listen(TUNNEL, 0, answers, forwarder(upstream.udpAddress(), 2_000))) {
+      List<TunnelDns.Server> overlay =
+          TunnelDns.listenOverlay(
+              Optional.of("127.0.0.2/32"), TUNNEL, 0, answers, () -> List.of(TUNNEL, OVERLAY));
+      try {
+        TunnelDns.Server served = overlay.get(0);
+        assertEquals(
+            DnsResponseCode.REFUSED, udp(client, OVERLAY, served.udpPort(), "example.com").code());
+        assertEquals(
+            DnsResponseCode.REFUSED, tcp(client, OVERLAY, served.tcpPort(), "example.com").code());
+        assertArrayEquals(
+            FORWARDED, wireAddress(udp(client, TUNNEL, tunnel.udpPort(), "example.com")));
+        assertEquals(1, upstream.asked.size(), "only the tunnel's query went upstream");
+      } finally {
+        overlay.forEach(TunnelDns.Server::close);
+      }
+    } finally {
+      client.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+    }
+  }
+
+  @Test
+  void theUpstreamsAreResolvConfsNameserversUnlessStated() {
+    String resolvConf =
+        """
+        # generated
+        search example.internal
+        nameserver 127.0.0.11
+        nameserver  2001:db8::53
+        nameserver fe80::1%eth0
+        options ndots:0
+        """;
+    assertEquals(
+        List.of(new InetSocketAddress("127.0.0.11", 53), new InetSocketAddress("2001:db8::53", 53)),
+        Forwarder.upstreams(Optional.empty(), resolvConf, List.of()),
+        "the nameserver lines on port 53; a scoped address is no literal and is skipped");
+    assertEquals(
+        List.of(
+            new InetSocketAddress("192.0.2.53", 5353),
+            new InetSocketAddress("192.0.2.54", 53),
+            new InetSocketAddress("2001:db8::1", 53),
+            new InetSocketAddress("2001:db8::2", 5300)),
+        Forwarder.upstreams(
+            Optional.of(" 192.0.2.53:5353, 192.0.2.54,2001:db8::1 ,[2001:db8::2]:5300, dns.google"),
+            resolvConf,
+            List.of()),
+        "a stated list wins, and a name is no literal");
+    assertTrue(Forwarder.upstreams(Optional.of(" "), null, List.of()).isEmpty());
+    assertEquals(
+        List.of(new InetSocketAddress("127.0.0.11", 53)),
+        Forwarder.upstreams(Optional.of(" "), "nameserver 127.0.0.11", List.of()),
+        "a blank list is unset");
+  }
+
+  @Test
+  void anUpstreamThatIsThisRespondersOwnSocketIsDropped() {
+    List<InetSocketAddress> own =
+        List.of(new InetSocketAddress("100.96.0.1", 53), new InetSocketAddress("10.231.0.5", 53));
+    assertEquals(
+        List.of(new InetSocketAddress("100.96.0.1", 5353), new InetSocketAddress("127.0.0.11", 53)),
+        Forwarder.upstreams(
+            Optional.of("100.96.0.1, 10.231.0.5:53, 0.0.0.0, 100.96.0.1:5353, 127.0.0.11"),
+            null,
+            own));
+  }
+
+  @Test
+  void onlyAStandardQueryOutsideTheZoneIsForwarded() {
+    Forwarder forwarder = forwarder(new InetSocketAddress("192.0.2.53", 53), 1_000);
+    assertTrue(forwarder.forwards(query("example.com", DnsRecordType.A)));
+    assertTrue(forwarder.forwards(query("notwohlben.eu.", DnsRecordType.AAAA)));
+    assertFalse(forwarder.forwards(query("WOHLBEN.eu.", DnsRecordType.A)));
+    assertFalse(forwarder.forwards(query("ci.wohlben.eu", DnsRecordType.A)));
+    assertFalse(forwarder.forwards(new DefaultDnsQuery(1, DnsOpCode.QUERY)), "FORMERR is ours");
+    DnsQuery status = new DefaultDnsQuery(1, DnsOpCode.STATUS);
+    status.setRecord(DnsSection.QUESTION, new DefaultDnsQuestion("example.com", DnsRecordType.A));
+    assertFalse(forwarder.forwards(status), "NOTIMP is ours");
+  }
+
   /** One A query over UDP to {@code server}:{@code port}; the response is read, then released. */
   private static DnsResponse udp(EventLoopGroup group, Inet4Address server, int port, String name)
       throws Exception {
@@ -560,15 +878,19 @@ class TunnelDnsTest {
   private static DnsResponse detach(DnsResponse wire) {
     try {
       DefaultDnsResponse copy = new DefaultDnsResponse(wire.id(), wire.opCode(), wire.code());
-      DnsRecord answer = wire.recordAt(DnsSection.ANSWER);
-      if (answer instanceof DnsRawRecord raw) {
-        copy.addRecord(
-            DnsSection.ANSWER,
-            new DefaultDnsRawRecord(
-                raw.name(),
-                raw.type(),
-                raw.timeToLive(),
-                Unpooled.wrappedBuffer(ByteBufUtil.getBytes(raw.content()))));
+      copy.setAuthoritativeAnswer(wire.isAuthoritativeAnswer());
+      for (DnsSection section : new DnsSection[] {DnsSection.ANSWER, DnsSection.AUTHORITY}) {
+        for (int i = 0; i < wire.count(section); i++) {
+          if (wire.recordAt(section, i) instanceof DnsRawRecord raw) {
+            copy.addRecord(
+                section,
+                new DefaultDnsRawRecord(
+                    raw.name(),
+                    raw.type(),
+                    raw.timeToLive(),
+                    Unpooled.wrappedBuffer(ByteBufUtil.getBytes(raw.content()))));
+          }
+        }
       }
       return copy;
     } finally {
