@@ -1,13 +1,13 @@
-# The edge's own two API operations (qits-1926).
+# The edge's own API operations (qits-1926; the route table, qits-2174).
 #
 # Every other request the edge takes is proxied to the service its Host names, and that service's own
-# document describes it. These two are not: they are Vert.x routes the edge answers itself, on EVERY
-# vhost and ahead of the proxy (NavigationRoute, UpstreamPoolsRoute), so no annotation can describe
+# document describes it. These are not: they are Vert.x routes the edge answers itself, on EVERY
+# vhost and ahead of the proxy (NavigationRoute, UpstreamPoolsRoute, RouteTableRoute), so no annotation can describe
 # them and SmallRye scans nothing here (mp.openapi.scan.disable). This file is merged into the
 # document as it is; docs/openapi.yml is its committed copy (OpenApiSchemaExportTest), and the
 # operationIds are the ones golden-masters/index.json records them under.
 #
-# Both routes also answer HEAD with the same headers and no body. Only GET is declared: HEAD is the
+# The GET routes also answer HEAD with the same headers and no body. Only GET is declared: HEAD is the
 # protocol's, not an operation a caller is written against.
 #
 # The answer depends on the Host the request is asked on — the environment it names, and the
@@ -78,6 +78,82 @@ paths:
             The identity provider could not be reached to vouch for the credential — a check that
             cannot be made is not a verdict. Retry-After is set; the body is the docker-style
             {"errors":[{"code":"UNAVAILABLE","message","detail":null}]} envelope.
+          headers:
+            Retry-After: { schema: { type: integer } }
+  /edge-route-table:
+    put:
+      operationId: putEdgeRouteTable
+      summary: Store the route table qits-deployments built for this edge, when it is newer than the held one.
+      description: >-
+        Only qits-deployments may push: a bearer JWT the edge accepts, carrying qits:system, whose azp
+        is qits.edge.routes.publisher (the deployer's idp client, <env>-qits-deployments). The table
+        is validated whole — hosts are DNS labels and no environment name, a platform app label on the
+        public edge must be that platform application's own address, and no (environment, path) and
+        no (environment, host) is published twice — and stored when its version is above the held
+        one. The stored table is reported by getEdgeRouteTable; this release does not route from it
+        yet.
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EdgeRouteTable" }
+      responses:
+        "204":
+          description: Stored; it is the held table now.
+        "200":
+          description: The version is not above the held one, which is unchanged.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [held]
+                properties:
+                  held:
+                    type: integer
+                    format: int64
+                    description: The version this edge holds.
+        "403":
+          description: Not qits-deployments' own service bearer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EdgeRouteTableError" }
+        "422":
+          description: The table is invalid and refused whole; the held table is unchanged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EdgeRouteTableError" }
+        "503":
+          description: >-
+            The identity provider could not be reached to vouch for the credential. Retry-After is
+            set.
+          headers:
+            Retry-After: { schema: { type: integer } }
+    get:
+      operationId: getEdgeRouteTable
+      summary: Which route table this edge holds.
+      description: >-
+        Answered to a qits:system service bearer the edge accepts — qits-deployments, which pushes
+        again when the edge reports a version below its own, included. version and receivedAt are
+        null while no table has been received.
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: The held table's version. Cache-Control is no-store.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EdgeRouteTableHeld" }
+        "403":
+          description: Not a qits:system service bearer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EdgeRouteTableError" }
+        "503":
+          description: >-
+            The identity provider could not be reached to vouch for the credential. Retry-After is
+            set.
           headers:
             Retry-After: { schema: { type: integer } }
 components:
@@ -196,3 +272,81 @@ components:
         userAgent: { type: [string, "null"] }
         workspaceId: { type: [string, "null"] }
         traceId: { type: [string, "null"] }
+    EdgeRouteTable:
+      type: object
+      required: [edge, version, applications]
+      properties:
+        edge:
+          type: string
+          enum: [public, private]
+          description: The edge the table is for; a table for the other edge is refused.
+        version:
+          type: integer
+          format: int64
+          description: Only ever goes up; epoch milliseconds when the deployer built a changed table.
+        builtAt:
+          type: string
+          format: date-time
+        applications:
+          type: array
+          items: { $ref: "#/components/schemas/EdgeRouteTableApplication" }
+        withdrawn:
+          type: array
+          description: Applications this edge does not route whose host /main-navigation still names to a signed-in caller.
+          items:
+            type: object
+            required: [environment, application]
+            properties:
+              environment: { type: string }
+              application: { type: string }
+              host: { type: [string, "null"] }
+              exposure: { type: string, enum: [public, private, both] }
+    EdgeRouteTableApplication:
+      type: object
+      required: [environment, application, endpoints]
+      properties:
+        environment: { type: string }
+        application: { type: string }
+        exposure: { type: string, enum: [public, private, both] }
+        browserHost:
+          type: [string, "null"]
+          description: The DNS label the application answers to.
+        apiDocsPath: { type: [string, "null"] }
+        endpoints:
+          type: array
+          description: The first is the application's primary route.
+          items:
+            type: object
+            required: [path, upstreamHost, upstreamPort]
+            properties:
+              path: { type: string }
+              upstreamHost: { type: string }
+              upstreamPort: { type: integer }
+        navigation:
+          type: array
+          items:
+            type: object
+            required: [slot, label]
+            properties:
+              slot: { type: string }
+              label: { type: string }
+              position: { type: [integer, "null"] }
+              subpath: { type: [string, "null"] }
+    EdgeRouteTableHeld:
+      type: object
+      required: [edge, version, receivedAt]
+      properties:
+        edge:
+          type: string
+          enum: [public, private]
+        version:
+          type: [integer, "null"]
+          format: int64
+        receivedAt:
+          type: [string, "null"]
+          format: date-time
+    EdgeRouteTableError:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }

@@ -72,6 +72,10 @@ public class PrivateVariantConfigSource implements ConfigSource {
     values.put("qits.edge.idp.dial-url", "https://idp.qits.${QITS_DOMAIN}/idp");
     values.put("qits.events.url", "https://events.qits.${QITS_DOMAIN}");
     values.put("qits.observability.url", "https://observability.qits.${QITS_DOMAIN}");
+    // The deployer's door the private edge fetches its route table from at start (epic qits-2174):
+    // both are on qits-private, so the internal alias is the right address here. The public edge
+    // states no url and never fetches.
+    values.put("qits.edge.routes.url", "http://${QITS_ENVIRONMENT:dev}-qits-deployments:8080");
     values.put("quarkus.http.port", "80");
     values.put("quarkus.http.ssl-port", "443");
     // The public edge's own TLS settings, QUARKUS_TLS_KEY_STORE_PEM_ACME_CERT/_KEY and

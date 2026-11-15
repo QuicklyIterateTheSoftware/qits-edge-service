@@ -136,6 +136,31 @@ Historical mentions of it below are exactly that; nothing on the platform runs o
          platform app label, in code                      deployment projection
 ```
 
+### The pushed route table (stored, not yet served)
+
+Epic qits-2174 moves routing from the `DeploymentActive` projection to a **route table qits-deployments
+builds and pushes**, one per edge. This release (D2a) only receives and stores it; everything above
+still describes how the edge routes, and nothing about readiness changes.
+
+- **`PUT /edge-route-table`**, on every vhost, answered by the edge (`RouteTableRoute`). Only the
+  deployer may push: a bearer JWT the edge accepts, carrying `qits:system`, whose `azp` is
+  `qits.edge.routes.publisher` (default `${QITS_ENVIRONMENT:dev}-qits-deployments`); anything else is
+  a `403`. The table is validated whole (`RouteTables`) — every host a DNS label and no environment
+  name, a `PlatformApps` label on the public edge only at that platform application's own address,
+  no `(environment, path)` and no `(environment, host)` twice, slots from the closed vocabulary —
+  and stored in `edge_route_table` when its `version` is above the held one: `204`, and INFO `route
+  table <edge> <old> -> <new>: <n> applications`. A version that is not above it is `200
+  {"held":<v>}`; an invalid table is `422 {"error":"<reason>"}`, ERROR `refused route table
+  <version>: <reason>`, and the held table stays.
+- **`GET /edge-route-table`** answers any `qits:system` service bearer with
+  `{"edge":"public|private","version":<v>|null,"receivedAt":"…"|null}`.
+- **The private edge fetches at start**: `GET ${qits.edge.routes.url}/deployments/api/edge-routes/private`
+  with the `qits` oidc client's bearer, on a virtual thread, retried after 1, 2, 4 … 30 s until the
+  deployer answers, with one WARN `route table fetch failed: <reason>` (a deployer without the door
+  yet answers 404, which is retried the same way). `qits.edge.routes.url` is stated by
+  `PrivateVariantConfigSource` alone; the public edge never fetches — it is not on the deployer's
+  network — and waits for a push.
+
 ## The routing model
 
 A `Host` name selects an environment, and optionally a project and an application inside it:
@@ -378,6 +403,7 @@ Without the variable it is empty and the edge is the public one, unchanged.
 | `qits.edge.idp.dial-url` | `https://idp.qits.<domain>/idp` — idp's public name; this edge is off `qits-net` |
 | `qits.events.url` | `https://events.qits.<domain>` — qits-events' public name, same reason |
 | `qits.observability.url` | `https://observability.qits.<domain>` — qits-observability's public name, same reason; `qits.telemetry.endpoint` derives from this key, so the exporter follows it there too, now carrying the `qits` oidc client's bearer (qits-2188) |
+| `qits.edge.routes.url` | `http://<env>-qits-deployments:8080` — where it fetches its route table at start; both are on `qits-private` (qits-2174, see *The pushed route table*) |
 | `quarkus.http.port` / `quarkus.http.ssl-port` | `80` / `443` — a peer dials `https://<app>.qits.<domain>` with no port |
 | `quarkus.tls.key-store.pem.acme.cert` / `.key` | `/work/.letsencrypt/current/lets-encrypt.crt` / `.key` |
 | `quarkus.tls.reload-period` | `1m` — follows the public edge's renewals |

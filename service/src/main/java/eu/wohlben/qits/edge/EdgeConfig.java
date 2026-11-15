@@ -120,6 +120,30 @@ public interface EdgeConfig {
    */
   Map<String, App> apps();
 
+  /**
+   * The route table qits-deployments pushes (epic qits-2174) — see {@link RouteTableRoute} and
+   * {@link RouteTables}.
+   */
+  Routes routes();
+
+  interface Routes {
+
+    /**
+     * The one idp client allowed to push a table: the {@code azp} a {@code PUT /edge-route-table}
+     * bearer must carry. The deployer's own client id, which is its wire alias in this edge's
+     * environment.
+     */
+    @WithDefault("${QITS_ENVIRONMENT:dev}-qits-deployments")
+    String publisher();
+
+    /**
+     * Where the private edge fetches its table at start, {@code http://<env>-qits-deployments:8080}
+     * — set by {@link PrivateVariantConfigSource} and nowhere else. Absent on the public edge,
+     * which never fetches: it is not on the deployer's network.
+     */
+    Optional<String> url();
+  }
+
   /** The startup proof that turns a persisted deployment snapshot into an authoritative one. */
   Projection projection();
 

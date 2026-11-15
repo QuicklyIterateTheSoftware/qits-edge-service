@@ -4,9 +4,12 @@ import eu.wohlben.qits.edge.DeploymentActiveSubscriber;
 import eu.wohlben.qits.edge.EdgeConfig;
 import eu.wohlben.qits.edge.EdgeProjects;
 import eu.wohlben.qits.edge.EdgeRoutes;
+import eu.wohlben.qits.edge.RouteTables;
 import eu.wohlben.qits.edge.StubGateways;
 import eu.wohlben.qits.edge.Upstream;
 import eu.wohlben.qits.eventstream.control.EventFrame;
+import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.restassured.RestAssured;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
@@ -17,6 +20,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
@@ -28,6 +34,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.function.Supplier;
+import org.eclipse.microprofile.config.ConfigProvider;
 
 /**
  * <b>qits-edge's provider states</b> (epic qits-112): each publishes the projection one consumer
@@ -76,6 +83,37 @@ public class ProviderStates {
   public static final String AN_OPEN_UPSTREAM_POOL = "an open upstream pool";
 
   /**
+   * The edge holds no route table (qits-2174): a push of {@link #ROUTE_TABLE} is stored. {@link
+   * #requestHeaders} carries qits-deployments' own service bearer for this state and the two below,
+   * which the verifier sets over whatever the pact's request holds: <b>a consumer pact against them
+   * must send {@code Authorization}</b> (any {@code Bearer} value — the provider substitutes the
+   * deployer's).
+   */
+  public static final String NO_ROUTE_TABLE_HELD = "no route table held";
+
+  /**
+   * The edge holds {@link #ROUTE_TABLE} at {@link #ROUTE_TABLE_VERSION}: pushing it again is
+   * answered with the held version, and {@code GET /edge-route-table} reports it.
+   */
+  public static final String A_ROUTE_TABLE_HELD = "a route table held";
+
+  /**
+   * The edge holds no route table, and a push that publishes one host for two applications is
+   * refused whole with a 422 ({@link #INVALID_ROUTE_TABLE}).
+   */
+  public static final String NO_ROUTE_TABLE_HELD_AND_AN_INVALID_PUSH =
+      "no route table held and an invalid push";
+
+  /** The version {@link #ROUTE_TABLE} carries: the deployer's epoch-millis versions. */
+  public static final long ROUTE_TABLE_VERSION = 1763025600000L;
+
+  /** A public table: qits-ci on {@code ci} in the default environment, and qits-stt withdrawn. */
+  public static final String ROUTE_TABLE = routeTable("ci", ROUTE_TABLE_VERSION).encode();
+
+  /** {@link #ROUTE_TABLE} with a second application on qits-ci's host, which no edge accepts. */
+  public static final String INVALID_ROUTE_TABLE = invalidRouteTable().encode();
+
+  /**
    * The platform's own project. It has no environment tier, so its applications are {@code
    * <app>.qits.<domain>} and they are served in the default environment.
    */
@@ -112,7 +150,12 @@ public class ProviderStates {
   @Inject DeploymentActiveSubscriber deployments;
   @Inject EdgeProjects projects;
   @Inject EdgeRoutes routes;
+  @Inject RouteTables tables;
   @Inject EdgeConfig config;
+
+  @Inject
+  @DataSource("edge")
+  AgroalDataSource edgeDataSource;
 
   private final Map<String, Supplier<Setup>> states = new LinkedHashMap<>();
 
@@ -120,6 +163,11 @@ public class ProviderStates {
     states.put(A_PUBLISHED_NAVIGATION, this::aPublishedNavigation);
     states.put(A_SIGNED_IN_CALLER_AND_A_PRIVATE_APP, this::aSignedInCallerAndAPrivateApp);
     states.put(AN_OPEN_UPSTREAM_POOL, this::anOpenUpstreamPool);
+    states.put(NO_ROUTE_TABLE_HELD, () -> routeTableState(NO_ROUTE_TABLE_HELD, false));
+    states.put(A_ROUTE_TABLE_HELD, () -> routeTableState(A_ROUTE_TABLE_HELD, true));
+    states.put(
+        NO_ROUTE_TABLE_HELD_AND_AN_INVALID_PUSH,
+        () -> routeTableState(NO_ROUTE_TABLE_HELD_AND_AN_INVALID_PUSH, false));
   }
 
   /** Every state name this provider answers for. */
@@ -157,7 +205,18 @@ public class ProviderStates {
           // Any name answers /upstream-pools; the platform project's own door is the one a shell
           // asks it on.
           AN_OPEN_UPSTREAM_POOL,
+          PROJECT + "." + DOMAIN,
+          // The public edge's own address, where qits-deployments pushes: https://qits.<domain>.
+          NO_ROUTE_TABLE_HELD,
+          PROJECT + "." + DOMAIN,
+          A_ROUTE_TABLE_HELD,
+          PROJECT + "." + DOMAIN,
+          NO_ROUTE_TABLE_HELD_AND_AN_INVALID_PUSH,
           PROJECT + "." + DOMAIN);
+
+  /** The states whose operation only qits-deployments' own bearer may ask (qits-2174). */
+  private static final Set<String> PUBLISHED =
+      Set.of(NO_ROUTE_TABLE_HELD, A_ROUTE_TABLE_HELD, NO_ROUTE_TABLE_HELD_AND_AN_INVALID_PUSH);
 
   /** The states whose operation is answered only to an admitted caller. */
   private static final Set<String> CREDENTIALED =
@@ -173,6 +232,16 @@ public class ProviderStates {
     String host = HOSTS.get(state);
     if (host == null) {
       throw new IllegalArgumentException("No host for the provider state '" + state + "'");
+    }
+    if (PUBLISHED.contains(state)) {
+      return Map.of(
+          "Host",
+          host,
+          "X-Forwarded-Proto",
+          "https",
+          "Authorization",
+          StubGateways.serviceBearer(
+              ConfigProvider.getConfig().getValue("qits.edge.routes.publisher", String.class)));
     }
     if (CREDENTIALED.contains(state)) {
       return Map.of(
@@ -381,6 +450,80 @@ public class ProviderStates {
             + SETTLE
             + " — something else in this JVM proxied a request? Last answer: "
             + last);
+  }
+
+  /**
+   * The edge's route table emptied and, when {@code held}, {@link #ROUTE_TABLE} stored. Emptied
+   * rather than left as the last state found it, because the version only goes up: a state that ran
+   * earlier in the JVM would otherwise turn this one's 204 into a 200.
+   */
+  private Setup routeTableState(String state, boolean held) {
+    try (Connection connection = edgeDataSource.getConnection();
+        PreparedStatement delete = connection.prepareStatement("delete from edge_route_table")) {
+      delete.executeUpdate();
+    } catch (SQLException e) {
+      throw new IllegalStateException("State '" + state + "' could not empty the route table", e);
+    }
+    if (held) {
+      RouteTables.Outcome outcome = tables.offer(ROUTE_TABLE);
+      if (!(outcome instanceof RouteTables.Stored)) {
+        throw new IllegalStateException(
+            "State '" + state + "' did not store its route table: " + outcome);
+      }
+    }
+    Map<String, String> params = new TreeMap<>();
+    params.put("host", HOSTS.get(state));
+    return new Setup(Collections.unmodifiableMap(params));
+  }
+
+  /** A public table, one application on {@code host} in prod, the default environment. */
+  private static JsonObject routeTable(String host, long version) {
+    return new JsonObject()
+        .put("edge", "public")
+        .put("version", version)
+        .put("builtAt", "2026-11-13T09:20:00Z")
+        .put("applications", new JsonArray().add(routedApplication("qits-ci", host, "/ci")))
+        .put(
+            "withdrawn",
+            new JsonArray()
+                .add(
+                    new JsonObject()
+                        .put("environment", "prod")
+                        .put("application", "qits-stt")
+                        .put("host", "stt")
+                        .put("exposure", "private")));
+  }
+
+  private static JsonObject routedApplication(String application, String host, String path) {
+    return new JsonObject()
+        .put("environment", "prod")
+        .put("application", application)
+        .put("exposure", "public")
+        .put("browserHost", host)
+        .put("apiDocsPath", path + "/q/openapi")
+        .put(
+            "endpoints",
+            new JsonArray()
+                .add(
+                    new JsonObject()
+                        .put("path", path)
+                        .put("upstreamHost", "prod-" + application)
+                        .put("upstreamPort", 8080)))
+        .put(
+            "navigation",
+            new JsonArray()
+                .add(
+                    new JsonObject()
+                        .put("slot", "platform")
+                        .put("label", "CI")
+                        .put("position", 30)
+                        .putNull("subpath")));
+  }
+
+  private static JsonObject invalidRouteTable() {
+    JsonObject table = routeTable("ci", ROUTE_TABLE_VERSION + 1);
+    table.getJsonArray("applications").add(routedApplication("qits-ci-copy", "ci", "/ci-copy"));
+    return table;
   }
 
   /** Where the edge dials {@link #POOLED_APP} in {@link #POOLED_ENVIRONMENT}: the test override. */

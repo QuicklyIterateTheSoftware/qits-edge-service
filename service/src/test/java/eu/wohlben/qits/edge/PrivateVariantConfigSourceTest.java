@@ -30,6 +30,10 @@ class PrivateVariantConfigSourceTest {
     assertEquals("https://events.qits.${QITS_DOMAIN}", source.getValue("qits.events.url"));
     assertEquals(
         "https://observability.qits.${QITS_DOMAIN}", source.getValue("qits.observability.url"));
+    assertEquals(
+        "http://${QITS_ENVIRONMENT:dev}-qits-deployments:8080",
+        source.getValue("qits.edge.routes.url"),
+        "the private edge fetches its route table from the deployer at start (qits-2174)");
     assertEquals("80", source.getValue("quarkus.http.port"));
     assertEquals("443", source.getValue("quarkus.http.ssl-port"));
     assertEquals(
@@ -45,7 +49,7 @@ class PrivateVariantConfigSourceTest {
         "stop-first: the drain is downtime, so it is bounded short (qits-2223)");
     assertNull(
         source.getValue("qits.edge.shutdown.linger"), "the linger keeps application.properties'");
-    assertEquals(16, source.getPropertyNames().size());
+    assertEquals(17, source.getPropertyNames().size());
     assertEquals(source.getPropertyNames(), source.getProperties().keySet());
     assertNull(source.getValue("qits.edge.domain"), "anything else keeps its default");
     assertNull(

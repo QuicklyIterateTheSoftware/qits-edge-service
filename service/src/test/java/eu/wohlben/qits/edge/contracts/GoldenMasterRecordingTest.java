@@ -46,8 +46,11 @@ import org.junit.jupiter.api.Test;
  * such strings with the stable value to record instead ({@link ProviderStates#frozenStrings}).
  * Every string value holding one is rewritten, and its JSONPath ({@code $.a.b}, array elements as
  * {@code [*]}, in order of first appearance) goes into the index's {@code frozen.strings}, the
- * format qits-projects-service set: a consumer must not match that value literally. {@code
- * frozen.ids} and {@code frozen.instants} stay empty.
+ * format qits-projects-service set: a consumer must not match that value literally. Every ISO-8601
+ * instant in an answer ({@code getEdgeRouteTable}'s {@code receivedAt}) is recorded as {@link
+ * #FROZEN_INSTANT} with its path in {@code frozen.instants}, by shape as qits-maintenance's
+ * recorder does. {@code frozen.ids} stays empty. A write's request body is recorded as the
+ * operation's {@code body}, as qits-maintenance's index carries it.
  *
  * <p>It <b>compares by default</b> and fails with a unified diff per differing file — including a
  * committed {@code .json} no interaction produces any more. {@code -Dgolden.update=true} (or {@code
@@ -76,7 +79,29 @@ class GoldenMasterRecordingTest {
       String method,
       String path,
       int status,
-      List<String> sortedKeys) {}
+      List<String> sortedKeys,
+      String requestBody) {
+
+    /** A read: no request body. */
+    Interaction(
+        String state,
+        String operationId,
+        String method,
+        String path,
+        int status,
+        List<String> sortedKeys) {
+      this(state, operationId, method, path, status, sortedKeys, null);
+    }
+  }
+
+  /**
+   * What every ISO-8601 instant in an answer is recorded as — by shape, not by field name — with
+   * its JSONPath in the index's {@code frozen.instants}: {@code receivedAt} is when the state ran.
+   */
+  static final String FROZEN_INSTANT = "2026-01-01T00:00:00Z";
+
+  private static final Pattern INSTANT =
+      Pattern.compile("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})");
 
   /**
    * Each operationId is the one {@code META-INF/openapi.yaml} declares (committed as {@code
@@ -105,6 +130,38 @@ class GoldenMasterRecordingTest {
               "GET",
               "/upstream-pools",
               200,
+              List.of()),
+          // The route table qits-deployments pushes (qits-2174): stored, already held, refused.
+          new Interaction(
+              ProviderStates.NO_ROUTE_TABLE_HELD,
+              "putEdgeRouteTable",
+              "PUT",
+              "/edge-route-table",
+              204,
+              List.of(),
+              ProviderStates.ROUTE_TABLE),
+          new Interaction(
+              ProviderStates.A_ROUTE_TABLE_HELD,
+              "putEdgeRouteTable",
+              "PUT",
+              "/edge-route-table",
+              200,
+              List.of(),
+              ProviderStates.ROUTE_TABLE),
+          new Interaction(
+              ProviderStates.NO_ROUTE_TABLE_HELD_AND_AN_INVALID_PUSH,
+              "putEdgeRouteTable",
+              "PUT",
+              "/edge-route-table",
+              422,
+              List.of(),
+              ProviderStates.INVALID_ROUTE_TABLE),
+          new Interaction(
+              ProviderStates.A_ROUTE_TABLE_HELD,
+              "getEdgeRouteTable",
+              "GET",
+              "/edge-route-table",
+              200,
               List.of()));
 
   private static final ObjectMapper JSON = new ObjectMapper();
@@ -129,6 +186,8 @@ class GoldenMasterRecordingTest {
       JsonNode body = sortKeys(call(interaction, params), interaction.sortedKeys());
       Set<String> frozenStrings = new LinkedHashSet<>();
       body = freeze(body, "$", states.frozenStrings(interaction.state()), frozenStrings);
+      Set<String> frozenInstants = new LinkedHashSet<>();
+      body = freezeInstants(body, "$", frozenInstants);
       String slug = ProviderStates.slug(interaction.state());
       String file = slug + "/" + interaction.operationId() + ".json";
 
@@ -150,11 +209,15 @@ class GoldenMasterRecordingTest {
       operation.put("operationId", interaction.operationId());
       operation.put("method", interaction.method());
       operation.put("path", interaction.path());
+      if (interaction.requestBody() != null) {
+        operation.set("body", JSON.readTree(interaction.requestBody()));
+      }
       operation.put("status", interaction.status());
       operation.put("file", file);
       ObjectNode frozen = operation.putObject("frozen");
       frozen.putArray("ids");
-      frozen.putArray("instants");
+      ArrayNode instants = frozen.putArray("instants");
+      frozenInstants.forEach(instants::add);
       ArrayNode strings = frozen.putArray("strings");
       frozenStrings.forEach(strings::add);
       frozen.putNull("listFilteredTo");
@@ -208,7 +271,14 @@ class GoldenMasterRecordingTest {
   private JsonNode call(Interaction interaction, Map<String, String> params) throws Exception {
     HttpRequest.Builder request =
         HttpRequest.newBuilder(URI.create(base.toString()).resolve(interaction.path()))
-            .method(interaction.method(), HttpRequest.BodyPublishers.noBody());
+            .method(
+                interaction.method(),
+                interaction.requestBody() == null
+                    ? HttpRequest.BodyPublishers.noBody()
+                    : HttpRequest.BodyPublishers.ofString(interaction.requestBody()));
+    if (interaction.requestBody() != null) {
+      request.header("Content-Type", "application/json");
+    }
     ProviderStates.requestHeaders(interaction.state()).forEach(request::header);
     HttpResponse<String> response;
     try (HttpClient client = HttpClient.newHttpClient()) {
@@ -228,7 +298,37 @@ class GoldenMasterRecordingTest {
               + ": "
               + response.body());
     }
-    return JSON.readTree(response.body());
+    // A 204 has no body, and is recorded as null — the shape every provider records it in.
+    return response.body().isEmpty()
+        ? JsonNodeFactory.instance.nullNode()
+        : JSON.readTree(response.body());
+  }
+
+  /** The body with every ISO-8601 instant string rewritten to {@link #FROZEN_INSTANT}. */
+  private static JsonNode freezeInstants(JsonNode node, String path, Set<String> paths) {
+    if (node.isTextual()) {
+      if (INSTANT.matcher(node.asText()).matches()) {
+        paths.add(path);
+        return TextNode.valueOf(FROZEN_INSTANT);
+      }
+      return node;
+    }
+    if (node.isArray()) {
+      ArrayNode out = JsonNodeFactory.instance.arrayNode();
+      for (JsonNode element : node) {
+        out.add(freezeInstants(element, path + "[*]", paths));
+      }
+      return out;
+    }
+    if (node.isObject()) {
+      ObjectNode out = JsonNodeFactory.instance.objectNode();
+      for (Map.Entry<String, JsonNode> field : node.properties()) {
+        out.set(
+            field.getKey(), freezeInstants(field.getValue(), path + key(field.getKey()), paths));
+      }
+      return out;
+    }
+    return node;
   }
 
   /** The body with the objects at {@code paths} rebuilt in key order. */

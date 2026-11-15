@@ -162,4 +162,19 @@ class ConsumerPactVerificationTest {
   Map<String, String> anOpenUpstreamPool() {
     return states.params(ProviderStates.AN_OPEN_UPSTREAM_POOL);
   }
+
+  @State(ProviderStates.NO_ROUTE_TABLE_HELD)
+  Map<String, String> noRouteTableHeld() {
+    return states.params(ProviderStates.NO_ROUTE_TABLE_HELD);
+  }
+
+  @State(ProviderStates.A_ROUTE_TABLE_HELD)
+  Map<String, String> aRouteTableHeld() {
+    return states.params(ProviderStates.A_ROUTE_TABLE_HELD);
+  }
+
+  @State(ProviderStates.NO_ROUTE_TABLE_HELD_AND_AN_INVALID_PUSH)
+  Map<String, String> noRouteTableHeldAndAnInvalidPush() {
+    return states.params(ProviderStates.NO_ROUTE_TABLE_HELD_AND_AN_INVALID_PUSH);
+  }
 }

@@ -26,6 +26,81 @@
       ]
     },
     {
+      "name": "a route table held",
+      "slug": "a-route-table-held",
+      "params": {
+        "host": "qits.example.com"
+      },
+      "dependsOn": [],
+      "operations": [
+        {
+          "operationId": "getEdgeRouteTable",
+          "method": "GET",
+          "path": "/edge-route-table",
+          "status": 200,
+          "file": "a-route-table-held/getEdgeRouteTable.json",
+          "frozen": {
+            "ids": [],
+            "instants": [
+              "$.receivedAt"
+            ],
+            "strings": [],
+            "listFilteredTo": null
+          }
+        },
+        {
+          "operationId": "putEdgeRouteTable",
+          "method": "PUT",
+          "path": "/edge-route-table",
+          "body": {
+            "edge": "public",
+            "version": 1763025600000,
+            "builtAt": "2026-11-13T09:20:00Z",
+            "applications": [
+              {
+                "environment": "prod",
+                "application": "qits-ci",
+                "exposure": "public",
+                "browserHost": "ci",
+                "apiDocsPath": "/ci/q/openapi",
+                "endpoints": [
+                  {
+                    "path": "/ci",
+                    "upstreamHost": "prod-qits-ci",
+                    "upstreamPort": 8080
+                  }
+                ],
+                "navigation": [
+                  {
+                    "slot": "platform",
+                    "label": "CI",
+                    "position": 30,
+                    "subpath": null
+                  }
+                ]
+              }
+            ],
+            "withdrawn": [
+              {
+                "environment": "prod",
+                "application": "qits-stt",
+                "host": "stt",
+                "exposure": "private"
+              }
+            ]
+          },
+          "status": 200,
+          "file": "a-route-table-held/putEdgeRouteTable.json",
+          "frozen": {
+            "ids": [],
+            "instants": [],
+            "strings": [],
+            "listFilteredTo": null
+          }
+        }
+      ]
+    },
+    {
       "name": "a signed-in caller and a private app",
       "slug": "a-signed-in-caller-and-a-private-app",
       "params": {
@@ -68,6 +143,148 @@
             "strings": [
               "$[*].origin"
             ],
+            "listFilteredTo": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "no route table held",
+      "slug": "no-route-table-held",
+      "params": {
+        "host": "qits.example.com"
+      },
+      "dependsOn": [],
+      "operations": [
+        {
+          "operationId": "putEdgeRouteTable",
+          "method": "PUT",
+          "path": "/edge-route-table",
+          "body": {
+            "edge": "public",
+            "version": 1763025600000,
+            "builtAt": "2026-11-13T09:20:00Z",
+            "applications": [
+              {
+                "environment": "prod",
+                "application": "qits-ci",
+                "exposure": "public",
+                "browserHost": "ci",
+                "apiDocsPath": "/ci/q/openapi",
+                "endpoints": [
+                  {
+                    "path": "/ci",
+                    "upstreamHost": "prod-qits-ci",
+                    "upstreamPort": 8080
+                  }
+                ],
+                "navigation": [
+                  {
+                    "slot": "platform",
+                    "label": "CI",
+                    "position": 30,
+                    "subpath": null
+                  }
+                ]
+              }
+            ],
+            "withdrawn": [
+              {
+                "environment": "prod",
+                "application": "qits-stt",
+                "host": "stt",
+                "exposure": "private"
+              }
+            ]
+          },
+          "status": 204,
+          "file": "no-route-table-held/putEdgeRouteTable.json",
+          "frozen": {
+            "ids": [],
+            "instants": [],
+            "strings": [],
+            "listFilteredTo": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "no route table held and an invalid push",
+      "slug": "no-route-table-held-and-an-invalid-push",
+      "params": {
+        "host": "qits.example.com"
+      },
+      "dependsOn": [],
+      "operations": [
+        {
+          "operationId": "putEdgeRouteTable",
+          "method": "PUT",
+          "path": "/edge-route-table",
+          "body": {
+            "edge": "public",
+            "version": 1763025600001,
+            "builtAt": "2026-11-13T09:20:00Z",
+            "applications": [
+              {
+                "environment": "prod",
+                "application": "qits-ci",
+                "exposure": "public",
+                "browserHost": "ci",
+                "apiDocsPath": "/ci/q/openapi",
+                "endpoints": [
+                  {
+                    "path": "/ci",
+                    "upstreamHost": "prod-qits-ci",
+                    "upstreamPort": 8080
+                  }
+                ],
+                "navigation": [
+                  {
+                    "slot": "platform",
+                    "label": "CI",
+                    "position": 30,
+                    "subpath": null
+                  }
+                ]
+              },
+              {
+                "environment": "prod",
+                "application": "qits-ci-copy",
+                "exposure": "public",
+                "browserHost": "ci",
+                "apiDocsPath": "/ci-copy/q/openapi",
+                "endpoints": [
+                  {
+                    "path": "/ci-copy",
+                    "upstreamHost": "prod-qits-ci-copy",
+                    "upstreamPort": 8080
+                  }
+                ],
+                "navigation": [
+                  {
+                    "slot": "platform",
+                    "label": "CI",
+                    "position": 30,
+                    "subpath": null
+                  }
+                ]
+              }
+            ],
+            "withdrawn": [
+              {
+                "environment": "prod",
+                "application": "qits-stt",
+                "host": "stt",
+                "exposure": "private"
+              }
+            ]
+          },
+          "status": 422,
+          "file": "no-route-table-held-and-an-invalid-push/putEdgeRouteTable.json",
+          "frozen": {
+            "ids": [],
+            "instants": [],
+            "strings": [],
             "listFilteredTo": null
           }
         }
