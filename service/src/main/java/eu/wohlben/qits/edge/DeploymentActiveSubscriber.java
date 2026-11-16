@@ -62,6 +62,9 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
   @Inject EdgeRoutes routes;
   @Inject EdgeConfig config;
 
+  /** Told when a frame changed or cleared a private withdrawal (qits-2273); null in a bare test. */
+  @Inject PrivateHostRecords privateHosts;
+
   @Override
   public String consumerId() {
     return CONSUMER_ID;
@@ -96,6 +99,12 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
    * <p><b>A write the projection fences is not settled</b> (qits-2120): {@link
    * EdgeRoutes.ProjectionFenced} is no poison, so it propagates, the durable claim rolls back with
    * it, and the frame stays owed to the edge whose class the projection was rebuilt under.
+   *
+   * <p><b>A frame that moved a private withdrawal asks for a DNS reconcile</b> (qits-2273): one
+   * that stored a {@code private} withdrawal, and one that replaced an application which was one —
+   * a revert to public, a new host, a retirement. Asked after the loop, when every environment's
+   * write has committed in its own transaction, and debounced by {@link PrivateHostRecords}, so the
+   * reconcile reads the projection this frame left.
    */
   @Override
   public void onFrame(EventFrame frame) {
@@ -112,9 +121,13 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
           active.environmentName() == null || active.environmentName().isBlank()
               ? config.environments()
               : List.of(active.environmentName());
+      boolean privateMoved = false;
       for (String environment : environments) {
+        boolean wasPrivate = privateWithdrawal(environment, active.applicationName());
         if (!kept) {
-          withdraw(frame, active, environment);
+          boolean replaced = withdraw(frame, active, environment);
+          privateMoved |=
+              replaced && (wasPrivate || privateWithdrawal(environment, active.applicationName()));
           continue;
         }
         List<EdgeEndpoint> endpoints = new ArrayList<>();
@@ -144,6 +157,7 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
                 frame.occurredAt(),
                 snapshot,
                 ExposureClass.declared(active.exposure()));
+        privateMoved |= replaced && wasPrivate;
         if (replaced) {
           LOG.infof(
               "activated %d direct routes for %s in %s from DeploymentActive %s%s",
@@ -154,6 +168,9 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
               snapshot.browserHost() == null ? "" : ", host " + snapshot.browserHost());
         }
       }
+      if (privateMoved && privateHosts != null) {
+        privateHosts.requestReconcile();
+      }
     } catch (IllegalArgumentException poison) {
       // An invalid route declaration will remain invalid on the next catch-up. Settling it keeps a
       // bad deployment from pinning this consumer's watermark before every later deployment.
@@ -163,7 +180,15 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
     }
   }
 
-  private void withdraw(EventFrame frame, DeploymentActivePayload active, String environment) {
+  /** Whether this application is held here as a {@code private} withdrawal with a host. */
+  private boolean privateWithdrawal(String environment, String application) {
+    EdgeRoutes.Withdrawn withdrawn = routes.withdrawnHosts(environment).get(application);
+    return withdrawn != null
+        && withdrawn.host() != null
+        && PrivateHostRecords.PRIVATE.equals(withdrawn.exposure());
+  }
+
+  private boolean withdraw(EventFrame frame, DeploymentActivePayload active, String environment) {
     boolean replaced =
         routes.replace(
             config.exposure(),
@@ -184,6 +209,7 @@ public class DeploymentActiveSubscriber implements QitsDurableEventListener {
           ExposureClass.declared(active.exposure()),
           config.exposure().name().toLowerCase(Locale.ROOT));
     }
+    return replaced;
   }
 
   /**

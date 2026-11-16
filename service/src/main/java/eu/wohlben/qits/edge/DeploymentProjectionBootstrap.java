@@ -47,6 +47,9 @@ public class DeploymentProjectionBootstrap {
   @jakarta.inject.Inject EdgeConfig config;
   @jakarta.inject.Inject EdgeRoutes routes;
 
+  /** Asked for a reconcile at the head (qits-2273); null under the suites' own constructor. */
+  @jakarta.inject.Inject PrivateHostRecords privateHosts;
+
   /** The class to rebuild under when a suite states one; null reads {@code config.exposure()}. */
   private ExposureClass exposure;
 
@@ -186,6 +189,11 @@ public class DeploymentProjectionBootstrap {
         LOG.infof(
             "deployment routing projection caught up to qits-events (%d frame(s) handled)",
             result.handled());
+        // The first moment a private host's absence means anything: before the head, the DNS
+        // reconcile writes and deletes nothing (qits-2273).
+        if (privateHosts != null) {
+          privateHosts.requestReconcile();
+        }
         return;
       }
       LOG.warnf(

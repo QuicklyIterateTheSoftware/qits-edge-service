@@ -41,6 +41,11 @@ class EventWireReflectionTest {
     assertTrue(targets.contains(PrivateEdgeAnnounced.class), "the event this edge publishes");
     assertTrue(targets.contains(EventEnvelope.class), "the PUT body");
     assertTrue(targets.contains(EventFrame.class), "what the stream delivers");
+    assertTrue(
+        targets.contains(
+            eu.wohlben.qits.edge.wireguard.PrivateEdgeAddressSubscriber.PrivateEdgeAddressPayload
+                .class),
+        "what the tunnel address projection binds (qits-2273)");
     assertTrue(Set.of(registration().classNames()).contains(EventWireReflection.MIXIN));
     assertTrue(
         Set.of(registration().classNames())

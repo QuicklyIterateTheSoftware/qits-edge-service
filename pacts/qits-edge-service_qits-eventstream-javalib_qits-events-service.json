@@ -85,6 +85,78 @@
           "qits-trigger": {
             "app": "qits-edge-service",
             "kind": "schedule",
+            "schedule": "CatchupSweeper.catchUp(edge-private-edge-address)"
+          },
+          "qits-via": {
+            "artifact": "eu.wohlben.qits:qits-eventstream",
+            "repository": "qits-eventstream-javalib",
+            "version": "2026.1110.232501"
+          }
+        }
+      },
+      "description": "CatchupSweeper.catchUp(edge-private-edge-address): listEvents (one name)",
+      "key": "994261d5",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "no events"
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/events/api/events",
+        "query": {
+          "limit": [
+            "200"
+          ],
+          "name": [
+            "PrivateEdgeAnnounced"
+          ],
+          "order": [
+            "asc"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": {
+            "events": []
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    },
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-events-service",
+            "operationId": "listEvents"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "schedule",
             "schedule": "CatchupSweeper.catchUp(edge-project-sans)"
           },
           "qits-via": {

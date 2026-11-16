@@ -1,6 +1,7 @@
 package eu.wohlben.qits.edge;
 
 import eu.wohlben.qits.edge.wireguard.PeerEventsSubscriber;
+import eu.wohlben.qits.edge.wireguard.PrivateEdgeAddressSubscriber;
 import eu.wohlben.qits.edge.wireguard.PrivateEdgeAnnounced;
 import eu.wohlben.qits.eventstream.control.EventEnvelope;
 import eu.wohlben.qits.eventstream.control.EventFrame;
@@ -34,6 +35,7 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
       ProjectLifecycleSubscriber.ProjectLifecyclePayload.class,
       PeerEventsSubscriber.PeerRegisteredPayload.class,
       PeerEventsSubscriber.PeerRevokedPayload.class,
+      PrivateEdgeAddressSubscriber.PrivateEdgeAddressPayload.class,
       PrivateEdgeAnnounced.class
     },
     classNames = {"eu.wohlben.qits.eventstream.control.EventPage", EventWireReflection.MIXIN})

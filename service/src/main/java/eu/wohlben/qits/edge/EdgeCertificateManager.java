@@ -12,8 +12,6 @@ import io.quarkus.scheduler.Scheduled.ConcurrentExecution;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import java.net.URI;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -290,17 +288,7 @@ public class EdgeCertificateManager {
   }
 
   private String hetznerToken() throws Exception {
-    if (acme.hetznerTokenFile().isPresent()) {
-      Path file = acme.hetznerTokenFile().orElseThrow();
-      String token = Files.readString(file).strip();
-      if (!token.isEmpty()) {
-        return token;
-      }
-      throw new IllegalStateException("The configured Hetzner token secret file is empty");
-    }
-    return acme.hetznerToken()
-        .map(String::strip)
-        .filter(value -> !value.isEmpty())
+    return HetznerToken.of(acme)
         .orElseThrow(
             () -> new IllegalStateException("ACME is enabled but the Hetzner token is absent"));
   }
