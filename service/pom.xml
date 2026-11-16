@@ -81,7 +81,7 @@
         <!-- qits-deployments' recorded answers, test scope: DeploymentsConsumerPactTest builds the
              private edge's pact on GET /deployments/api/edge-routes/private from them (epic
              qits-2174). Moves like every internal pin, by a qits-maintenance bump. -->
-        <qits.deployments-golden-masters.version>2026.1116.95302</qits.deployments-golden-masters.version>
+        <qits.deployments-golden-masters.version>2026.1116.123416</qits.deployments-golden-masters.version>
         <!-- THE CONSUMER PACTS ConsumerPactVerificationTest verifies (ticket qits-1284): fourteen
              frontends, each through @qits/ui-components' main-navigation call, each publishing
              eu.wohlben.qits:qits-<frontend>-pacts-qits-edge-service carrying
