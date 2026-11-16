@@ -49,8 +49,8 @@ class EdgeSessionGateTest {
   /** The gate itself, for the return-host fallback no routed request can reach any more. */
   @Inject EdgeSessions sessions;
 
-  /** The deployment projection's barrier, lowered to see what a catching-up edge answers. */
-  @Inject DeploymentProjectionBootstrap routingBootstrap;
+  /** The route table this suite seeds, as qits-deployments would push it. */
+  @Inject TableSeed seed;
 
   @Inject
   @io.quarkus.agroal.DataSource("edge")
@@ -121,29 +121,25 @@ class EdgeSessionGateTest {
   void publishEnvironmentEndpoint() {
     String address =
         ConfigProvider.getConfig().getValue("qits.test.environment-upstreams.dev", String.class);
-    routes.replace(
-        "dev",
-        "session-test-environment",
-        "session-test-dev",
-        java.time.Instant.EPOCH,
-        EdgeRoutes.Snapshot.ofEndpoints(
-            List.of(
-                new EdgeEndpoint(
-                    "dev", "session-test-environment", "/", Upstream.parse(address, 8080)))));
+    seed.clear();
+    seed.deploy(
+        TableSeed.deployment(
+            "dev",
+            "session-test-environment",
+            null,
+            TableSeed.endpoint("/", Upstream.parse(address, 8080))));
     // A flipped service, on a stub that names itself differently: `ci.dev.acme.example.com` is a
     // browser host through the derived wildcard — three labels in front of `example.com` — and
     // nothing about it is configured in qits.edge.apps.
     String ci =
         ConfigProvider.getConfig().getValue("qits.edge.apps.mirror.hosts.dev", String.class);
-    routes.replace(
-        "dev",
-        "session-test-ci",
-        "session-test-ci",
-        java.time.Instant.EPOCH,
-        new EdgeRoutes.Snapshot(
-            List.of(new EdgeEndpoint("dev", "session-test-ci", "/ci", Upstream.parse(ci, 8080))),
-            "ci",
-            List.of(new EdgeRoutes.NavigationEntry("services.details", "CI", 2))));
+    seed.deploy(
+        TableSeed.deployment(
+                "dev", "session-test-ci", "ci", TableSeed.endpoint("/ci", Upstream.parse(ci, 8080)))
+            .put(
+                "navigation",
+                new io.vertx.core.json.JsonArray()
+                    .add(TableSeed.placement("services.details", "CI", 2))));
   }
 
   @AfterEach
@@ -157,12 +153,7 @@ class EdgeSessionGateTest {
    */
   @AfterEach
   void withdrawIdpHost() {
-    routes.replace(
-        "dev",
-        IDP,
-        "session-test-idp-" + FRAME.incrementAndGet(),
-        java.time.Instant.EPOCH.plusSeconds(FRAME.get()),
-        EdgeRoutes.Snapshot.ofEndpoints(List.of()));
+    seed.deployUnchecked(TableSeed.retirement("dev", IDP));
   }
 
   @AfterAll
@@ -200,12 +191,13 @@ class EdgeSessionGateTest {
   void aLiveSessionSeesThePrivateAppsInTheNavigation() {
     // qits-2061: a private deployment is withdrawn from this public edge with its host kept for
     // the navigation, which names it to a caller holding a live session and to nobody else.
-    routes.replace(
-        "dev",
-        "session-test-stt",
-        "session-test-stt-" + FRAME.incrementAndGet(),
-        java.time.Instant.EPOCH.plusSeconds(FRAME.get()),
-        EdgeRoutes.Snapshot.withdrawal("stt", "private"));
+    seed.deploy(
+        TableSeed.deployment(
+                "dev",
+                "session-test-stt",
+                "stt",
+                TableSeed.endpoint("/stt", Upstream.parse("127.0.0.1:1", 8080)))
+            .put("exposure", "private"));
     try {
       EdgeClient.Answer live =
           client().get("dev.acme.example.com", NavigationRoute.PATH, session());
@@ -237,12 +229,7 @@ class EdgeSessionGateTest {
       // that reached this one is misdirected (qits-2223).
       assertEquals(421, client().get("stt.dev.acme.example.com", "/stt/api", session()).status());
     } finally {
-      routes.replace(
-          "dev",
-          "session-test-stt",
-          "session-test-stt-" + FRAME.incrementAndGet(),
-          java.time.Instant.EPOCH.plusSeconds(FRAME.get()),
-          EdgeRoutes.Snapshot.ofEndpoints(List.of()));
+      seed.deploy(TableSeed.retirement("dev", "session-test-stt"));
     }
   }
 
@@ -758,11 +745,11 @@ class EdgeSessionGateTest {
 
   @Test
   void idpsPlatformLabelServesTheLoginPrefixBeforeAnythingIsPublished() {
-    // qits-1403: before the catch-up ends nothing published is trusted, so idp's name is answered
-    // from PlatformApps alone — and its anonymous prefix with it, on the same "the name that OWNS
-    // it" rule. That is what serves /jwks to qits-events while the edge is still reading.
-    routingBootstrap.authoritative(false);
-    try {
+    // qits-1403: with no route table at all idp's name is answered from PlatformApps alone — and
+    // its anonymous prefix with it, on the same "the name that OWNS it" rule. That is what serves
+    // /jwks to qits-events on a public edge no table has been pushed to yet.
+    seed.coldStart();
+    {
       for (String path : List.of("/idp/login", "/idp/jwks")) {
         EdgeClient.Answer answer =
             client().get("idp.dev.acme.example.com", path, Map.of("X-Qits-User", "admin"));
@@ -775,8 +762,6 @@ class EdgeSessionGateTest {
       assertNull(gated.line("upstream"));
       // And the prefix stays idp's: on another platform label it opens nothing.
       assertNull(client().get("registry.dev.acme.example.com", "/idp/login").line("upstream"));
-    } finally {
-      routingBootstrap.authoritative(true);
     }
   }
 
@@ -1122,8 +1107,8 @@ class EdgeSessionGateTest {
       assertNull(answer.line("upstream"), path + " must not have been proxied anonymously");
     }
     withdrawIdpHost();
-    routingBootstrap.authoritative(false);
-    try {
+    seed.coldStart();
+    {
       for (String path : paths) {
         EdgeClient.Answer answer = client().get("idp.dev.acme.example.com", path);
         assertTrue(
@@ -1131,8 +1116,6 @@ class EdgeSessionGateTest {
             path + ": " + answer.status() + " " + answer.body());
         assertNull(answer.line("upstream"), path + " must not have been proxied anonymously");
       }
-    } finally {
-      routingBootstrap.authoritative(true);
     }
     // The canonical spelling is still the login page.
     publishIdpHost();
@@ -1393,23 +1376,15 @@ class EdgeSessionGateTest {
   /** The stub standing in for it, which names itself in every answer. */
   private static final String IDP_UPSTREAM = "registry-prod";
 
-  /** Frame order, so publishing and withdrawing the host cannot lose a race with itself. */
-  private static final java.util.concurrent.atomic.AtomicLong FRAME =
-      new java.util.concurrent.atomic.AtomicLong();
-
   /** idp as it will be deployed: the login route, and its own name to serve it from. */
   private void publishIdpHost() {
     String upstream =
         ConfigProvider.getConfig().getValue("qits.edge.apps.registry.hosts.prod", String.class);
-    routes.replace(
-        "dev",
-        IDP,
-        "session-test-idp-" + FRAME.incrementAndGet(),
-        java.time.Instant.EPOCH.plusSeconds(FRAME.get()),
-        new EdgeRoutes.Snapshot(
-            List.of(new EdgeEndpoint("dev", IDP, "/idp", Upstream.parse(upstream, 8080))),
-            "idp",
-            List.of()));
+    // At the prod stand-in, which names itself: the store would refuse `idp` anywhere but idp's
+    // own address, so this one is served unchecked.
+    seed.deployUnchecked(
+        TableSeed.deployment(
+            "dev", IDP, "idp", TableSeed.endpoint("/idp", Upstream.parse(upstream, 8080))));
   }
 
   private static long cacheTtlMs() {

@@ -13,8 +13,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The platform navigation, derived from the active deployment projection rather than a gateway enum
- * — on every vhost, because every service's shell renders the same tree.
+ * The platform navigation, derived from the served route table rather than a gateway enum — on
+ * every vhost, because every service's shell renders the same tree.
  *
  * <p><b>Slots, not a list.</b> Each entry says WHERE it hangs in the shell's tree and the shell
  * decides what hangs there; the edge knows nothing about projects or repositories. Every slot of
@@ -82,7 +82,6 @@ public class NavigationRoute {
 
   @Inject EdgeRoutes routes;
   @Inject EdgeRouter edgeRouter;
-  @Inject DeploymentProjectionBootstrap projectionBootstrap;
   @Inject AdmittedCaller caller;
   @Inject EdgeConfig config;
 
@@ -96,12 +95,10 @@ public class NavigationRoute {
   }
 
   private void handle(RoutingContext context) {
-    if (!projectionBootstrap.routable()) {
-      // Navigation is itself a projection response. Returning an empty list as 200 makes the UI
-      // silently lose services during an edge restart, which is harder to recover from than a
-      // short, explicit retry. A stored snapshot the boot kept is served while the catch-up runs
-      // (qits-2160), exactly as the router serves its routes: at worst it misses what was published
-      // while this edge was down, and the next ask after the head has it.
+    if (!routes.ready()) {
+      // Navigation is itself the route table's. Returning an empty list as 200 makes the UI
+      // silently lose services while the private edge waits for its table, which is harder to
+      // recover from than a short, explicit retry.
       context.response().setStatusCode(503).putHeader(HttpHeaders.RETRY_AFTER, "1").end();
       return;
     }

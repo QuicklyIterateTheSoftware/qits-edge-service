@@ -29,9 +29,6 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
     targets = {
       EventFrame.class,
       EventEnvelope.class,
-      DeploymentActiveSubscriber.DeploymentActivePayload.class,
-      DeploymentActiveSubscriber.EndpointPayload.class,
-      DeploymentActiveSubscriber.NavigationPayload.class,
       ProjectLifecycleSubscriber.ProjectLifecyclePayload.class,
       PeerEventsSubscriber.PeerRegisteredPayload.class,
       PeerEventsSubscriber.PeerRevokedPayload.class,

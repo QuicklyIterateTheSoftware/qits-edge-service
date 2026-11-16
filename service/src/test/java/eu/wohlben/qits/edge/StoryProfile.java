@@ -27,9 +27,9 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
  * declared once.
  *
  * <p>A {@code @TestProfile} is what failsafe launches a process for, so two profiles would be two
- * front doors — two boots, two databases, two session caches, two routing projections. Every story
- * class in this repository names this one; {@code ForwardAuthBootstrapIT} included, which is a
- * story class like the others and happens to be the oldest.
+ * front doors — two boots, two databases, two session caches, two route tables. Every story class
+ * in this repository names this one; {@code ForwardAuthBootstrapIT} included, which is a story
+ * class like the others and happens to be the oldest.
  *
  * <p><b>Every key here is a RUNTIME key.</b> A packaged process takes its configuration as {@code
  * -D} arguments on an artifact that was already built, so a build-time key would be silently
@@ -44,7 +44,7 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
  * <ul>
  *   <li><b>The two database triples</b> — the platform's generic resource contract, which
  *       qits-platform-deployments injects and the shipped datasource expressions read with no
- *       defaults on purpose. {@code edge} is the routing projection; {@code eventstream} is
+ *       defaults on purpose. {@code edge} holds the route table; {@code eventstream} is
  *       qits-eventstream's claim ledger, and it is needed even though the bus is dark below,
  *       because dark does not mean absent: Quarkus opens the connection and runs Flyway at boot
  *       regardless. Both are databases of this catalogue's own on the same embedded postgres the
@@ -53,7 +53,7 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
  *       profile is instantiated in more than one classloader and a field written by one copy is not
  *       the field another reads.
  *   <li><b>The environment list and FOUR application vhosts</b> — the environments stated exactly
- *       as {@code QITS_EDGE_ENVIRONMENTS} states them; three hosts seeded into the projection (see
+ *       as {@code QITS_EDGE_ENVIRONMENTS} states them; three hosts seeded into the route table (see
  *       below) and the mirror, a platform label, re-addressed by its {@code hosts.dev} override.
  *       The mirror's derived alias is a name nothing here resolves: a request that reached it would
  *       be a resolution bug rather than a test that happened to pass.
@@ -84,16 +84,15 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
  *       once per JVM, since the shipped {@code /work/.letsencrypt} paths exist on no test host.
  * </ul>
  *
- * <h2>The deployment projection is seeded, not replayed</h2>
+ * <h2>The route table is seeded, not pushed</h2>
  *
  * <p>A name reaches a service two ways: a platform app label ({@code PlatformApps}, in code — the
- * mirror here), and the projection, which is rebuilt from qits-events at boot. A launched process
- * has no bus, and these stories are about what the edge does WITH a request rather than about how
- * it learnt the route. So the projection's rows are written into the edge database before the
- * process starts — exactly the rows {@code EdgeRoutes.apply} writes for a DeploymentActive that
- * publishes a host — and the process loads them at {@code StartupEvent} like any persisted
- * snapshot. {@code qits.edge.projection.catchup.required=false} is the escape hatch the code
- * carries for the bus being absent.
+ * mirror here), and the route table qits-deployments pushes. A launched process has no deployer,
+ * and these stories are about what the edge does WITH a request rather than about how it learnt the
+ * route. So a table is written into {@code edge_route_table} before the process starts — exactly
+ * the row {@code RouteTables.offer} stores for a pushed table — and the process serves it from
+ * {@code StartupEvent} like any cached table. {@code qits.edge.catchup.required=false} is the
+ * escape hatch the code carries for the bus being absent.
  *
  * <p>{@code tracker} (qits-projects' stand-in), {@code docs} and {@code offline} are therefore
  * PUBLISHED hosts, which is what they are on the platform too: an ordinary service publishes the
@@ -150,7 +149,8 @@ public class StoryProfile implements QuarkusTestProfile {
 
     config.put("qits.edge.environments", "prod," + StoryTarget.ENVIRONMENT);
     config.put("qits.edge.default-environment", "prod");
-    // Three published hosts, written into the projection before the launch (see the class javadoc).
+    // Three published hosts, written into the route table before the launch (see the class
+    // javadoc).
     seedPublishedHosts(
         edgeUrl,
         List.of(
@@ -180,7 +180,7 @@ public class StoryProfile implements QuarkusTestProfile {
 
     config.put("qits.eventstream.enabled", "false");
     config.put("qits.events.url", StoryTarget.CLOSED_PORT_URL);
-    config.put("qits.edge.projection.catchup.required", "false");
+    config.put("qits.edge.catchup.required", "false");
     config.put("quarkus.otel.sdk.disabled", "true");
 
     // The image owns its certificate in %prod (qits-2009), and this is the %prod profile. ACME is
@@ -404,50 +404,55 @@ public class StoryProfile implements QuarkusTestProfile {
   private record Published(String application, String host, String address) {}
 
   /**
-   * The hosts the stories reach, as the projection would hold them had a DeploymentActive arrived:
-   * one snapshot per application with its {@code browser_host}, and one endpoint — the primary
-   * route, {@code /<host>} — at the stand-in's address. A path no route names falls to the host's
-   * own service, so every path a story sends on that name reaches that stand-in.
+   * The hosts the stories reach, as the public route table would carry them: one application per
+   * host with its {@code browserHost} and one endpoint — the primary route, {@code /<host>} — at
+   * the stand-in's address. A path no route names falls to the host's own service, so every path a
+   * story sends on that name reaches that stand-in.
    *
-   * <p>Behind {@link #seedProject}'s migrations, at the epoch, so any real frame would win.
+   * <p>Behind {@link #seedProject}'s migrations, at version 1, so any real push would win.
    */
   private static synchronized void seedPublishedHosts(String url, List<Published> hosts) {
     if (System.getProperty(HOSTS_SEEDED_PROPERTY) != null) {
       return;
     }
+    io.vertx.core.json.JsonArray applications = new io.vertx.core.json.JsonArray();
+    for (Published host : hosts) {
+      Upstream upstream = Upstream.parse(host.address(), PlatformApps.PORT);
+      applications.add(
+          new io.vertx.core.json.JsonObject()
+              .put("environment", StoryTarget.ENVIRONMENT)
+              .put("application", host.application())
+              .put("exposure", "public")
+              .put("browserHost", host.host())
+              .put(
+                  "endpoints",
+                  new io.vertx.core.json.JsonArray()
+                      .add(
+                          new io.vertx.core.json.JsonObject()
+                              .put("path", "/" + host.host())
+                              .put("upstreamHost", upstream.host())
+                              .put("upstreamPort", upstream.port())))
+              .put("navigation", new io.vertx.core.json.JsonArray()));
+    }
+    io.vertx.core.json.JsonObject table =
+        new io.vertx.core.json.JsonObject()
+            .put("edge", "public")
+            .put("version", 1)
+            .put("builtAt", Instant.EPOCH.toString())
+            .put("applications", applications)
+            .put("withdrawn", new io.vertx.core.json.JsonArray());
     try (java.sql.Connection connection =
             java.sql.DriverManager.getConnection(url, EmbeddedPg.USER, EmbeddedPg.PASSWORD);
-        java.sql.PreparedStatement snapshot =
+        java.sql.PreparedStatement insert =
             connection.prepareStatement(
                 """
-                insert into edge_deployment_snapshot
-                  (environment_name, application_name, event_id, occurred_at, browser_host)
-                values (?, ?, ?, ?, ?)
-                on conflict (environment_name, application_name) do nothing
-                """);
-        java.sql.PreparedStatement endpoint =
-            connection.prepareStatement(
-                """
-                insert into edge_endpoint
-                  (environment_name, application_name, path, upstream_host, upstream_port, ordinal)
-                values (?, ?, ?, ?, ?, 0)
-                on conflict (environment_name, application_name, path) do nothing
+                insert into edge_route_table (id, edge, version, body, received_at)
+                values (1, 'public', 1, ?::jsonb, ?)
+                on conflict (id) do nothing
                 """)) {
-      for (Published host : hosts) {
-        Upstream upstream = Upstream.parse(host.address(), PlatformApps.PORT);
-        snapshot.setString(1, StoryTarget.ENVIRONMENT);
-        snapshot.setString(2, host.application());
-        snapshot.setString(3, "seeded-before-the-launch-" + host.host());
-        snapshot.setTimestamp(4, java.sql.Timestamp.from(Instant.EPOCH));
-        snapshot.setString(5, host.host());
-        snapshot.executeUpdate();
-        endpoint.setString(1, StoryTarget.ENVIRONMENT);
-        endpoint.setString(2, host.application());
-        endpoint.setString(3, "/" + host.host());
-        endpoint.setString(4, upstream.host());
-        endpoint.setInt(5, upstream.port());
-        endpoint.executeUpdate();
-      }
+      insert.setString(1, table.encode());
+      insert.setTimestamp(2, java.sql.Timestamp.from(Instant.EPOCH));
+      insert.executeUpdate();
     } catch (java.sql.SQLException failure) {
       throw new IllegalStateException(
           "could not seed the story catalogue's published hosts", failure);

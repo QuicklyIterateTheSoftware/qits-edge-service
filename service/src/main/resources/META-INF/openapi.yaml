@@ -17,7 +17,7 @@ paths:
   /main-navigation:
     get:
       operationId: getMainNavigation
-      summary: The platform navigation of the environment the Host names, from the active deployment projection.
+      summary: The platform navigation of the environment the Host names, from the served route table.
       description: >-
         Anonymous. Every slot of the closed vocabulary is present, empty ones included; a slot is an
         array, and one application may fill several of its entries. An origin is null on a name that
@@ -39,10 +39,10 @@ paths:
               schema: { $ref: "#/components/schemas/MainNavigation" }
         "503":
           description: >-
-            The edge is still catching up and holds no stored projection it may serve meanwhile (a
-            first boot, a wiped database, an exposure-class reset), so an empty list is not
-            answered as a 200. An edge catching up over a stored projection answers 200 from it.
-            Retry-After says when to ask again; the body is empty.
+            The private edge holds no route table yet (an empty database, before its fetch at start
+            or a push has stored one), so an empty list is not answered as a 200. The public edge
+            never answers it: with no table it serves the platform labels alone, and an empty
+            document. Retry-After says when to ask again; the body is empty.
           headers:
             Retry-After: { schema: { type: integer } }
   /upstream-pools:

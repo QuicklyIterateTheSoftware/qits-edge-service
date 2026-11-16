@@ -12,14 +12,12 @@ import org.jboss.logging.Logger;
 /**
  * Reads the project lifecycle log to its head at startup, then asks for one certificate reconcile.
  *
- * <p><b>It is deliberately not part of {@link DeploymentProjectionBootstrap}.</b> That coordinator
- * holds the edge's whole READINESS down until the routing projection is complete, because routing
- * any request against a stale projection sends it to the wrong process. This one does not, because
- * the consequence here is narrower — but it is no longer only a certificate. The slug set became a
- * ROUTING input when the grammar grew its project tiers, so a projection that is behind reads two
- * shapes of name wrongly, and {@link #authoritative()} is what the router asks before it answers
- * either of them 404. That is a 503 on the handful of names whose reading could still change,
- * rather than a refusal of every request the edge has: see {@link
+ * <p><b>It does not hold the edge's readiness down.</b> Readiness is the route table's ({@link
+ * EdgeRoutes#ready()}); the consequence here is narrower — but it is no longer only a certificate.
+ * The slug set became a ROUTING input when the grammar grew its project tiers, so a projection that
+ * is behind reads two shapes of name wrongly, and {@link #authoritative()} is what the router asks
+ * before it answers either of them 404. That is a 503 on the handful of names whose reading could
+ * still change, rather than a refusal of every request the edge has: see {@link
  * HostEnvironments#projectSensitive(String, java.util.Set)}.
  *
  * <p><b>A restarted edge with data serves normally throughout.</b> {@code edge_project} is
@@ -72,8 +70,8 @@ public class ProjectSansBootstrap {
   void start(@Observes StartupEvent ignored) {
     // The same knob the routing projection reads. A suite that has no qits-events to talk to would
     // otherwise spin a virtual thread retrying against nothing for the length of the build.
-    required = config.projection().catchup().required();
-    retry = config.projection().catchup().retry();
+    required = config.catchup().required();
+    retry = config.catchup().retry();
     if (!required) {
       // Trusted by explicit configuration, exactly as the routing projection is: a suite with no
       // qits-events to talk to must not answer every project-shaped name 503 for its whole run.

@@ -1,13 +1,12 @@
 package eu.wohlben.qits.edge.contracts;
 
-import eu.wohlben.qits.edge.DeploymentActiveSubscriber;
 import eu.wohlben.qits.edge.EdgeConfig;
 import eu.wohlben.qits.edge.EdgeProjects;
 import eu.wohlben.qits.edge.EdgeRoutes;
 import eu.wohlben.qits.edge.RouteTables;
 import eu.wohlben.qits.edge.StubGateways;
+import eu.wohlben.qits.edge.TableSeed;
 import eu.wohlben.qits.edge.Upstream;
-import eu.wohlben.qits.eventstream.control.EventFrame;
 import io.agroal.api.AgroalDataSource;
 import io.quarkus.agroal.DataSource;
 import io.restassured.RestAssured;
@@ -147,7 +146,7 @@ public class ProviderStates {
   /** What a state hands back: its parameters, keys sorted. */
   public record Setup(Map<String, String> params) {}
 
-  @Inject DeploymentActiveSubscriber deployments;
+  @Inject TableSeed seed;
   @Inject EdgeProjects projects;
   @Inject EdgeRoutes routes;
   @Inject RouteTables tables;
@@ -318,8 +317,7 @@ public class ProviderStates {
     // The project's root: no navigation, no api docs, and the reserved label as its host.
     publish(environment, "qits-landing", "landing", "/landing", null, List.of());
 
-    // The subscriber settles a frame it refuses with a log line and nothing else, so a state that
-    // published less than it says would only show up later as a confusing body diff.
+    // A state that published less than it says would only show up later as a confusing body diff.
     Set<String> published = routes.applicationHosts(environment).keySet();
     for (String application :
         List.of(
@@ -364,15 +362,7 @@ public class ProviderStates {
                             .put("upstreamHost", environment + "-qits-stt")
                             .put("upstreamPort", 8080)))
             .put("navigation", new JsonArray());
-    deployments.onFrame(
-        new EventFrame(
-            UUID.randomUUID().toString(),
-            "DeploymentActive",
-            Instant.now(),
-            payload.encode(),
-            null,
-            null,
-            environment));
+    deploy(payload);
     if (!routes.withdrawnHosts(environment).containsKey("qits-stt")
         || routes.applicationHosts(environment).containsKey("qits-stt")) {
       throw new IllegalStateException(
@@ -464,6 +454,9 @@ public class ProviderStates {
     } catch (SQLException e) {
       throw new IllegalStateException("State '" + state + "' could not empty the route table", e);
     }
+    // And served nothing: the edge is as an empty database boots it. The seeded model goes too, so
+    // the next state that publishes offers only what it publishes itself.
+    seed.coldStart();
     if (held) {
       RouteTables.Outcome outcome = tables.offer(ROUTE_TABLE);
       if (!(outcome instanceof RouteTables.Stored)) {
@@ -557,7 +550,7 @@ public class ProviderStates {
     }
   }
 
-  /** One application's whole snapshot in one environment, as the deployments service sends it. */
+  /** One application in one environment, as the deployer's table carries it. */
   private void publish(
       String environment, String application, String host, String path, List<JsonObject> nav) {
     publish(environment, application, host, path, path + "/q/swagger-ui", nav);
@@ -588,15 +581,16 @@ public class ProviderStates {
                             .put("upstreamHost", environment + "-" + application)
                             .put("upstreamPort", 8080)))
             .put("navigation", navigation);
-    deployments.onFrame(
-        new EventFrame(
-            UUID.randomUUID().toString(),
-            "DeploymentActive",
-            Instant.now(),
-            payload.encode(),
-            null,
-            null,
-            environment));
+    deploy(payload);
+  }
+
+  /** One deployment into the seeded route table; a refused table is this state's bug. */
+  private void deploy(JsonObject deployment) {
+    RouteTables.Outcome outcome = seed.deploy(deployment);
+    if (!(outcome instanceof RouteTables.Stored)) {
+      throw new IllegalStateException(
+          "The route table refused " + deployment.getString("applicationName") + ": " + outcome);
+    }
   }
 
   private static JsonObject placement(String slot, String label, int position, String subpath) {

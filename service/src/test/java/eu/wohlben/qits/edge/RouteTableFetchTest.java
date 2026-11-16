@@ -150,14 +150,10 @@ class RouteTableFetchTest {
     RouteTableFetch publicEdge = new RouteTableFetch();
     publicEdge.config = config(ExposureClass.PUBLIC, Optional.of(url));
     publicEdge.start(null);
-    RouteTableFetch breakGlass = new RouteTableFetch();
-    breakGlass.config = config(ExposureClass.ALL, Optional.of(url));
-    breakGlass.start(null);
     RouteTableFetch noUrl = new RouteTableFetch();
     noUrl.config = config(ExposureClass.PRIVATE, Optional.empty());
     noUrl.start(null);
     assertFalse(publicEdge.fetching());
-    assertFalse(breakGlass.fetching());
     assertFalse(noUrl.fetching());
 
     RouteTableFetch privateEdge = new RouteTableFetch();

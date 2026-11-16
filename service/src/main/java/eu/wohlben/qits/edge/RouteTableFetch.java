@@ -24,10 +24,11 @@ import org.jboss.logging.Logger;
  * own, and stopped at shutdown. The public edge never fetches: it is on {@code qits-net} and the
  * deployer on {@code qits-private}, and nothing bridges them, so it waits for a push.
  *
- * <p><b>Nothing waits on it.</b> Readiness, startup and serving are untouched: D2a only stores the
- * table ({@link RouteTables}). Until qits-deployments ships the door (D1) every attempt is a 404,
- * and that is retried as quietly as any other failure — one WARN, {@code route table fetch failed:
- * <reason>}, for the whole run, and DEBUG lines after it.
+ * <p><b>Readiness waits on a table, not on this fetch.</b> The stored table is served from boot
+ * ({@link RouteTables#load}), so a restarted private edge is ready before the deployer answers;
+ * only an empty database keeps it not ready until the fetched table — or a push — is stored. A
+ * failure is retried quietly: one WARN, {@code route table fetch failed: <reason>}, for the whole
+ * run, and DEBUG lines after it.
  */
 @ApplicationScoped
 public class RouteTableFetch {

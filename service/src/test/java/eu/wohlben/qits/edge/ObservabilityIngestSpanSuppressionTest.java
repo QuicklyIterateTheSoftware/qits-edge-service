@@ -95,7 +95,7 @@ class ObservabilityIngestSpanSuppressionTest {
     }
   }
 
-  @Inject EdgeRoutes routes;
+  @Inject TableSeed seed;
 
   @Inject EdgeProjects projects;
 
@@ -155,18 +155,13 @@ class ObservabilityIngestSpanSuppressionTest {
     upstreamRequests.clear();
     projects.apply(
         PROJECT, "p-" + PROJECT, true, false, UUID.randomUUID().toString(), Instant.now());
-    routes.replace(
-        ENVIRONMENT,
-        APPLICATION,
-        UUID.randomUUID().toString(),
-        Instant.now(),
-        new EdgeRoutes.Snapshot(
-            List.of(
-                new EdgeEndpoint(
-                    ENVIRONMENT, APPLICATION, "/", new Upstream("127.0.0.1", upstreamPort))),
+    seed.clear();
+    seed.deploy(
+        TableSeed.deployment(
+            ENVIRONMENT,
+            APPLICATION,
             BROWSER_HOST,
-            null,
-            List.of()));
+            TableSeed.endpoint("/", new Upstream("127.0.0.1", upstreamPort))));
   }
 
   @Test

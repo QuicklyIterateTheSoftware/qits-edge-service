@@ -42,12 +42,9 @@ import org.jboss.logging.Logger;
  * <p><b>Who writes.</b> The PUBLIC edge, and only while it holds a Hetzner token — the same token,
  * read the same way ({@link HetznerToken}), that its DNS-01 orders use, and independent of whether
  * ACME is enabled. The private edge holds no token and projects nothing private, so it is inactive
- * by construction; either reason is said once at INFO. The break-glass class {@link
- * ExposureClass#ALL} is the one exception to "public only": it withdraws nothing, so it desires no
- * record and DELETES the owned ones — the public edge serves those names then, and a record
- * pointing at a broken tunnel would keep every client off the tunnel away from it.
+ * by construction; either reason is said once at INFO.
  *
- * <p><b>What is desired.</b> Every host the deployment projection holds as a {@code private}
+ * <p><b>What is desired.</b> Every host the served route table lists as a {@code private}
  * withdrawal ({@link EdgeRoutes#withdrawnHosts}) in every environment this edge serves, composed
  * into a name the way the navigation document composes it ({@link EnvironmentAuthority#hostOrigin})
  * — once per known project, since the grammar serves an application under every project's tier:
@@ -61,16 +58,17 @@ import org.jboss.logging.Logger;
  * longer desired deleted. A name that already holds an UNLABELLED {@code A} or {@code CNAME} — a
  * record a person made — is skipped with a WARN, and nothing unlabelled is ever written or deleted.
  *
- * <p><b>Nothing is decided before the projection is authoritative.</b> Until both the deployment
- * and the project projections have read the log to its head, a host missing from them may simply
- * not have arrived yet, and deleting its record would be a wrong answer published to the internet:
- * a reconcile before then returns and relies on the next trigger.
+ * <p><b>Nothing is decided before a route table is loaded and the project projection is
+ * authoritative.</b> A public edge that never received a table routes {@link PlatformApps} and
+ * knows nothing of private hosts, and a project projection behind its head may not have a project
+ * yet; deleting a record then would be a wrong answer published to the internet, so a reconcile
+ * before both returns and relies on the next trigger.
  *
- * <p><b>Triggers</b>: {@link #requestReconcile()} — from {@link DeploymentActiveSubscriber} when a
- * frame changes or clears a private withdrawal, from the address listener, and from both bootstraps
- * once they are authoritative — and the {@link #scheduledReconcile 10-minute backstop}. A Hetzner
- * failure is a WARN with its status and body and is retried on the next trigger; nothing here ever
- * throws into routing or event consumption.
+ * <p><b>Triggers</b>: {@link #requestReconcile()} — from {@link RouteTables} when it serves a table
+ * (the cached one at boot, and every newer one stored), from the address listener, and from the
+ * project bootstrap once it is authoritative — and the {@link #scheduledReconcile 10-minute
+ * backstop}. A Hetzner failure is a WARN with its status and body and is retried on the next
+ * trigger; nothing here ever throws into routing or event consumption.
  */
 @ApplicationScoped
 public class PrivateHostRecords {
@@ -132,7 +130,6 @@ public class PrivateHostRecords {
       AcmeConfig acme,
       EdgeRoutes routes,
       EdgeProjects projects,
-      DeploymentProjectionBootstrap projection,
       ProjectSansBootstrap projectSans,
       PrivateEdgeAddressProjection addresses) {
     this(
@@ -174,7 +171,7 @@ public class PrivateHostRecords {
 
           @Override
           public boolean authoritative() {
-            return projection.authoritative() && projectSans.authoritative();
+            return routes.tableLoaded() && projectSans.authoritative();
           }
 
           @Override
@@ -263,8 +260,7 @@ public class PrivateHostRecords {
 
   /** One pass: decide whether to act at all, then converge the owned RRSets on the desired set. */
   void reconcile() throws Exception {
-    boolean breakGlass = estate.exposure() == ExposureClass.ALL;
-    if (estate.exposure() != ExposureClass.PUBLIC && !breakGlass) {
+    if (estate.exposure() != ExposureClass.PUBLIC) {
       quiet(
           "private host records are inactive: this is the "
               + estate.exposure().name().toLowerCase(Locale.ROOT)
@@ -284,17 +280,9 @@ public class PrivateHostRecords {
       return;
     }
     if (!estate.authoritative()) {
-      // Not quiet(): a catch-up is a window, not a state worth a line, and the bootstraps ask
-      // again.
-      LOG.debug("private host records wait for the projections to reach the log head");
-      return;
-    }
-    if (breakGlass) {
-      // The public edge serves every class (README, "Break-glass"), so no name is private and the
-      // desired set is empty: every owned record goes, and a private name falls back to the
-      // wildcard — this edge — for a client off the tunnel. The way back to public recreates them.
-      quiet = null;
-      apply(zones.apply(token.orElseThrow(), domain), Map.of());
+      // Not quiet(): a wait is a window, not a state worth a line, and the table store and the
+      // project bootstrap ask again.
+      LOG.debug("private host records wait for a route table and the project log head");
       return;
     }
     Optional<String> address = estate.tunnelAddress();

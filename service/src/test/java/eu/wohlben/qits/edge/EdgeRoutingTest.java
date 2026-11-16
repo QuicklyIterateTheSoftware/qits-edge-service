@@ -45,7 +45,10 @@ import org.junit.jupiter.api.Test;
 @WithTestResource(StubGateways.class)
 class EdgeRoutingTest {
 
-  @Inject DeploymentActiveSubscriber deployments;
+  /** The route table this suite seeds, as qits-deployments would push it. */
+  @Inject TableSeed seed;
+
+  @Inject RouteTables tables;
 
   @Inject EdgeRoutes routes;
 
@@ -56,15 +59,9 @@ class EdgeRoutingTest {
    */
   @Inject ProjectSansBootstrap projectSans;
 
-  /** The deployment projection's barrier, lowered to see what a catching-up edge answers. */
-  @Inject DeploymentProjectionBootstrap routingBootstrap;
-
   @Inject
   @DataSource("edge")
   AgroalDataSource edgeDataSource;
-
-  /** The suite's configuration, which {@code bootUnder} restates under another exposure class. */
-  @Inject EdgeConfig edgeConfig;
 
   /** The project every name in the project tiers is spelled with here. It has environments. */
   private static final String PROJECT = "acme";
@@ -115,21 +112,18 @@ class EdgeRoutingTest {
   @BeforeEach
   void publishEnvironmentFixture() throws Exception {
     clearProjection();
-    storeProjectionClass(edgeConfig.exposure());
     publishProject();
     for (String environment : List.of("dev", "prod")) {
-      routes.replace(
-          environment,
-          "test-environment",
-          "test-" + environment,
-          Instant.EPOCH,
-          EdgeRoutes.Snapshot.ofEndpoints(
-              List.of(
-                  new EdgeEndpoint(
-                      environment,
-                      "test-environment",
-                      "/",
-                      upstream("qits.test.environment-upstreams." + environment)))));
+      seed.deploy(
+          new JsonObject()
+              .put("applicationName", "test-environment")
+              .put("environmentName", environment)
+              .put(
+                  "endpoints",
+                  new io.vertx.core.json.JsonArray()
+                      .add(
+                          endpoint(
+                              "/", upstream("qits.test.environment-upstreams." + environment)))));
     }
   }
 
@@ -210,17 +204,16 @@ class EdgeRoutingTest {
     clearProjection();
     // ci's second route has an upstream of its own, so reaching it proves the route's endpoint is
     // proxied, not the host's primary upstream.
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-ci")
-                .put("environmentName", "dev")
-                .put("browserHost", "ci")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev")))
-                        .add(endpoint("/hooks", upstream("qits.edge.apps.registry.hosts.dev"))))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-ci")
+            .put("environmentName", "dev")
+            .put("browserHost", "ci")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev")))
+                    .add(endpoint("/hooks", upstream("qits.edge.apps.registry.hosts.dev")))));
 
     assertEquals(
         "registry-dev",
@@ -233,51 +226,48 @@ class EdgeRoutingTest {
   }
 
   /**
-   * The publisher's WHOLE frame, not the six fields this projection happens to read.
-   *
-   * <p>qits-deployments' {@code DeploymentActive} carries nine more components than {@link
-   * DeploymentActiveSubscriber.DeploymentActivePayload} models — {@code deploymentId}, {@code
-   * environmentId}, {@code version}, {@code commitSha}, {@code runId}, {@code containerName},
-   * {@code finishedAt} — and the platform plane fills every one of them in. That is the shape on
-   * the bus today, and it is the shape this edge must keep decoding after the publisher grows the
-   * next field: the private wire DTO exists precisely so a vocabulary addition is not a Maven
-   * release the edge has to wait for, and {@code CanonicalJson} ignores unknown properties so the
-   * addition costs nothing.
-   *
-   * <p>The field names are literals rather than a dependency on the publisher's record. Spelling
-   * them out is the point — a rename on the far side has to fail HERE, loudly, instead of quietly
-   * decoding to null and unrouting an application.
+   * The deployer's WHOLE table, as it is built today: the field names of {@code GET
+   * /deployments/api/edge-routes/{edge}} spelt as literals, plus fields this edge does not read
+   * ({@code builtAt}, and an entry field the deployer may grow next). Spelling them out is the
+   * point — a rename on the far side has to fail HERE, loudly, instead of quietly unrouting an
+   * application; and an addition must cost nothing.
    */
   @Test
-  void aFullyPopulatedPublisherFrameRoutesAndItsUnmodelledFieldsAreIgnored() throws Exception {
+  void aFullyPopulatedDeployerTableRoutesAndItsUnreadFieldsAreIgnored() throws Exception {
     clearProjection();
     Upstream upstream = upstream("qits.edge.apps.registry.hosts.dev");
+    JsonObject table =
+        new JsonObject()
+            .put("edge", "public")
+            .put("version", TableSeed.nextVersion())
+            .put("builtAt", "2026-11-13T09:20:00Z")
+            .put(
+                "applications",
+                new io.vertx.core.json.JsonArray()
+                    .add(
+                        new JsonObject()
+                            .put("environment", "dev")
+                            .put("application", "qits-artifacts")
+                            .put("exposure", "public")
+                            .put("browserHost", "registry")
+                            .put("apiDocsPath", "/artifacts/q/swagger-ui")
+                            .put("commitSha", "8a9b8fa6c2d14e0b7f35a9c8d1e2b4f60a3c7d95")
+                            .put(
+                                "endpoints",
+                                new io.vertx.core.json.JsonArray()
+                                    .add(endpoint("/artifacts", upstream))
+                                    .add(endpoint("/v2", upstream)))
+                            .put(
+                                "navigation",
+                                new io.vertx.core.json.JsonArray()
+                                    .add(
+                                        placement("services.details", "Artifacts", 3)
+                                            .putNull("subpath")))))
+            .put("withdrawn", new io.vertx.core.json.JsonArray());
 
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("deploymentId", "b7c1f3a4-0e29-4d51-9a8c-2f6b5d0e7c31")
-                .put("applicationName", "qits-artifacts")
-                .put("environmentId", "3f9d2c18-7b64-4a05-8e11-c6d4a92f7b83")
-                .put("environmentName", "dev")
-                .put("version", "2026.904.211334")
-                .put("commitSha", "8a9b8fa6c2d14e0b7f35a9c8d1e2b4f60a3c7d95")
-                .put("runId", "run-4821")
-                .put("containerName", "qits-artifacts-b7c1f3a4")
-                .put("finishedAt", "2026-09-04T21:13:34Z")
-                .put("browserHost", "registry")
-                .put("apiDocsPath", "/artifacts/q/swagger-ui")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/artifacts", upstream))
-                        .add(endpoint("/v2", upstream)))
-                .put(
-                    "navigation",
-                    new io.vertx.core.json.JsonArray()
-                        .add(placement("services.details", "Artifacts", 3)))));
+    assertTrue(tables.offer(table) instanceof RouteTables.Stored);
 
-    // Decoded, not settled-unhandled: the routes, the public name and the placement all landed.
+    // Every part landed: the routes, the public name and the placement.
     assertEquals("qits-artifacts", routes.resolve("dev", "/artifacts/api/files").application());
     assertEquals("registry", routes.applicationHost("dev", "qits-artifacts").host());
     assertEquals(
@@ -300,8 +290,7 @@ class EdgeRoutingTest {
             .filter(placement -> "qits-artifacts".equals(placement.application()))
             .toList());
 
-    // environmentName is the routing key, and a populated one files the snapshot under THAT
-    // environment alone rather than fanning out across qits.edge.environments.
+    // The entry's environment is the routing key: it is served there alone.
     assertNull(routes.resolve("prod", "/artifacts/api/files"));
   }
 
@@ -366,24 +355,23 @@ class EdgeRoutingTest {
     // The seventh archetype slot. It is published exactly like the six before it; what makes it the
     // seventh rather than the last is where it sits in EdgeRoutes.SLOTS, which is both the order
     // this document renders and the order qits-deployments' spec parser reads the same words in.
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-ci")
-                .put("environmentName", "dev")
-                .put("browserHost", "ci")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev"))))
-                .put(
-                    "navigation",
-                    // Declared out of order on purpose: the vocabulary decides the render order,
-                    // not the order the deployment happened to write the placements in.
-                    new io.vertx.core.json.JsonArray()
-                        .add(placement("frontends.details", "Shell", 1))
-                        .add(placement("apps.details", "Docs", 1))
-                        .add(placement("libs.details", "Eventstream", 1)))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-ci")
+            .put("environmentName", "dev")
+            .put("browserHost", "ci")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev"))))
+            .put(
+                "navigation",
+                // Declared out of order on purpose: the vocabulary decides the render order,
+                // not the order the deployment happened to write the placements in.
+                new io.vertx.core.json.JsonArray()
+                    .add(placement("frontends.details", "Shell", 1))
+                    .add(placement("apps.details", "Docs", 1))
+                    .add(placement("libs.details", "Eventstream", 1))));
 
     assertEquals(
         List.of("libs.details", "apps.details", "frontends.details"),
@@ -421,20 +409,19 @@ class EdgeRoutingTest {
     assertTrue(message.contains("`app.details` is not a navigation slot"), message);
     assertTrue(message.contains("apps.details"), message);
 
-    // And, like every poison frame, the one carrying it changes no routes at all.
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-ci")
-                .put("environmentName", "dev")
-                .put("browserHost", "ci")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev"))))
-                .put(
-                    "navigation",
-                    new io.vertx.core.json.JsonArray().add(placement("app.details", "Docs", 1)))));
+    // And, like every refused table, the one carrying it changes no routes at all.
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-ci")
+            .put("environmentName", "dev")
+            .put("browserHost", "ci")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev"))))
+            .put(
+                "navigation",
+                new io.vertx.core.json.JsonArray().add(placement("app.details", "Docs", 1))));
 
     assertTrue(routes.navigation("dev").isEmpty());
     assertNull(routes.serviceHost("dev", "ci"));
@@ -462,23 +449,20 @@ class EdgeRoutingTest {
     // which repository it shows. `subpath` rides each entry and names the view it opens, relative
     // to the scope the shell composes; entries declared before it existed read null.
     activateCi();
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-projects")
-                .put("environmentName", "dev")
-                .put("browserHost", "projects")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/projects", upstream("qits.edge.apps.registry.hosts.dev"))))
-                .put(
-                    "navigation",
-                    new io.vertx.core.json.JsonArray()
-                        .add(placement("system", "Overview", 1))
-                        .add(
-                            placement("services.details", "Api Docs", 6)
-                                .put("subpath", "api-docs")))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-projects")
+            .put("environmentName", "dev")
+            .put("browserHost", "projects")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/projects", upstream("qits.edge.apps.registry.hosts.dev"))))
+            .put(
+                "navigation",
+                new io.vertx.core.json.JsonArray()
+                    .add(placement("system", "Overview", 1))
+                    .add(placement("services.details", "Api Docs", 6).put("subpath", "api-docs"))));
 
     JsonObject document =
         new JsonObject(client().get("dev.acme.example.com", "/main-navigation").body());
@@ -542,22 +526,20 @@ class EdgeRoutingTest {
     // and then by application — two applications naming 1 in one slot is ordinary. So the same tie
     // inside one application is ordinary too: refusing it would be a rule this document does not
     // have, and both rows would still be renderable if it did.
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-workspaces")
-                .put("environmentName", "dev")
-                .put("browserHost", "workspaces")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/workspaces", upstream("qits.edge.apps.mirror.hosts.dev"))))
-                .put(
-                    "navigation",
-                    new io.vertx.core.json.JsonArray()
-                        .add(placement("project.detail", "Workspaces", 1))
-                        .add(
-                            placement("project.detail", "Runners", 1).put("subpath", "runners")))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-workspaces")
+            .put("environmentName", "dev")
+            .put("browserHost", "workspaces")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/workspaces", upstream("qits.edge.apps.mirror.hosts.dev"))))
+            .put(
+                "navigation",
+                new io.vertx.core.json.JsonArray()
+                    .add(placement("project.detail", "Workspaces", 1))
+                    .add(placement("project.detail", "Runners", 1).put("subpath", "runners"))));
 
     assertEquals(
         List.of("Runners", "Workspaces"),
@@ -570,12 +552,11 @@ class EdgeRoutingTest {
 
   @Test
   void theSamePlacementTwiceIsRefusedWholeAndNamesThePair() throws Exception {
-    // One row asked for twice. The pair is the key the projection's primary key holds, so this is
-    // the refusal that carries a reason before the insert fails without one — and, like every
-    // poison frame, it changes no routes at all.
+    // One row asked for twice: the table is refused whole, with a reason that names the pair — a
+    // table with four project.detail entries says which one is twice — and changes no routes.
     clearProjection();
-    deployments.onFrame(
-        frame(
+    RouteTables.Outcome outcome =
+        seed.deploy(
             new JsonObject()
                 .put("applicationName", "qits-workspaces")
                 .put("environmentName", "dev")
@@ -588,84 +569,34 @@ class EdgeRoutingTest {
                     "navigation",
                     new io.vertx.core.json.JsonArray()
                         .add(placement("project.detail", "Runners", 1))
-                        .add(
-                            placement("project.detail", "Runners", 2).put("subpath", "runners")))));
+                        .add(placement("project.detail", "Runners", 2).put("subpath", "runners"))));
 
     assertTrue(routes.navigation("dev").isEmpty());
     assertNull(routes.serviceHost("dev", "workspaces"));
-    assertNull(routes.resolve("dev", "/workspaces/42"), "the poison frame published no routes");
-
-    // The subscriber settles a poison frame with a WARN, so the sentence itself is read where it is
-    // written. It names the PAIR: a frame with four project.detail entries says which one is twice.
-    String message =
-        assertThrows(
-                IllegalArgumentException.class,
-                () ->
-                    routes.replace(
-                        "dev",
-                        "qits-workspaces",
-                        "duplicate-placement",
-                        Instant.now(),
-                        new EdgeRoutes.Snapshot(
-                            List.of(
-                                new EdgeEndpoint(
-                                    "dev",
-                                    "qits-workspaces",
-                                    "/workspaces",
-                                    upstream("qits.edge.apps.mirror.hosts.dev"))),
-                            "workspaces",
-                            List.of(
-                                new EdgeRoutes.NavigationEntry("project.detail", "Runners", 1),
-                                new EdgeRoutes.NavigationEntry(
-                                    "project.detail", "Runners", 2, "runners")))))
-            .getMessage();
-    assertTrue(message.contains("project.detail.Runners"), message);
+    assertNull(routes.resolve("dev", "/workspaces/42"), "the refused table published no routes");
+    String message = ((RouteTables.Invalid) outcome).reason();
+    assertTrue(message.contains("`Runners` in project.detail twice"), message);
   }
 
   @Test
   void anApiDocsPathUnderNoneOfItsOwnRoutesIsSettledWithoutChangingRoutes() throws Exception {
-    // The spec parser refuses this shape at the source; the projection restates the rule so a
-    // hand-crafted frame stays poison rather than publishing a document nothing serves.
+    // The spec parser refuses this shape at the source; the table store restates the rule so a
+    // hand-crafted table is refused rather than publishing a document nothing serves.
     clearProjection();
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-ci")
-                .put("environmentName", "dev")
-                .put("apiDocsPath", "/docs/q/swagger-ui")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev"))))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-ci")
+            .put("environmentName", "dev")
+            .put("apiDocsPath", "/docs/q/swagger-ui")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev")))));
 
     JsonObject document =
         new JsonObject(client().get("dev.acme.example.com", "/main-navigation").body());
     assertTrue(document.getJsonObject("applications").isEmpty(), document.encode());
-    assertNull(routes.resolve("dev", "/ci/api"), "the poison frame published no routes either");
-  }
-
-  @Test
-  void anOldFramesOneLabelBecomesASystemEntryWithNoHost() {
-    // Every frame ever published is replayed on every start, so the shape before hosts existed has
-    // to keep meaning what it meant: one global entry, served under its path on the environment's
-    // own name, because an old frame named no host and the edge may not invent one.
-    deployments.onFrame(
-        deployment(
-            "qits-workspaces",
-            "dev",
-            "legacy-workspaces",
-            upstream("qits.edge.apps.mirror.hosts.dev"),
-            "/workspaces",
-            "Workspaces"));
-
-    JsonObject document =
-        new JsonObject(client().get("dev.acme.example.com", "/main-navigation").body());
-    JsonObject entry = document.getJsonObject("slots").getJsonArray("system").getJsonObject(0);
-    assertEquals("Workspaces", entry.getString("label"));
-    assertNull(entry.getString("host"));
-    assertEquals("http://dev.acme.example.com", entry.getString("origin"));
-    // The path is what a shell renders it under while it has no name of its own.
-    assertEquals("/workspaces", entry.getString("path"));
+    assertNull(routes.resolve("dev", "/ci/api"), "the refused table published no routes either");
   }
 
   @Test
@@ -1099,7 +1030,7 @@ class EdgeRoutingTest {
     }
   }
 
-  // --- the platform labels before the deployment catch-up (qits-1403) ---------------------------
+  // --- the platform labels with no route table (qits-1403) --------------------------------------
 
   @Test
   void aPlatformLabelOnTheUnreadPlatformProjectIsServed() throws Exception {
@@ -1151,9 +1082,9 @@ class EdgeRoutingTest {
   }
 
   @Test
-  void anyCredentialOnIdpsOwnRoutePassesUncheckedBeforeAndAfterTheCatchUp() {
+  void anyCredentialOnIdpsOwnRoutePassesUncheckedWithAndWithoutARouteTable() {
     // A bearer the edge would refuse is idp's to refuse, not the edge's — and the rule is the
-    // label's, so it holds while the projection is still reading too.
+    // label's, so it holds on an edge that has received no route table too.
     Map<String, String> junk = bearer("not-a-jwt");
     assertEquals(
         "idp-dev",
@@ -1165,16 +1096,12 @@ class EdgeRoutingTest {
         client()
             .get("idp.dev." + PROJECT + ".example.com", "/idp/api/tokens", junk)
             .upstreamHeader("Authorization"));
-    routingBootstrap.authoritative(false);
-    try {
-      assertEquals(
-          "idp-dev",
-          client()
-              .get("idp.dev." + PROJECT + ".example.com", "/idp/userinfo", junk)
-              .line("upstream"));
-    } finally {
-      routingBootstrap.authoritative(true);
-    }
+    seed.coldStart();
+    assertEquals(
+        "idp-dev",
+        client()
+            .get("idp.dev." + PROJECT + ".example.com", "/idp/userinfo", junk)
+            .line("upstream"));
     // Off idp's route the name is gated as any other service's.
     EdgeClient.Answer offRoute = client().get("idp.dev." + PROJECT + ".example.com", "/v2/", junk);
     assertEquals(401, offRoute.status(), offRoute.body());
@@ -1182,130 +1109,133 @@ class EdgeRoutingTest {
   }
 
   @Test
-  void idpsNameAnswersWhileTheRoutingProjectionCatchesUpAndNothingElseDoes() {
-    // The boot this exists for: qits-events checks the edge's catch-up token against keys it
-    // fetches from idp's public name — through the edge. Held behind the replay, that is a boot
-    // waiting for itself. No stored snapshot is served here — the class reset truncated it, or
-    // the boot has not checked it yet (qits-2160) — so every other name waits for the head.
-    activateCi();
-    routingBootstrap.authoritative(false);
-    routingBootstrap.snapshotKept(false);
-    try {
-      EdgeClient.Answer idp =
-          client().get("idp.dev." + PROJECT + ".example.com", "/idp/jwks", token());
-      assertEquals("idp-dev", idp.line("upstream"), idp.body());
+  void aColdStartServesOnlyThePlatformAppsAndIsReady() {
+    // An empty database on the public edge: no table was ever received, and none will be until the
+    // deployer sees this edge healthy — so it is ready, and serves PlatformApps alone. qits-events
+    // checks the edge's catch-up tokens against keys it fetches from idp's public name, through
+    // this edge, so idp has to answer with no table at all.
+    seed.coldStart();
+    assertNull(routes.version());
+    assertTrue(routes.ready(), "the public edge never waits for a push");
 
-      EdgeClient.Answer registry =
-          client().get("registry.dev." + PROJECT + ".example.com", "/v2/", token());
-      assertEquals("registry-dev", registry.line("upstream"), "every platform label is served");
+    EdgeClient.Answer idp =
+        client().get("idp.dev." + PROJECT + ".example.com", "/idp/jwks", token());
+    assertEquals("idp-dev", idp.line("upstream"), idp.body());
+    EdgeClient.Answer registry =
+        client().get("registry.dev." + PROJECT + ".example.com", "/v2/", token());
+    assertEquals("registry-dev", registry.line("upstream"), "every platform label is served");
 
-      EdgeClient.Answer ci = client().get("ci.dev." + PROJECT + ".example.com", "/", token());
-      assertEquals(503, ci.status(), "a published name waits for the projection");
-      assertEquals("1", ci.headers().get("retry-after"));
-      assertNull(ci.line("upstream"));
-    } finally {
-      routingBootstrap.authoritative(true);
-    }
-    assertEquals(
-        "mirror-dev",
-        client().get("ci.dev." + PROJECT + ".example.com", "/", token()).line("upstream"),
-        "and it is served the moment the catch-up is done");
-  }
-
-  @Test
-  void aKeptSnapshotIsServedWhileTheRoutingProjectionCatchesUpAndReadinessStaysDown() {
-    // qits-2160: a catching-up edge whose boot kept its stored snapshot routes from it — a stale
-    // route is a 502 at worst, no worse than the 503 — while readiness waits for the head.
-    activateCi();
-    routingBootstrap.authoritative(false);
-    routingBootstrap.snapshotKept(true);
-    try {
-      EdgeClient.Answer ci = client().get("ci.dev." + PROJECT + ".example.com", "/", token());
-      assertEquals("mirror-dev", ci.line("upstream"), "the stored route is served: " + ci.body());
-
-      EdgeClient.Answer idp =
-          client().get("idp.dev." + PROJECT + ".example.com", "/idp/jwks", token());
-      assertEquals("idp-dev", idp.line("upstream"), "a platform label is still served from code");
-
-      EdgeClient.Answer unknown =
-          client().get("nosuchapp.dev." + PROJECT + ".example.com", "/anything", token());
-      assertEquals(503, unknown.status(), "a name the snapshot lacks may yet be published");
-      assertEquals("1", unknown.headers().get("retry-after"));
-      assertNull(unknown.line("upstream"));
-
-      EdgeClient.Answer navigation = client().get("dev.acme.example.com", "/main-navigation");
-      assertEquals(200, navigation.status(), navigation.body());
-      assertTrue(
-          new JsonObject(navigation.body())
-              .getJsonObject("slots").getJsonArray("services.details").stream()
-                  .anyMatch(entry -> "CI".equals(((JsonObject) entry).getString("label"))),
-          "navigation is answered from the stored snapshot: " + navigation.body());
-
-      RestAssured.given()
-          .header("Host", "localhost")
-          .when()
-          .get("/q/health/ready")
-          .then()
-          .statusCode(503)
-          .body("checks.find { it.name == 'edge upstreams' }.status", is("DOWN"))
-          .body(
-              "checks.find { it.name == 'edge upstreams' }.data.'deployment-projection'",
-              is("catching-up"))
-          .body("checks.find { it.name == 'edge upstreams' }.data.'serving-snapshot'", is(true));
-    } finally {
-      routingBootstrap.authoritative(true);
-      routingBootstrap.snapshotKept(false);
-    }
+    // Every other name is simply not published: a 404, not a 503 waiting for a push.
+    EdgeClient.Answer ci = client().get("ci.dev." + PROJECT + ".example.com", "/", token());
+    assertEquals(404, ci.status(), ci.body());
+    assertNull(ci.line("upstream"));
+    EdgeClient.Answer navigation = client().get("dev.acme.example.com", "/main-navigation");
+    assertEquals(200, navigation.status(), navigation.body());
+    assertTrue(
+        new JsonObject(navigation.body()).getJsonObject("applications").isEmpty(),
+        navigation.body());
     RestAssured.given()
         .header("Host", "localhost")
         .when()
         .get("/q/health/ready")
         .then()
         .statusCode(200)
-        .body("checks.find { it.name == 'edge upstreams' }.data.'serving-snapshot'", is(false));
+        .body("checks.find { it.name == 'edge upstreams' }.status", is("UP"))
+        .body("checks.find { it.name == 'edge upstreams' }.data.'route-table'", is("none"));
+
+    activateCi();
+    assertEquals(
+        "mirror-dev",
+        client().get("ci.dev." + PROJECT + ".example.com", "/", token()).line("upstream"),
+        "and a published name is served the moment its table is stored");
   }
 
   @Test
-  void anEmptySnapshotIsNotServedWhileTheRoutingProjectionCatchesUp() throws Exception {
-    // A first boot or a wiped database: the class reconcile had nothing to truncate, but there is
-    // nothing to serve either — 404s about names the replay is about to publish would be wrong.
-    clearProjection();
-    routingBootstrap.authoritative(false);
-    routingBootstrap.snapshotKept(true);
-    try {
-      EdgeClient.Answer ci = client().get("ci.dev." + PROJECT + ".example.com", "/", token());
-      assertEquals(503, ci.status(), ci.body());
-      assertEquals("1", ci.headers().get("retry-after"));
-      // The app's own health path is the app's, so it waits behind the same barrier — never the
-      // edge's health answered in its place (qits-2222) — while the edge's own name still reports
-      // its readiness in the health JSON rather than in the router's admission 503.
-      EdgeClient.Answer ciHealth =
-          client().get("ci.dev." + PROJECT + ".example.com", "/q/health/ready", token());
-      assertEquals(503, ciHealth.status(), ciHealth.body());
-      assertEquals("1", ciHealth.headers().get("retry-after"));
-      assertFalse(ciHealth.body().contains("edge upstreams"), ciHealth.body());
-      RestAssured.given()
-          .header("Host", "localhost")
-          .when()
-          .get("/q/health/ready")
-          .then()
-          .statusCode(503)
-          .body(
-              "checks.find { it.name == 'edge upstreams' }.data.'deployment-projection'",
-              is("catching-up"));
-      EdgeClient.Answer navigation = client().get("dev.acme.example.com", "/main-navigation");
-      assertEquals(503, navigation.status());
-      assertEquals("1", navigation.headers().get("retry-after"));
-      assertEquals(
-          "registry-dev",
-          client()
-              .get("registry.dev." + PROJECT + ".example.com", "/v2/", token())
-              .line("upstream"),
-          "the platform labels are served regardless");
-    } finally {
-      routingBootstrap.authoritative(true);
-      routingBootstrap.snapshotKept(false);
-    }
+  void aCachedTableIsServedAtBootBeforeAnyPush() {
+    // A restarted edge: the table it stored is in edge_route_table, and the boot serves it before
+    // anything is pushed or fetched. Forgetting the served copy and loading again is that boot.
+    activateCi();
+    Long stored = routes.version();
+    assertNotNull(stored);
+    routes.serveNothing();
+    assertNull(routes.serviceHost("dev", "ci"), "the in-memory copy is gone");
+
+    tables.load();
+
+    assertEquals(stored, routes.version());
+    assertEquals(
+        "mirror-dev",
+        client().get("ci.dev." + PROJECT + ".example.com", "/", token()).line("upstream"));
+    RestAssured.given()
+        .header("Host", "localhost")
+        .when()
+        .get("/q/health/ready")
+        .then()
+        .statusCode(200)
+        .body(
+            "checks.find { it.name == 'edge upstreams' }.data.'route-table'",
+            is(stored.toString()));
+  }
+
+  @Test
+  void aTableTheOtherTaskStoredIsServedOnTheNextAsk() {
+    // Start-first: two tasks of this edge share one database, and a push lands on either. The one
+    // that did not take it catches up when the deployer next asks GET /edge-route-table, or pushes
+    // the same version again.
+    activateCi();
+    Long stored = routes.version();
+    routes.serveNothing();
+
+    assertEquals(stored, tables.held().version());
+    assertEquals(stored, routes.version(), "the GET brought the served copy level with the row");
+    assertNotNull(routes.serviceHost("dev", "ci"));
+
+    routes.serveNothing();
+    assertEquals(new RouteTables.AlreadyHeld(stored), tables.offer(seed.table(stored)));
+    assertEquals(stored, routes.version(), "and so does the same push again");
+  }
+
+  @Test
+  void aLowerOrEqualVersionIsIgnored() {
+    activateCi();
+    long held = routes.version();
+    JsonObject stale = seed.table(held);
+    stale.put("applications", new io.vertx.core.json.JsonArray());
+
+    assertEquals(new RouteTables.AlreadyHeld(held), tables.offer(stale.copy()));
+    assertEquals(new RouteTables.AlreadyHeld(held), tables.offer(stale.put("version", held - 1)));
+
+    assertEquals(held, routes.version());
+    assertNotNull(routes.serviceHost("dev", "ci"), "the held table is still the one served");
+  }
+
+  @Test
+  void anInvalidTableIsRefusedAndTheOldOneKept() {
+    activateCi();
+    long held = routes.version();
+    JsonObject invalid = seed.table(TableSeed.nextVersion());
+    invalid
+        .getJsonArray("applications")
+        .add(
+            new JsonObject()
+                .put("environment", "dev")
+                .put("application", "qits-impostor")
+                .put("browserHost", "ci")
+                .put(
+                    "endpoints",
+                    new io.vertx.core.json.JsonArray()
+                        .add(
+                            endpoint(
+                                "/impostor", upstream("qits.test.environment-upstreams.dev")))));
+
+    RouteTables.Outcome outcome = tables.offer(invalid);
+
+    assertTrue(outcome instanceof RouteTables.Invalid, outcome.toString());
+    assertTrue(((RouteTables.Invalid) outcome).reason().contains("`ci`"), outcome.toString());
+    assertEquals(held, routes.version());
+    assertEquals("qits-ci", routes.serviceHost("dev", "ci").application());
+    assertEquals(
+        "mirror-dev", client().get("ci.dev.acme.example.com", "/", token()).line("upstream"));
   }
 
   @Test
@@ -1401,18 +1331,15 @@ class EdgeRoutingTest {
   @Test
   void aHostASecondApplicationClaimsIsRefusedAndTheFirstKeepsIt() {
     activateCi();
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-impostor")
-                .put("environmentName", "dev")
-                .put("browserHost", "ci")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(
-                            endpoint(
-                                "/impostor", upstream("qits.test.environment-upstreams.dev"))))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-impostor")
+            .put("environmentName", "dev")
+            .put("browserHost", "ci")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/impostor", upstream("qits.test.environment-upstreams.dev")))));
 
     assertEquals("qits-ci", routes.serviceHost("dev", "ci").application());
     assertEquals(
@@ -1424,21 +1351,19 @@ class EdgeRoutingTest {
     // HostEnvironments reads the first label as an application, so `dev.dev.acme.example.com` would
     // be
     // routable and `dev.acme.example.com` would not.
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-confused")
-                .put("environmentName", "dev")
-                .put("browserHost", "prod")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(
-                            endpoint(
-                                "/confused", upstream("qits.test.environment-upstreams.dev"))))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-confused")
+            .put("environmentName", "dev")
+            .put("browserHost", "prod")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/confused", upstream("qits.test.environment-upstreams.dev")))));
 
     assertNull(routes.serviceHost("dev", "prod"));
-    // The whole frame is poison, so its routes are not activated either: `/confused` still falls to
+    // The whole table is refused, so its routes are not activated either: `/confused` still falls
+    // to
     // whoever owns the environment's catch-all.
     assertEquals("test-environment", routes.resolve("dev", "/confused").application());
   }
@@ -1447,18 +1372,15 @@ class EdgeRoutingTest {
   void aPublishedHostThatContradictsAConfiguredVhostIsRefused() {
     // `registry` is a configured application vhost with its own gate and anonymous reads. A
     // deployment publishing that name for a DIFFERENT upstream would silently take those over.
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-impostor")
-                .put("environmentName", "dev")
-                .put("browserHost", "registry")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(
-                            endpoint(
-                                "/impostor", upstream("qits.test.environment-upstreams.dev"))))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-impostor")
+            .put("environmentName", "dev")
+            .put("browserHost", "registry")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/impostor", upstream("qits.test.environment-upstreams.dev")))));
 
     assertNull(routes.serviceHost("dev", "registry"));
     assertEquals(
@@ -1533,16 +1455,15 @@ class EdgeRoutingTest {
     // projection to see which of the two owned it. Positionally they are two different places —
     // `<project>.<domain>` against `<app>.<env>.<project>.<domain>` — so a deployment publishing a
     // name that happens to equal a slug takes nothing, and the door stays a door.
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-acme")
-                .put("environmentName", "prod")
-                .put("browserHost", PROJECT)
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/acme", upstream("qits.edge.apps.mirror.hosts.dev"))))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-acme")
+            .put("environmentName", "prod")
+            .put("browserHost", PROJECT)
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/acme", upstream("qits.edge.apps.mirror.hosts.dev")))));
 
     EdgeClient.Answer answer = client().get(PROJECT + ".example.com", "/acme", token());
     assertEquals(404, answer.status());
@@ -1841,469 +1762,6 @@ class EdgeRoutingTest {
             .get("cache-control"));
   }
 
-  @Test
-  void startupRebuildsAnEmptyProjectionFromHistoricalDeploymentsBeforeItBecomesReady()
-      throws Exception {
-    // A lost edge database is a real recovery path, not an empty development fixture. The
-    // eventstream claim ledger may survive it, so the production bootstrap explicitly rewinds its
-    // replay-from-epoch consumer and applies every application's latest historical snapshot.
-    clearProjection();
-
-    DeploymentProjectionBootstrap[] bootstrap = new DeploymentProjectionBootstrap[1];
-    DeploymentProjectionCatchup historicalLog =
-        new DeploymentProjectionCatchup() {
-          @Override
-          public eu.wohlben.qits.eventstream.control.CatchupResult rebuildFromEpoch(
-              String consumerId) {
-            assertEquals(DeploymentActiveSubscriber.CONSUMER_ID, consumerId);
-            deployments.onFrame(
-                deployment(
-                    "qits-artifacts",
-                    "dev",
-                    "history-artifacts",
-                    upstream("qits.edge.apps.registry.hosts.dev"),
-                    "/history-artifacts",
-                    "Artifacts"));
-            deployments.onFrame(
-                deployment(
-                    "qits-workspaces",
-                    "dev",
-                    "history-workspaces",
-                    upstream("qits.edge.apps.mirror.hosts.dev"),
-                    "/history-workspaces",
-                    "Workspaces"));
-            assertFalse(
-                bootstrap[0].authoritative(),
-                "the snapshots must commit before the edge admits their routes");
-            return new eu.wohlben.qits.eventstream.control.CatchupResult(
-                consumerId,
-                eu.wohlben.qits.eventstream.control.CatchupResult.Status.REACHED_HEAD,
-                2);
-          }
-
-          @Override
-          public eu.wohlben.qits.eventstream.control.CatchupResult catchUp(String consumerId) {
-            throw new AssertionError("a confirmed head must not need a retry");
-          }
-        };
-    bootstrap[0] =
-        new DeploymentProjectionBootstrap(
-            historicalLog, routes, ExposureClass.PUBLIC, true, java.time.Duration.ofMillis(1));
-
-    bootstrap[0].catchUpUntilReady();
-
-    assertTrue(bootstrap[0].authoritative());
-    assertNotNull(routes.resolve("dev", "/history-artifacts/api/files"));
-    assertNotNull(routes.resolve("dev", "/history-workspaces/42"));
-    assertEquals(
-        List.of("Artifacts", "Workspaces"),
-        routes.navigation("dev").stream().map(EdgeRoutes.NavigationPlacement::label).toList());
-    assertEquals(
-        List.of("system", "system"),
-        routes.navigation("dev").stream().map(EdgeRoutes.NavigationPlacement::slot).toList());
-  }
-
-  // --- the class is re-derived at boot (qits-2120) ----------------------------------------------
-
-  @Test
-  void aPrivateFrameWithdrawnUnderPublicIsRoutedAfterARestartUnderAllAndWithdrawnAgainUnderPublic()
-      throws Exception {
-    // The log the edge replays at every boot: ci public, then private. Its frames keep their ids
-    // across "restarts", exactly as the durable log does — so only a truncate lets the replay
-    // rewrite a snapshot the previous class withdrew.
-    Instant at = Instant.now();
-    List<eu.wohlben.qits.eventstream.control.EventFrame> log =
-        List.of(exposedCi("public", at), exposedCi("private", at.plusMillis(1)));
-
-    bootUnder(ExposureClass.PUBLIC, log);
-    assertEquals("public", routes.projectionClass());
-    assertNull(routes.serviceHost("dev", "ci"), "under public the private frame withdraws");
-    assertEquals(
-        new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
-
-    bootUnder(ExposureClass.ALL, log);
-    assertEquals("all", routes.projectionClass());
-    assertNotNull(routes.serviceHost("dev", "ci"), "the break-glass routes the private frame");
-    assertNotNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
-    assertFalse(routes.withdrawnHosts("dev").containsKey("qits-ci"));
-
-    bootUnder(ExposureClass.PUBLIC, log);
-    assertEquals("public", routes.projectionClass());
-    assertNull(routes.serviceHost("dev", "ci"), "back under public it is withdrawn again");
-    assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
-    assertEquals(
-        new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
-  }
-
-  @Test
-  void anUnchangedClassDoesNotTruncateTheProjection() throws Exception {
-    Instant at = Instant.now();
-    bootUnder(ExposureClass.PUBLIC, List.of(exposedCi("public", at)));
-    assertNotNull(routes.serviceHost("dev", "ci"));
-
-    // The same class with a log that brings nothing: what the previous boot built is still there.
-    bootUnder(ExposureClass.PUBLIC, List.of());
-    assertEquals("public", routes.projectionClass());
-    assertNotNull(routes.serviceHost("dev", "ci"), "an unchanged class keeps the projection");
-    assertNotNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
-  }
-
-  // --- a class change beside the old task: fence, self-heal, the serving copy (qits-2120) --------
-
-  @Test
-  void underAllAPrivateAppsHostIsProxiedEvenWhileAnOldPublicTaskReplaysBesideIt() throws Exception {
-    Instant at = Instant.now();
-    List<eu.wohlben.qits.eventstream.control.EventFrame> log = List.of(exposedCi("private", at));
-    try {
-      bootUnder(ExposureClass.PUBLIC, log);
-      EdgeClient.Answer refused = client().get("ci.dev.acme.example.com", "/ci/api/runs", token());
-      // qits-2223: a private deployment's name on the public edge is misdirected, not unknown.
-      assertEquals(421, refused.status());
-      assertTrue(refused.body().contains("served only by the private edge"), refused.body());
-
-      // The break-glass task boots and rebuilds; the old public task is still running beside it and
-      // replays too, because the rebuild reset the durable consumer they share. Its writes are
-      // fenced and thrown — so its claim rolls back and the frame stays owed to the new task.
-      DeploymentActiveSubscriber oldTask = subscriberOf(ExposureClass.PUBLIC);
-      bootUnder(ExposureClass.ALL, log);
-      eu.wohlben.qits.eventstream.control.EventFrame later = exposedCi("private", at.plusMillis(1));
-      assertThrows(EdgeRoutes.ProjectionFenced.class, () -> oldTask.onFrame(log.get(0)));
-      assertThrows(EdgeRoutes.ProjectionFenced.class, () -> oldTask.onFrame(later));
-      subscriberOf(ExposureClass.ALL).onFrame(later);
-
-      EdgeClient.Answer routed = client().get("ci.dev.acme.example.com", "/ci/api/runs", token());
-      assertEquals(200, routed.status(), routed.body());
-      assertEquals("mirror-dev", routed.line("upstream"));
-      assertEquals("/ci/api/runs", routed.line("uri"));
-    } finally {
-      bootUnder(ExposureClass.PUBLIC, List.of());
-    }
-  }
-
-  @Test
-  void anEdgeOfAnotherClassThanTheStoredOneDoesNotWriteAndWarnsOnce() throws Exception {
-    List<java.util.logging.LogRecord> warnings = new java.util.ArrayList<>();
-    java.util.logging.Handler capture = capturing(java.util.logging.Level.WARNING, warnings);
-    java.util.logging.Logger logger =
-        java.util.logging.Logger.getLogger(EdgeRoutes.class.getName());
-    logger.addHandler(capture);
-    try {
-      bootUnder(ExposureClass.ALL, List.of());
-      DeploymentActiveSubscriber publicTask = subscriberOf(ExposureClass.PUBLIC);
-      Instant at = Instant.now();
-      eu.wohlben.qits.eventstream.control.EventFrame first = exposedCi("public", at);
-      assertThrows(EdgeRoutes.ProjectionFenced.class, () -> publicTask.onFrame(first));
-      assertThrows(
-          EdgeRoutes.ProjectionFenced.class,
-          () -> publicTask.onFrame(exposedCi("public", at.plusMillis(1))));
-      assertNull(routes.serviceHost("dev", "ci"), "the fenced frame wrote nothing");
-      assertEquals("all", routes.projectionClass());
-
-      List<String> fenced =
-          formatted(warnings).stream()
-              .filter(message -> message.contains("edge projection is class all"))
-              .toList();
-      assertEquals(1, fenced.size(), "said once, not per frame: " + fenced);
-      assertTrue(
-          fenced
-              .get(0)
-              .contains(
-                  "edge projection is class all, this edge is public: not writing DeploymentActive "
-                      + first.id()),
-          fenced.get(0));
-
-      // The edge of the stored class writes as ever.
-      subscriberOf(ExposureClass.ALL).onFrame(exposedCi("public", at.plusMillis(2)));
-      assertNotNull(routes.serviceHost("dev", "ci"));
-    } finally {
-      logger.removeHandler(capture);
-      bootUnder(ExposureClass.PUBLIC, List.of());
-    }
-  }
-
-  @Test
-  void aKeptProjectionRoutingAPrivateAppOnAPublicEdgeIsRebuiltAtBootAndACleanOneIsNot()
-      throws Exception {
-    List<java.util.logging.LogRecord> infos = new java.util.ArrayList<>();
-    java.util.logging.Handler capture = capturing(java.util.logging.Level.INFO, infos);
-    java.util.logging.Logger logger =
-        java.util.logging.Logger.getLogger(DeploymentProjectionBootstrap.class.getName());
-    logger.addHandler(capture);
-    try {
-      Instant at = Instant.now();
-      List<eu.wohlben.qits.eventstream.control.EventFrame> log = List.of(exposedCi("private", at));
-      bootUnder(ExposureClass.ALL, log);
-      bootUnder(ExposureClass.PUBLIC, log);
-      assertNull(routes.serviceHost("dev", "ci"));
-
-      // The drill's step 3: after the public task truncated, the old ALL task — without the fence —
-      // wrote the private frame back. The class is unchanged, so only the kept projection can say.
-      routes.replace(
-          ExposureClass.PUBLIC,
-          "dev",
-          "qits-ci",
-          "old-all-task",
-          at.plusMillis(1),
-          new EdgeRoutes.Snapshot(
-              List.of(
-                  new EdgeEndpoint(
-                      "dev", "qits-ci", "/ci", upstream("qits.edge.apps.mirror.hosts.dev"))),
-              "ci",
-              List.of()),
-          "private");
-      assertNotNull(routes.serviceHost("dev", "ci"), "the polluted projection routes it");
-
-      infos.clear();
-      bootUnder(ExposureClass.PUBLIC, log);
-      assertNull(routes.serviceHost("dev", "ci"), "rebuilt, the private app is withdrawn again");
-      assertEquals(
-          new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
-      assertEquals(421, client().get("ci.dev.acme.example.com", "/ci/api/runs", token()).status());
-      assertTrue(
-          formatted(infos)
-              .contains(
-                  "edge projection rebuilt: class public -> public (kept projection routes qits-ci"
-                      + " in dev, exposure private, outside the class)"),
-          formatted(infos).toString());
-
-      // Clean and unchanged: kept as it is, nothing rebuilt.
-      infos.clear();
-      bootUnder(ExposureClass.PUBLIC, List.of());
-      assertEquals(
-          new EdgeRoutes.Withdrawn("ci", "private"), routes.withdrawnHosts("dev").get("qits-ci"));
-      assertTrue(
-          formatted(infos).stream().noneMatch(message -> message.contains("rebuilt")),
-          formatted(infos).toString());
-
-      // A row from before V12 records no exposure and cannot be judged: rebuilt once.
-      routes.replace(
-          "dev",
-          "qits-ci",
-          "pre-v12",
-          at.plusMillis(2),
-          EdgeRoutes.Snapshot.ofEndpoints(
-              List.of(
-                  new EdgeEndpoint(
-                      "dev", "qits-ci", "/ci", upstream("qits.edge.apps.mirror.hosts.dev")))));
-      infos.clear();
-      bootUnder(ExposureClass.PUBLIC, log);
-      assertTrue(
-          formatted(infos)
-              .contains(
-                  "edge projection rebuilt: class public -> public (kept projection routes qits-ci"
-                      + " in dev with no recorded exposure)"),
-          formatted(infos).toString());
-      assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
-    } finally {
-      logger.removeHandler(capture);
-    }
-  }
-
-  @Test
-  void theServingCopyFollowsWhatAnotherProcessWroteToTheDatabase() throws Exception {
-    deployments.onFrame(exposedCi("public", Instant.now()));
-    assertNotNull(routes.serviceHost("dev", "ci"));
-
-    // Another edge task on the same database withdrew it; this process's view did not see it.
-    try (java.sql.Connection connection = edgeDataSource.getConnection();
-        java.sql.PreparedStatement navigation =
-            connection.prepareStatement(
-                "delete from edge_navigation_entry where application_name = 'qits-ci'");
-        java.sql.PreparedStatement endpoints =
-            connection.prepareStatement(
-                "delete from edge_endpoint where application_name = 'qits-ci'");
-        java.sql.PreparedStatement snapshot =
-            connection.prepareStatement(
-                "update edge_deployment_snapshot set event_id = 'other-task', browser_host = null"
-                    + " where application_name = 'qits-ci'")) {
-      navigation.executeUpdate();
-      endpoints.executeUpdate();
-      snapshot.executeUpdate();
-    }
-    // (Not asserted stale here: the 15 s tick may already have run.)
-    routes.refreshIfChanged();
-    assertNull(routes.serviceHost("dev", "ci"));
-  }
-
-  /** A subscriber of {@code exposure} on this suite's projection: another edge task, in effect. */
-  private DeploymentActiveSubscriber subscriberOf(ExposureClass exposure) {
-    DeploymentActiveSubscriber subscriber = new DeploymentActiveSubscriber();
-    subscriber.routes = routes;
-    subscriber.config = exposedAs(exposure);
-    return subscriber;
-  }
-
-  private static java.util.logging.Handler capturing(
-      java.util.logging.Level level, List<java.util.logging.LogRecord> into) {
-    return new java.util.logging.Handler() {
-      @Override
-      public void publish(java.util.logging.LogRecord record) {
-        if (record.getLevel().intValue() >= level.intValue()) {
-          into.add(record);
-        }
-      }
-
-      @Override
-      public void flush() {}
-
-      @Override
-      public void close() {}
-    };
-  }
-
-  /** The captured records as the line they log. */
-  private static List<String> formatted(List<java.util.logging.LogRecord> records) {
-    return records.stream()
-        .map(
-            record ->
-                record.getParameters() == null || record.getParameters().length == 0
-                    ? record.getMessage()
-                    : String.format(record.getMessage(), record.getParameters()))
-        .toList();
-  }
-
-  // --- the stored snapshot is served while catching up (qits-2160) -------------------------------
-
-  @Test
-  void aKeptSnapshotIsRoutableBeforeTheHeadAndAuthoritativeOnlyAtIt() throws Exception {
-    Instant at = Instant.now();
-    List<eu.wohlben.qits.eventstream.control.EventFrame> log = List.of(exposedCi("public", at));
-    bootUnder(ExposureClass.PUBLIC, log);
-
-    Observed seen = bootObserving(ExposureClass.PUBLIC, log);
-    assertFalse(seen.beforeReconcile, "not before the boot has looked at the snapshot");
-    assertTrue(seen.beforeReplay, "an unchanged class over routes is served at once");
-    assertTrue(seen.afterReplay);
-    assertFalse(seen.authoritativeBeforeHead, "but it is not authoritative before the head");
-    assertTrue(seen.bootstrap.authoritative());
-    assertTrue(seen.bootstrap.routable());
-    assertFalse(seen.bootstrap.servingSnapshot(), "at the head it is the replayed projection");
-  }
-
-  @Test
-  void aClassResetIsNotRoutableUntilTheHeadEvenOnceTheReplayRefillsIt() throws Exception {
-    Instant at = Instant.now();
-    List<eu.wohlben.qits.eventstream.control.EventFrame> log = List.of(exposedCi("public", at));
-    bootUnder(ExposureClass.PUBLIC, log);
-
-    Observed seen = bootObserving(ExposureClass.ALL, log);
-    assertFalse(seen.beforeReplay, "the truncated projection is not served");
-    assertFalse(seen.afterReplay, "nor is the partial one the replay builds");
-    assertTrue(seen.bootstrap.authoritative());
-    assertTrue(seen.bootstrap.routable());
-    bootUnder(ExposureClass.PUBLIC, log);
-  }
-
-  @Test
-  void anEmptyProjectionIsNotRoutableUntilTheHeadEvenOnceTheReplayFillsIt() throws Exception {
-    bootUnder(ExposureClass.PUBLIC, List.of());
-    clearProjection();
-
-    Observed seen =
-        bootObserving(ExposureClass.PUBLIC, List.of(exposedCi("public", Instant.now())));
-    assertFalse(seen.beforeReplay, "a first boot or a wiped database has nothing to serve");
-    assertFalse(seen.afterReplay, "and a projection the replay is still filling is no snapshot");
-    assertTrue(seen.bootstrap.authoritative());
-  }
-
-  /** What {@link #bootObserving} saw of the bootstrap on the way to the head. */
-  private static final class Observed {
-    DeploymentProjectionBootstrap bootstrap;
-    boolean beforeReconcile;
-    boolean beforeReplay;
-    boolean afterReplay;
-    boolean authoritativeBeforeHead;
-  }
-
-  /**
-   * {@link #bootUnder}, recording {@code routable()} before the reconcile and around the replay.
-   */
-  private Observed bootObserving(
-      ExposureClass exposure, List<eu.wohlben.qits.eventstream.control.EventFrame> log) {
-    Observed seen = new Observed();
-    DeploymentActiveSubscriber subscriber = new DeploymentActiveSubscriber();
-    subscriber.routes = routes;
-    subscriber.config = exposedAs(exposure);
-    DeploymentProjectionCatchup replay =
-        new DeploymentProjectionCatchup() {
-          @Override
-          public eu.wohlben.qits.eventstream.control.CatchupResult rebuildFromEpoch(
-              String consumerId) {
-            seen.beforeReplay = seen.bootstrap.routable();
-            log.forEach(subscriber::onFrame);
-            seen.afterReplay = seen.bootstrap.routable();
-            seen.authoritativeBeforeHead = seen.bootstrap.authoritative();
-            return new eu.wohlben.qits.eventstream.control.CatchupResult(
-                consumerId,
-                eu.wohlben.qits.eventstream.control.CatchupResult.Status.REACHED_HEAD,
-                log.size());
-          }
-
-          @Override
-          public eu.wohlben.qits.eventstream.control.CatchupResult catchUp(String consumerId) {
-            throw new AssertionError("a confirmed head must not need a retry");
-          }
-        };
-    seen.bootstrap =
-        new DeploymentProjectionBootstrap(
-            replay, routes, exposure, true, java.time.Duration.ofMillis(1));
-    seen.beforeReconcile = seen.bootstrap.routable();
-    seen.bootstrap.catchUpUntilReady();
-    return seen;
-  }
-
-  /**
-   * One edge boot under {@code exposure}: the production bootstrap, replaying {@code log} into a
-   * subscriber of that class — the class a restart with {@code QITS_EDGE_EXPOSURE} set would read.
-   */
-  private void bootUnder(
-      ExposureClass exposure, List<eu.wohlben.qits.eventstream.control.EventFrame> log) {
-    DeploymentActiveSubscriber subscriber = new DeploymentActiveSubscriber();
-    subscriber.routes = routes;
-    subscriber.config = exposedAs(exposure);
-    DeploymentProjectionCatchup replay =
-        new DeploymentProjectionCatchup() {
-          @Override
-          public eu.wohlben.qits.eventstream.control.CatchupResult rebuildFromEpoch(
-              String consumerId) {
-            log.forEach(subscriber::onFrame);
-            return new eu.wohlben.qits.eventstream.control.CatchupResult(
-                consumerId,
-                eu.wohlben.qits.eventstream.control.CatchupResult.Status.REACHED_HEAD,
-                log.size());
-          }
-
-          @Override
-          public eu.wohlben.qits.eventstream.control.CatchupResult catchUp(String consumerId) {
-            throw new AssertionError("a confirmed head must not need a retry");
-          }
-        };
-    DeploymentProjectionBootstrap bootstrap =
-        new DeploymentProjectionBootstrap(
-            replay, routes, exposure, true, java.time.Duration.ofMillis(1));
-    bootstrap.catchUpUntilReady();
-    assertTrue(bootstrap.authoritative());
-  }
-
-  /** This suite's configuration with only the exposure class replaced. */
-  private EdgeConfig exposedAs(ExposureClass exposure) {
-    EdgeConfig real = edgeConfig;
-    return (EdgeConfig)
-        java.lang.reflect.Proxy.newProxyInstance(
-            EdgeConfig.class.getClassLoader(),
-            new Class<?>[] {EdgeConfig.class},
-            (proxy, method, arguments) -> {
-              if ("exposure".equals(method.getName()) && method.getParameterCount() == 0) {
-                return exposure;
-              }
-              try {
-                return method.invoke(real, arguments);
-              } catch (java.lang.reflect.InvocationTargetException failure) {
-                throw failure.getCause();
-              }
-            });
-  }
-
   /**
    * The project set this suite routes with, from a clean table.
    *
@@ -2320,19 +1778,17 @@ class EdgeRoutingTest {
    * the door identically — so the application name here is deliberately arbitrary.
    */
   private void activateLanding(String application, String environment, String path, String app) {
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", application)
-                .put("environmentName", environment)
-                .put("browserHost", HostEnvironments.LANDING)
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(
-                            endpoint(
-                                path,
-                                upstream("qits.edge.apps." + app + ".hosts." + environment))))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", application)
+            .put("environmentName", environment)
+            .put("browserHost", HostEnvironments.LANDING)
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(
+                        endpoint(
+                            path, upstream("qits.edge.apps." + app + ".hosts." + environment)))));
   }
 
   @Test
@@ -2462,58 +1918,34 @@ class EdgeRoutingTest {
   }
 
   @Test
-  void twoLandingPublishersAreLoggedAtErrorAndTheNewestIsServed() throws Exception {
-    // Last-wins, and it cannot be anything else: a deployment frame carries an application name and
-    // no repository identity, so there is nothing here to compare a claimant against. Refusing
-    // would blank a project's front page over an ambiguity nobody can resolve from the frame, so
-    // the newest is served and the collision is reported.
-    java.util.List<java.util.logging.LogRecord> errors = new java.util.ArrayList<>();
-    java.util.logging.Handler capture =
-        new java.util.logging.Handler() {
-          @Override
-          public void publish(java.util.logging.LogRecord record) {
-            if (record.getLevel().intValue() >= java.util.logging.Level.SEVERE.intValue()) {
-              errors.add(record);
-            }
-          }
+  void twoLandingPublishersRefuseTheTableAndTheFirstKeepsTheDoor() {
+    // A whole table has no "newest frame" to let win, so the reserved label is held to the rule
+    // every host is: two claimants in one environment refuse the table, the held one stays served,
+    // and the reason names both.
+    activateLanding("gizmo-landing-app", "prod", "/first-landing", "mirror");
+    RouteTables.Outcome outcome =
+        seed.deploy(
+            new JsonObject()
+                .put("applicationName", "gizmo-landing-service")
+                .put("environmentName", "prod")
+                .put("browserHost", HostEnvironments.LANDING)
+                .put(
+                    "endpoints",
+                    new io.vertx.core.json.JsonArray()
+                        .add(
+                            endpoint(
+                                "/second-landing",
+                                upstream("qits.edge.apps.registry.hosts.prod")))));
 
-          @Override
-          public void flush() {}
-
-          @Override
-          public void close() {}
-        };
-    java.util.logging.Logger logger =
-        java.util.logging.Logger.getLogger(EdgeRoutes.class.getName());
-    logger.addHandler(capture);
-    try {
-      activateLanding("gizmo-landing-app", "prod", "/first-landing", "mirror");
-      activateLanding("gizmo-landing-service", "prod", "/second-landing", "registry");
-
-      // Served, not blanked and not refused: the most recent claimant answers the door.
-      EdgeClient.Answer served = client().get(FLAT_PROJECT + ".example.com", "/", token());
-      assertEquals(200, served.status(), served.body());
-      assertEquals("registry-prod", served.line("upstream"));
-
-      // The displaced one is not rolled back — it keeps its routes and loses only the public name.
-      assertNull(routes.applicationHost("prod", "gizmo-landing-app"));
-      assertEquals("/first-landing", routes.primaryPath("prod", "gizmo-landing-app"));
-
-      String logged =
-          errors.stream()
-              .map(
-                  record ->
-                      record.getMessage() + " " + java.util.Arrays.toString(record.getParameters()))
-              .filter(message -> message.contains(HostEnvironments.LANDING))
-              .findFirst()
-              .orElse(null);
-      assertNotNull(logged, "the collision must be reported at ERROR: " + errors);
-      assertTrue(logged.contains("gizmo-landing-app"), logged);
-      assertTrue(logged.contains("gizmo-landing-service"), logged);
-      assertTrue(logged.contains("prod"), logged);
-    } finally {
-      logger.removeHandler(capture);
-    }
+    assertTrue(outcome instanceof RouteTables.Invalid, outcome.toString());
+    String reason = ((RouteTables.Invalid) outcome).reason();
+    assertTrue(reason.contains("gizmo-landing-app"), reason);
+    assertTrue(reason.contains("gizmo-landing-service"), reason);
+    assertTrue(reason.contains("prod"), reason);
+    EdgeClient.Answer served = client().get(FLAT_PROJECT + ".example.com", "/", token());
+    assertEquals(200, served.status(), served.body());
+    assertEquals("mirror-prod", served.line("upstream"));
+    assertNull(routes.primaryPath("prod", "gizmo-landing-service"));
   }
 
   private void publishProject() throws java.sql.SQLException {
@@ -2537,90 +1969,25 @@ class EdgeRoutingTest {
         Instant.now());
   }
 
-  /**
-   * The class the projection is recorded as built under, set by hand: this suite's own before each
-   * test, so a test that rebooted under another class and failed half way cannot fence the next.
-   */
-  private void storeProjectionClass(ExposureClass exposure) throws java.sql.SQLException {
-    try (java.sql.Connection connection = edgeDataSource.getConnection();
-        java.sql.PreparedStatement delete =
-            connection.prepareStatement("delete from edge_projection_class");
-        java.sql.PreparedStatement insert =
-            connection.prepareStatement(
-                "insert into edge_projection_class (exposure) values (?)")) {
-      delete.executeUpdate();
-      insert.setString(1, exposure.name().toLowerCase(java.util.Locale.ROOT));
-      insert.executeUpdate();
-    }
-  }
-
-  private void clearProjection() throws java.sql.SQLException {
-    try (java.sql.Connection connection = edgeDataSource.getConnection();
-        java.sql.PreparedStatement navigation =
-            connection.prepareStatement("delete from edge_navigation_entry");
-        java.sql.PreparedStatement endpoints =
-            connection.prepareStatement("delete from edge_endpoint");
-        java.sql.PreparedStatement snapshots =
-            connection.prepareStatement("delete from edge_deployment_snapshot")) {
-      navigation.executeUpdate();
-      endpoints.executeUpdate();
-      snapshots.executeUpdate();
-    }
-    routes.load(null);
+  /** An empty route table, served: nothing routed but the platform labels. */
+  private void clearProjection() {
+    seed.clear();
   }
 
   private static Upstream upstream(String property) {
     return Upstream.parse(ConfigProvider.getConfig().getValue(property, String.class), 8080);
   }
 
-  private static eu.wohlben.qits.eventstream.control.EventFrame deployment(
-      String application,
-      String environment,
-      String eventId,
-      Upstream upstream,
-      String path,
-      String label) {
-    return new eu.wohlben.qits.eventstream.control.EventFrame(
-        eventId,
-        "DeploymentActive",
-        Instant.now(),
-        new JsonObject()
-            .put("applicationName", application)
-            .put("environmentName", environment)
-            .put(
-                "endpoints",
-                new io.vertx.core.json.JsonArray()
-                    .add(
-                        new JsonObject()
-                            .put("path", path)
-                            .put("upstreamHost", upstream.host())
-                            .put("upstreamPort", upstream.port())
-                            .put("navigationLabel", label)
-                            .put("navigationPosition", 1)))
-            .encode(),
-        null,
-        null,
-        environment);
-  }
-
   @Test
-  void anExplicitlyEmptySnapshotRemovesThePredecessorsRoutes() {
+  void aRetiredApplicationLeavesTheTableAndItsRoutesWithIt() {
     activateArtifacts();
     activateCi();
     assertNotNull(routes.resolve("dev", "qits-artifacts", "/artifacts/api/files"));
-    deployments.onFrame(
-        new eu.wohlben.qits.eventstream.control.EventFrame(
-            java.util.UUID.randomUUID().toString(),
-            "DeploymentActive",
-            Instant.now(),
-            new JsonObject()
-                .put("applicationName", "qits-artifacts")
-                .put("environmentName", "dev")
-                .put("endpoints", new io.vertx.core.json.JsonArray())
-                .encode(),
-            null,
-            null,
-            "dev"));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-artifacts")
+            .put("environmentName", "dev")
+            .put("endpoints", new io.vertx.core.json.JsonArray()));
 
     // /artifacts is nobody's route any more.
     assertNull(routes.resolve("dev", "qits-artifacts", "/artifacts/api/files"));
@@ -2632,9 +1999,9 @@ class EdgeRoutingTest {
   @Test
   void aPublicEdgeServesPublicAndBothDeployments() {
     Instant at = Instant.now();
-    deployments.onFrame(exposedCi("public", at));
+    seed.deploy(exposedCi("public", at));
     assertNotNull(routes.serviceHost("dev", "ci"));
-    deployments.onFrame(exposedCi("both", at.plusMillis(1)));
+    seed.deploy(exposedCi("both", at.plusMillis(1)));
     assertNotNull(routes.serviceHost("dev", "ci"));
     assertNotNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
   }
@@ -2642,14 +2009,14 @@ class EdgeRoutingTest {
   @Test
   void aPrivateFrameWithdrawsTheVhostFromThePublicEdge() {
     Instant at = Instant.now();
-    deployments.onFrame(exposedCi(null, at));
+    seed.deploy(exposedCi(null, at));
     assertNotNull(routes.serviceHost("dev", "ci"));
 
-    // Stored, not skipped: the same empty snapshot a retirement is, so the host, the route and the
+    // Out of the public table and into its withdrawn list, so the host, the route and the
     // navigation row all go. The name is not a 404, though: the withdrawal says the private edge
     // serves it, so a request that reached this edge was misdirected by its resolver — 421, and the
     // HTTP/1.1 connection closed so the client's next request resolves again (qits-2223).
-    deployments.onFrame(exposedCi("private", at.plusMillis(1)));
+    seed.deploy(exposedCi("private", at.plusMillis(1)));
     assertNull(routes.serviceHost("dev", "ci"));
     assertNull(routes.resolve("dev", "qits-ci", "/ci/api/runs"));
     assertTrue(
@@ -2665,8 +2032,8 @@ class EdgeRoutingTest {
     // A label nobody publishes or withdraws is still the ordinary 404.
     assertEquals(404, client().get("nosuch.dev.acme.example.com", "/", token()).status());
 
-    // Back inside the class, a later frame restores it: the frame-time order still decides.
-    deployments.onFrame(exposedCi("both", at.plusMillis(2)));
+    // Back inside the class, the next table restores it.
+    seed.deploy(exposedCi("both", at.plusMillis(2)));
     assertNotNull(routes.serviceHost("dev", "ci"));
   }
 
@@ -2674,8 +2041,8 @@ class EdgeRoutingTest {
   void aWithdrawnAppIsNamedToASignedInCallerAndRoutesNothing() {
     activateArtifacts();
     Instant at = Instant.now();
-    deployments.onFrame(exposedCi(null, at));
-    deployments.onFrame(exposedCi("private", at.plusMillis(1)));
+    seed.deploy(exposedCi(null, at));
+    seed.deploy(exposedCi("private", at.plusMillis(1)));
 
     // The withdrawal keeps the host for the navigation and nothing that routes: no vhost, no path,
     // no applicationHosts row — the name is misdirected (421, qits-2223) even with a good token.
@@ -2718,7 +2085,7 @@ class EdgeRoutingTest {
         "a withdrawn app fills no slot");
 
     // Back inside the class: routed again, and an ordinary entry with no exposure.
-    deployments.onFrame(exposedCi("public", at.plusMillis(2)));
+    seed.deploy(exposedCi("public", at.plusMillis(2)));
     assertNull(routes.withdrawnHosts("dev").get("qits-ci"));
     assertNotNull(routes.serviceHost("dev", "ci"));
     JsonObject restored =
@@ -2730,35 +2097,15 @@ class EdgeRoutingTest {
   }
 
   @Test
-  void aWithdrawalWithAnUnusableHostStillWithdraws() {
-    Instant at = Instant.now();
-    deployments.onFrame(exposedCi(null, at));
-    JsonObject payload =
-        new JsonObject(exposedCi("private", at.plusMillis(1)).payload())
-            .put("browserHost", "not a label");
-    deployments.onFrame(
-        new eu.wohlben.qits.eventstream.control.EventFrame(
-            java.util.UUID.randomUUID().toString(),
-            "DeploymentActive",
-            at.plusMillis(1),
-            payload.encode(),
-            null,
-            null,
-            null));
-    assertNull(routes.serviceHost("dev", "ci"), "the bad host must not keep the app routed");
-    assertFalse(routes.withdrawnHosts("dev").containsKey("qits-ci"));
-  }
-
-  @Test
   void anUnknownExposureChangesNothing() {
     Instant at = Instant.now();
-    deployments.onFrame(exposedCi("public", at));
-    deployments.onFrame(exposedCi("internal", at.plusMillis(1)));
+    seed.deploy(exposedCi("public", at));
+    seed.deploy(exposedCi("internal", at.plusMillis(1)));
     assertNotNull(routes.serviceHost("dev", "ci"), "a typo neither publishes nor withdraws");
   }
 
-  /** ci's flipped snapshot with an exposure — absent when null — at a stated frame time. */
-  private eu.wohlben.qits.eventstream.control.EventFrame exposedCi(String exposure, Instant at) {
+  /** ci's flipped deployment with an exposure — absent when null. */
+  private JsonObject exposedCi(String exposure, Instant at) {
     JsonObject payload =
         new JsonObject()
             .put("applicationName", "qits-ci")
@@ -2774,14 +2121,7 @@ class EdgeRoutingTest {
     if (exposure != null) {
       payload.put("exposure", exposure);
     }
-    return new eu.wohlben.qits.eventstream.control.EventFrame(
-        java.util.UUID.randomUUID().toString(),
-        "DeploymentActive",
-        at,
-        payload.encode(),
-        null,
-        null,
-        null);
+    return payload;
   }
 
   /**
@@ -2791,21 +2131,20 @@ class EdgeRoutingTest {
    */
   private void activateArtifacts() {
     Upstream upstream = upstream("qits.edge.apps.registry.hosts.dev");
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-artifacts")
-                .put("environmentName", "dev")
-                .put("browserHost", "registry")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/artifacts", upstream))
-                        .add(endpoint("/v2", upstream)))
-                .put(
-                    "navigation",
-                    new io.vertx.core.json.JsonArray()
-                        .add(placement("services.details", "Artifacts", 3)))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-artifacts")
+            .put("environmentName", "dev")
+            .put("browserHost", "registry")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/artifacts", upstream))
+                    .add(endpoint("/v2", upstream)))
+            .put(
+                "navigation",
+                new io.vertx.core.json.JsonArray()
+                    .add(placement("services.details", "Artifacts", 3))));
   }
 
   /** A second flipped application, on a stub that names itself differently. */
@@ -2814,23 +2153,19 @@ class EdgeRoutingTest {
   }
 
   private void activateCi(String environment) {
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-ci")
-                .put("environmentName", environment)
-                .put("browserHost", "ci")
-                .put("apiDocsPath", "/ci/q/swagger-ui")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(
-                            endpoint(
-                                "/ci", upstream("qits.edge.apps.mirror.hosts." + environment))))
-                .put(
-                    "navigation",
-                    new io.vertx.core.json.JsonArray()
-                        .add(placement("services.details", "CI", 2)))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-ci")
+            .put("environmentName", environment)
+            .put("browserHost", "ci")
+            .put("apiDocsPath", "/ci/q/swagger-ui")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts." + environment))))
+            .put(
+                "navigation",
+                new io.vertx.core.json.JsonArray().add(placement("services.details", "CI", 2))));
   }
 
   /**
@@ -2838,22 +2173,20 @@ class EdgeRoutingTest {
    * root and a second view under a subpath.
    */
   private void activateWorkspaces() {
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-workspaces")
-                .put("environmentName", "dev")
-                .put("browserHost", "workspaces")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/workspaces", upstream("qits.edge.apps.mirror.hosts.dev"))))
-                .put(
-                    "navigation",
-                    new io.vertx.core.json.JsonArray()
-                        .add(placement("project.detail", "Workspaces", 1))
-                        .add(
-                            placement("project.detail", "Runners", 2).put("subpath", "runners")))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-workspaces")
+            .put("environmentName", "dev")
+            .put("browserHost", "workspaces")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/workspaces", upstream("qits.edge.apps.mirror.hosts.dev"))))
+            .put(
+                "navigation",
+                new io.vertx.core.json.JsonArray()
+                    .add(placement("project.detail", "Workspaces", 1))
+                    .add(placement("project.detail", "Runners", 2).put("subpath", "runners"))));
   }
 
   /** The landing service: what makes the environment's own name a door rather than a page. */
@@ -2862,19 +2195,18 @@ class EdgeRoutingTest {
   }
 
   private void activateProjects(String environment) {
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-projects")
-                .put("environmentName", environment)
-                .put("browserHost", "projects")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/projects", upstream("qits.edge.apps.registry.hosts.dev"))))
-                .put(
-                    "navigation",
-                    new io.vertx.core.json.JsonArray().add(placement("system", "Overview", 1)))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-projects")
+            .put("environmentName", environment)
+            .put("browserHost", "projects")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/projects", upstream("qits.edge.apps.registry.hosts.dev"))))
+            .put(
+                "navigation",
+                new io.vertx.core.json.JsonArray().add(placement("system", "Overview", 1))));
   }
 
   /**
@@ -2890,18 +2222,15 @@ class EdgeRoutingTest {
    * upstream rather than mirror's configured route happening to answer.
    */
   private void activateBrochure() {
-    deployments.onFrame(
-        frame(
-            new JsonObject()
-                .put("applicationName", "qits-brochure")
-                .put("environmentName", "dev")
-                .put("browserHost", "brochure")
-                .put(
-                    "endpoints",
-                    new io.vertx.core.json.JsonArray()
-                        .add(
-                            endpoint(
-                                "/brochure", upstream("qits.edge.apps.registry.hosts.dev"))))));
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-brochure")
+            .put("environmentName", "dev")
+            .put("browserHost", "brochure")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(endpoint("/brochure", upstream("qits.edge.apps.registry.hosts.dev")))));
   }
 
   private static JsonObject endpoint(String path, Upstream upstream) {
@@ -2913,17 +2242,6 @@ class EdgeRoutingTest {
 
   private static JsonObject placement(String slot, String label, int position) {
     return new JsonObject().put("slot", slot).put("label", label).put("position", position);
-  }
-
-  private static eu.wohlben.qits.eventstream.control.EventFrame frame(JsonObject payload) {
-    return new eu.wohlben.qits.eventstream.control.EventFrame(
-        java.util.UUID.randomUUID().toString(),
-        "DeploymentActive",
-        Instant.now(),
-        payload.encode(),
-        null,
-        null,
-        null);
   }
 
   @Test

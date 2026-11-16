@@ -17,8 +17,8 @@ import org.jboss.logging.Logger;
 /**
  * {@code PUT /edge-route-table} and {@code GET /edge-route-table}: the route table qits-deployments
  * pushes (epic qits-2174), on every vhost, answered by the edge itself and never proxied — the same
- * shape of route as {@link NavigationRoute}. What is stored and how is {@link RouteTables}; D2a
- * stores and reports a table and serves nothing from it.
+ * shape of route as {@link NavigationRoute}. What is stored and how is {@link RouteTables}, which
+ * hands every stored table to {@link EdgeRoutes} to serve.
  *
  * <p><b>Only the deployer may push.</b> A {@code PUT} needs a credential {@link
  * EdgeAuth#checkCredential} accepts, presented as a service bearer ({@link

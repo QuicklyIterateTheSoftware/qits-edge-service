@@ -49,7 +49,7 @@ class EdgeCallerTest {
                   List.of(DOMAIN),
                   Integer.MAX_VALUE);
 
-  /** environment → published label → service, as the projection serves it. */
+  /** environment → published label → service, as the route table serves it. */
   private static final Map<String, Map<String, EdgeRoutes.ServiceHost>> PUBLISHED =
       Map.of(
           "prod",

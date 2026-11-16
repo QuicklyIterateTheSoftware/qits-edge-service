@@ -2,11 +2,16 @@ package eu.wohlben.qits.edge;
 
 import io.agroal.api.AgroalDataSource;
 import io.quarkus.agroal.DataSource;
+import io.quarkus.runtime.StartupEvent;
 import io.vertx.core.json.DecodeException;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
+import jakarta.interceptor.Interceptor;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -25,42 +30,57 @@ import org.jboss.logging.Logger;
 
 /**
  * The route table qits-deployments builds and pushes (epic qits-2174), validated whole and kept in
- * {@code edge_route_table}: one row, the newest table this edge accepted.
+ * {@code edge_route_table}: one row, the newest table this edge accepted — and the one {@link
+ * EdgeRoutes} serves.
  *
- * <p><b>D2a stores it and serves nothing from it.</b> Routing, {@code /main-navigation} and
- * readiness are still the {@code DeploymentActive} projection's ({@link EdgeRoutes}); a stored
- * table is logged and reported by {@code GET /edge-route-table}, so the deployer's tables can be
- * compared with what the projection routes before D2b switches serving over.
+ * <p><b>At boot the stored table is served first</b> ({@link #load}), before the private edge's
+ * fetch ({@link RouteTableFetch}) or any push, so a restarted edge routes what it routed before it
+ * stopped. A table stored later replaces the served one at once.
  *
  * <p><b>The version only goes up.</b> A table whose {@code version} is not above the held one
  * changes nothing and is answered with the held version. An invalid table is refused whole — the
- * held one stays — with the reason, and an ERROR line.
+ * held one stays, and stays served — with the reason, and an ERROR line.
  *
- * <p><b>The checks are the projection's, moved to the whole table</b>: {@code
- * DeploymentActiveSubscriber.browserHost} (a host is a DNS label, not an environment name, and on
- * the public edge not a {@link PlatformApps} label pointing anywhere but that platform
- * application's own address) and {@code EdgeRoutes.rejectPathConflicts}/{@code rejectHostConflict}
- * (no {@code (environment, path)} and no {@code (environment, host)} twice). A whole table has no
- * "newest frame" to let win, so the reserved {@link HostEnvironments#LANDING} label is held to the
- * same rule as every other host: two claimants refuse the table.
+ * <p><b>The checks are the old projection's, moved to the whole table</b>: a host is a DNS label,
+ * not an environment name, and on the public edge not a {@link PlatformApps} label pointing
+ * anywhere but that platform application's own address; an api-docs path sits under one of the
+ * application's own routes; and no {@code (environment, path)} and no {@code (environment, host)}
+ * is published twice. A whole table has no "newest frame" to let win, so the reserved {@link
+ * HostEnvironments#LANDING} label is held to the same rule as every other host: two claimants
+ * refuse the table.
  */
 @ApplicationScoped
 public class RouteTables {
 
   private static final Logger LOG = Logger.getLogger(RouteTables.class);
 
-  /** The public edge's table name; also the break-glass class's, which is the public edge. */
+  /** The public edge's table name. */
   static final String PUBLIC = "public";
 
   static final String PRIVATE = "private";
 
   private static final int PORT_LIMIT = 65535;
 
+  private static final int API_DOCS_LIMIT = 255;
+
+  /** The exposure a table entry without the field has. */
+  static final String DEFAULT_EXPOSURE = "public";
+
+  private static final Set<String> EXPOSURES = Set.of("public", "private", "both");
+
   @Inject
   @DataSource("edge")
   AgroalDataSource dataSource;
 
   @Inject EdgeConfig config;
+
+  /** What serves the stored table. */
+  @Inject EdgeRoutes routes;
+
+  /**
+   * Told when a new table may have moved a private withdrawal (qits-2273); unset in a bare test.
+   */
+  @Inject Instance<PrivateHostRecords> privateHosts;
 
   Clock clock = Clock.systemUTC();
 
@@ -96,8 +116,63 @@ public class RouteTables {
     return exposure == ExposureClass.PRIVATE ? PRIVATE : PUBLIC;
   }
 
-  /** What this edge holds now, read from the row. Blocking. */
+  /**
+   * Serves the stored table, before anything else at boot: ahead of the private edge's fetch and of
+   * the HTTP server, so the first request is routed from it. No row serves nothing — ready only on
+   * the public edge, with {@link PlatformApps} alone ({@link EdgeRoutes#ready()}).
+   */
+  void load(@Observes @Priority(Interceptor.Priority.PLATFORM_BEFORE) StartupEvent ignored) {
+    load();
+  }
+
+  /** {@link #load(StartupEvent)}, callable again: re-reads the row and serves what it holds. */
+  public synchronized void load() {
+    try (Connection connection = dataSource.getConnection();
+        PreparedStatement select =
+            connection.prepareStatement(
+                "select edge, version, body::text from edge_route_table where id = 1");
+        ResultSet row = select.executeQuery()) {
+      if (!row.next()) {
+        routes.serveNothing();
+        LOG.infof("route table %s: none stored", edge());
+        return;
+      }
+      String stored = row.getString(1);
+      if (!edge().equals(stored)) {
+        routes.serveNothing();
+        LOG.errorf(
+            "the stored route table is the %s edge's, and this is the %s edge: serving none",
+            stored, edge());
+        return;
+      }
+      long version = row.getLong(2);
+      JsonObject table = new JsonObject(row.getString(3));
+      routes.serve(version, table);
+      LOG.infof(
+          "route table %s %d served from the cache: %d applications",
+          edge(), version, table.getJsonArray("applications").size());
+      reconcilePrivateHosts();
+    } catch (SQLException failure) {
+      throw new IllegalStateException("could not load the edge route table", failure);
+    }
+  }
+
+  private void reconcilePrivateHosts() {
+    if (privateHosts != null && privateHosts.isResolvable()) {
+      privateHosts.get().requestReconcile();
+    }
+  }
+
+  /**
+   * What this edge holds now, read from the row. Blocking.
+   *
+   * <p>The row is shared by both tasks of an edge update (start-first, one database), and a push
+   * lands on whichever the ingress picked: a task serving an older table than the row holds loads
+   * the row here, so the deployer's next {@code GET} — every observation pass asks — brings it
+   * level.
+   */
   public Held held() {
+    Held held;
     try (Connection connection = dataSource.getConnection();
         PreparedStatement select =
             connection.prepareStatement(
@@ -106,10 +181,20 @@ public class RouteTables {
       if (!row.next()) {
         return new Held(edge(), null, null);
       }
-      return new Held(row.getString(1), row.getLong(2), row.getTimestamp(3).toInstant());
+      held = new Held(row.getString(1), row.getLong(2), row.getTimestamp(3).toInstant());
     } catch (SQLException failure) {
       throw new IllegalStateException("could not read the edge route table", failure);
     }
+    if (servesOlderThan(held.version())) {
+      load();
+    }
+    return held;
+  }
+
+  /** Whether the served table is older than {@code stored}, the row's version. */
+  private boolean servesOlderThan(long stored) {
+    Long served = routes.version();
+    return served == null || served < stored;
   }
 
   /** {@link #offer(JsonObject)}, from the raw body; a body that is not a JSON object is invalid. */
@@ -147,6 +232,11 @@ public class RouteTables {
             previous = row.getLong(1);
             if (version <= previous) {
               connection.rollback();
+              if (servesOlderThan(previous)) {
+                // Stored by the other task of an update: serve the row, which is newer than this
+                // process's copy (see held()).
+                load();
+              }
               return new AlreadyHeld(previous);
             }
           }
@@ -166,8 +256,10 @@ public class RouteTables {
           upsert.executeUpdate();
         }
         connection.commit();
+        routes.serve(version, table);
         LOG.infof(
             "route table %s %d -> %d: %d applications", edge(), previous, version, applications);
+        reconcilePrivateHosts();
         return new Stored(previous, version, applications);
       } catch (SQLException | RuntimeException failure) {
         connection.rollback();
@@ -249,7 +341,7 @@ public class RouteTables {
       if (!applicationsSeen.add(environment + "\n" + name)) {
         throw new IllegalArgumentException(who + " is in the table twice");
       }
-      ExposureClass.declared(application.getString("exposure"));
+      exposure(application.getString("exposure"));
 
       JsonArray endpoints = application.getJsonArray("endpoints");
       if (endpoints == null || endpoints.isEmpty()) {
@@ -290,6 +382,25 @@ public class RouteTables {
                   + " and "
                   + name
                   + ".");
+        }
+      }
+
+      String apiDocsPath = application.getString("apiDocsPath");
+      if (apiDocsPath != null && !apiDocsPath.isBlank()) {
+        String path = apiDocsPath.strip();
+        boolean underOwnRoute = false;
+        for (int e = 0; e < endpoints.size(); e++) {
+          String route = endpoints.getJsonObject(e).getString("path").strip();
+          underOwnRoute |=
+              path.equals(route) || path.startsWith(route.endsWith("/") ? route : route + "/");
+        }
+        if (path.length() > API_DOCS_LIMIT || !path.startsWith("/") || !underOwnRoute) {
+          throw new IllegalArgumentException(
+              who
+                  + " publishes the api-docs path `"
+                  + path
+                  + "`, which sits under none of its"
+                  + " own routes.");
         }
       }
 
@@ -348,12 +459,32 @@ public class RouteTables {
           throw new IllegalArgumentException(
               "withdrawn[" + i + "]: `" + host + "` cannot be a DNS label");
         }
-        ExposureClass.declared(entry.getString("exposure"));
+        exposure(entry.getString("exposure"));
       }
     }
   }
 
-  /** {@code DeploymentActiveSubscriber.browserHost}'s three refusals, for one table entry. */
+  /**
+   * A table entry's declared exposure, normalised: null or blank is {@code public}. A value that is
+   * none of {@code public}, {@code private} and {@code both} refuses the table rather than being
+   * guessed at.
+   */
+  static String exposure(String exposure) {
+    if (exposure == null || exposure.isBlank()) {
+      return DEFAULT_EXPOSURE;
+    }
+    String declared = exposure.strip().toLowerCase(Locale.ROOT);
+    if (!EXPOSURES.contains(declared)) {
+      throw new IllegalArgumentException(
+          "`" + exposure + "` is not an exposure; a deployment is public, private or both.");
+    }
+    return declared;
+  }
+
+  /**
+   * A service host's three refusals: not a DNS label, an environment name, or a {@link
+   * PlatformApps} label published at another address than that platform application's own.
+   */
   private static String browserHost(
       String raw,
       String environment,

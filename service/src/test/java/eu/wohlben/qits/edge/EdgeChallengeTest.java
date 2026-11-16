@@ -40,8 +40,8 @@ class EdgeChallengeTest {
 
   @Test
   void thePlatformAppVhostsAreExactlyTheFourPlatformApplications() {
-    // idp joined the three machine vhosts (qits-1403): its name must answer before the deployment
-    // catch-up ends, so it cannot wait for the projection to learn it.
+    // idp joined the three machine vhosts (qits-1403): its name must answer before any route table
+    // is served, so it cannot wait for a table to name it.
     assertEquals(Set.of("registry", "mirror", "githost", "idp"), PlatformApps.labels());
     assertTrue(PlatformApps.contains("IDP"), "a Host name arrives in any case");
     assertEquals("qits-idp", PlatformApps.application("idp"));
@@ -50,8 +50,7 @@ class EdgeChallengeTest {
   @Test
   void idpIsAddressedByThePlatformsOwnRuleAndOwnsItsOwnRoute() {
     // dev-qits-idp:8080, the alias qits-deployments gives it — the address its own deployment
-    // publishes, so a published `idp` host and the platform label agree
-    // (DeploymentActiveSubscriber).
+    // publishes, so a published `idp` host and the platform label agree (RouteTables).
     // The path is never rewritten: idp.qits.<domain>/idp/jwks reaches dev-qits-idp:8080/idp/jwks.
     assertEquals(
         new Upstream("dev-qits-idp", 8080), EdgeRouter.appUpstream("idp", "dev", Map.of()));

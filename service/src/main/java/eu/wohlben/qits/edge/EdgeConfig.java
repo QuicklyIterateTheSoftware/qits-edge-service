@@ -144,23 +144,21 @@ public interface EdgeConfig {
     Optional<String> url();
   }
 
-  /** The startup proof that turns a persisted deployment snapshot into an authoritative one. */
-  Projection projection();
+  /**
+   * The startup catch-ups that read the project and WireGuard-peer projections to qits-events' head
+   * ({@link ProjectSansBootstrap}, {@code wireguard.LivePeers}).
+   */
+  Catchup catchup();
 
-  interface Projection {
+  interface Catchup {
 
-    Catchup catchup();
+    /** False only in deliberately offline test/dev setups. */
+    @WithDefault("true")
+    boolean required();
 
-    interface Catchup {
-
-      /** False only in deliberately offline test/dev setups. */
-      @WithDefault("true")
-      boolean required();
-
-      /** Delay between unsuccessful reads of qits-events while readiness remains down. */
-      @WithDefault("PT1S")
-      Duration retry();
-    }
+    /** Delay between unsuccessful reads of qits-events while a projection is behind. */
+    @WithDefault("PT1S")
+    Duration retry();
   }
 
   /** What the process does once the HTTP drain is over (qits-1170). */

@@ -25,8 +25,8 @@ image: qits-edge
 # neither edge serves a vhost for this application itself.
 exposure: private
 
-# Its own databases, never the public edge's: `edge` holds the snapshots this edge keeps (private and
-# both), `eventstream` its claim ledger and watermark — a fresh database rebuilds from the epoch. Both
+# Its own databases, never the public edge's: `edge` holds the private route table it fetches and is
+# pushed, `eventstream` its claim ledger and watermark — a fresh database rebuilds from the epoch. Both
 # live on the private Postgres (qits-oci-postgresql-private, on qits-private), because the exposure
 # is private (qits-2175); the public server is out of reach from here. The idp client is its own
 # too, dev-qits-edge-private.

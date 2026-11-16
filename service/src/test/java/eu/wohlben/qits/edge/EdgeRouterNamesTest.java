@@ -280,8 +280,6 @@ class EdgeRouterNamesTest {
         EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.PRIVATE, withdrawn("mcp", "private")),
         "the private edge withdraws public deployments; this rule is not about it");
     assertFalse(
-        EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.ALL, withdrawn("mcp", "private")));
-    assertFalse(
         EdgeRouter.withdrawnToPrivateEdge(mcp, ExposureClass.PUBLIC, withdrawn("mcp", "public")),
         "a public withdrawal is what the private edge stores, never a 421 here");
     assertFalse(

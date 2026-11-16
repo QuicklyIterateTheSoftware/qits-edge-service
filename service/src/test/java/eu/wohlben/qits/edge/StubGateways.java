@@ -329,7 +329,7 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
             "127.0.0.1:" + listen(app + "-" + environment));
       }
     }
-    // idp's platform label in ONE environment, so a suite can reach it before the catch-up ends
+    // idp's platform label in ONE environment, so a suite can reach it with no route table at all
     // (qits-1403). Only dev: prod keeps the derived alias, which is what the provider states'
     // `prod-qits-idp:8080` deployment must agree with to publish the `idp` host at all.
     config.put("qits.edge.apps.idp.hosts.dev", "127.0.0.1:" + listen("idp-dev"));
@@ -345,10 +345,10 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     // `brochure` is the same pair again for the OTHER way a label reaches that gate. It is named
     // here and configured NOWHERE — there is deliberately no `qits.edge.apps.brochure.*` entry of
     // any kind — so HostEnvironments can only ever answer it as an unknown app, and the only thing
-    // that can make it an app route is the deployment projection, which EdgeRouter.target()
+    // that can make it an app route is the route table, which EdgeRouter.target()
     // rebuilds the Route from. Adding an entry for it would quietly turn its coverage into a
     // second copy of the `mirror` case. It stands for any public SSR page the edge knows only
-    // because a DeploymentActive said so. `ci` is projected the same way and is NOT named here, so
+    // because its route table said so. `ci` is published the same way and is NOT named here, so
     // the suite has a projected-open name and a projected-gated name side by side, exactly as it
     // already has for the configured pair.
     //

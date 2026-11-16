@@ -34,16 +34,16 @@ import org.jboss.logging.Logger;
  * registered, as {@link PeerEventsSubscriber} hands them over.
  *
  * <p><b>One full set, then one operation per frame.</b> At start the active rows of {@code
- * edge_wireguard_peer} are loaded, and a bootstrap — the one {@code DeploymentProjectionBootstrap}
- * runs, for {@value PeerEventsSubscriber#CONSUMER_ID} — rebuilds from the epoch and catches up to
- * the head. Only then is the device given the merged list, in ONE {@code set=1} with {@code
- * replace_peers=true}; until it answered {@code errno=0}, readiness is DOWN with {@value
- * #CATCHING_UP}. Afterwards each change a frame makes is one UAPI operation: an added or moved peer
- * is {@code public_key} + {@code replace_allowed_ips} + its {@code /32}, a removed one {@code
- * public_key} + {@code remove=true}; every other peer stays. An operation that is not answered
- * {@code errno=0} is a WARN and readiness DOWN, and from then on the full set is resent every
- * {@link #RESEND} until it is taken — no single operation is retried, because the full set is what
- * restores the truth whatever was missed.
+ * edge_wireguard_peer} are loaded, and a bootstrap — the one {@code ProjectSansBootstrap} runs for
+ * its own consumer, here for {@value PeerEventsSubscriber#CONSUMER_ID} — rebuilds from the epoch
+ * and catches up to the head. Only then is the device given the merged list, in ONE {@code set=1}
+ * with {@code replace_peers=true}; until it answered {@code errno=0}, readiness is DOWN with
+ * {@value #CATCHING_UP}. Afterwards each change a frame makes is one UAPI operation: an added or
+ * moved peer is {@code public_key} + {@code replace_allowed_ips} + its {@code /32}, a removed one
+ * {@code public_key} + {@code remove=true}; every other peer stays. An operation that is not
+ * answered {@code errno=0} is a WARN and readiness DOWN, and from then on the full set is resent
+ * every {@link #RESEND} until it is taken — no single operation is retried, because the full set is
+ * what restores the truth whatever was missed.
  *
  * <p><b>The public edge stores and applies nothing.</b> There {@code qits.edge.wireguard.enabled}
  * is false: the rows are kept and this set is held in memory, so a public edge that is made private
@@ -120,7 +120,7 @@ public class LivePeers {
           this::resendIfFailed, RESEND.toSeconds(), RESEND.toSeconds(), TimeUnit.SECONDS);
       resender = schedule;
     }
-    if (!edge.projection().catchup().required()) {
+    if (!edge.catchup().required()) {
       LOG.warn(
           "wireguard peer catch-up is disabled; the peers loaded from the projection are used");
       markCaughtUp();
@@ -165,7 +165,7 @@ public class LivePeers {
   }
 
   private void catchUpUntilReady() {
-    Duration retry = edge.projection().catchup().retry();
+    Duration retry = edge.catchup().retry();
     // From the epoch, like the routing projection: the edge database may have been wiped while the
     // consumer's watermark survived. The projection's last-writer-wins keeps a replay over
     // surviving rows harmless.

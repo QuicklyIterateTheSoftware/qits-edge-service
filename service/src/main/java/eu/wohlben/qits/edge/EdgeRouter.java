@@ -141,8 +141,6 @@ public class EdgeRouter {
    */
   @Inject EdgeProjects projects;
 
-  @Inject DeploymentProjectionBootstrap projectionBootstrap;
-
   /**
    * Whether the project set above is complete. An unknown project label is the one reading a later
    * frame can still change, so while this is false such a name is a retryable 503 rather than a
@@ -532,9 +530,9 @@ public class EdgeRouter {
   /**
    * One platform application's upstream in one environment: {@code <env>-<application>:8080},
    * derived in {@link PlatformApps}, unless a local or test override names a fixed address.
-   * Package-private and static because {@code DeploymentActiveSubscriber} asks the same question of
-   * the same label: a published host that is also a platform vhost is the same service exactly when
-   * these two agree.
+   * Package-private and static because {@link RouteTables} asks the same question of the same
+   * label: a published host that is also a platform vhost is the same service exactly when these
+   * two agree.
    */
   static Upstream appUpstream(
       String app, String environment, Map<String, EdgeConfig.App> overrides) {
@@ -620,14 +618,12 @@ public class EdgeRouter {
       request.pause();
     }
 
-    boolean authoritative = projectionBootstrap.authoritative();
-    if (!authoritative && !servedBeforeCatchUp(named) && !projectionBootstrap.routable()) {
-      // Until the startup replay has reached qits-events' confirmed head the persisted snapshot can
-      // be stale. A kept, non-empty one is served anyway (qits-2160, routable()): a stale route is
-      // a 502 at worst, no worse than this refusal. An absent one — a first boot, a wiped
-      // database, a class reset — would only answer 404s, so callers get an explicit, retryable
-      // admission refusal instead: every caller but a platform label's, which needs no projection
-      // at all (servedBeforeCatchUp).
+    boolean ready = routes.ready();
+    if (!ready && !servedBeforeCatchUp(named)) {
+      // No route table loaded yet — the private edge before its fetch at start answers, the only
+      // edge that waits for one (EdgeRoutes#ready()). It would only answer 404s, so callers get an
+      // explicit, retryable admission refusal instead: every caller but a platform label's, which
+      // needs no table at all (servedBeforeCatchUp).
       routingCatchingUp(request);
       return;
     }
@@ -652,18 +648,9 @@ public class EdgeRouter {
       unreadable(request, named);
       return;
     }
-    // Before the catch-up a platform label is answered from code alone, as if nothing had been
-    // published: whether or not the stored snapshot is served, a stale idp entry must never stand
-    // between qits-events and the keys the catch-up waits on (qits-1403). Every other name is
-    // joined on the projection — before the head, on the stored snapshot (qits-2160).
-    Target target =
-        authoritative || !servedBeforeCatchUp(named) ? target(named) : new Target(named, null);
-    if (target == null && !authoritative) {
-      // A name the stored snapshot does not hold may be one the replay has not reached yet: a 404
-      // would be a wrong answer about a name published while this edge was down.
-      routingCatchingUp(request);
-      return;
-    }
+    // Before a table is loaded a platform label is answered from code alone, as if nothing had
+    // been published (qits-1403). Every other name is joined on the served table.
+    Target target = ready ? target(named) : new Target(named, null);
     if (target == null) {
       // NOT a fall-through to the gateway. The name is app-shaped, so it was aimed at a service —
       // and no configuration and no deployment claims it. Answering here is the whole point: a
@@ -717,7 +704,7 @@ public class EdgeRouter {
     serviceGate(request, target);
   }
 
-  /** The retryable refusal of a name the deployment projection cannot answer before its head. */
+  /** The retryable refusal of a name asked before this edge has a route table to answer it from. */
   private static void routingCatchingUp(HttpServerRequest request) {
     request
         .response()
@@ -784,15 +771,14 @@ public class EdgeRouter {
   }
 
   /**
-   * Whether this name is answered while the deployment projection is still catching up: a {@link
-   * PlatformApps} label, and nothing else (qits-1403).
+   * Whether this name is answered before a route table is served: a {@link PlatformApps} label, and
+   * nothing else (qits-1403).
    *
-   * <p>Such a name needs no projection to be routed — its upstream is derived in code — and one of
-   * them cannot wait for it: the edge's own catch-up dials qits-events, which fetches its signing
-   * keys from {@code idp.qits.<domain>} through this process. Every other name waits for a routable
-   * projection — the stored snapshot, when the boot kept one (qits-2160), else the head — and
-   * {@code /q/health/ready} for the head itself. Static so it is asserted without a boot — see
-   * {@code EdgeRouterNamesTest}.
+   * <p>Such a name needs no table to be routed — its upstream is derived in code — and one of them
+   * cannot wait for it: the edge's own project and peer catch-ups dial qits-events, which fetches
+   * its signing keys from {@code idp.qits.<domain>} through this process. Every other name waits
+   * for a table ({@link EdgeRoutes#ready()}). Static so it is asserted without a boot — see {@code
+   * EdgeRouterNamesTest}.
    */
   static boolean servedBeforeCatchUp(HostEnvironments.Route named) {
     return named.toApp() && PlatformApps.contains(named.app());
@@ -909,10 +895,9 @@ public class EdgeRouter {
   public enum Reach {
 
     /**
-     * The routes view is not routable yet — no head reached and no stored snapshot served — or,
-     * while the stored snapshot is served, the name is not one of its routes (the replay may yet
-     * publish it), or the name carries a project label the project log has not been read through.
-     * The router answers each of these 503. Nothing may be concluded about the name.
+     * No route table is served yet, or the name carries a project label the project log has not
+     * been read through. The router answers each of these 503. Nothing may be concluded about the
+     * name.
      */
     CATCHING_UP,
 
@@ -923,12 +908,9 @@ public class EdgeRouter {
     ELSEWHERE
   }
 
-  /**
-   * Whether {@link #reach} can answer at all: the router is built and the projection routable —
-   * caught up, or serving the stored snapshot while it catches up (qits-2160).
-   */
+  /** Whether {@link #reach} can answer at all: the router is built and a route table served. */
   public boolean ready() {
-    return hostEnvironments != null && projectionBootstrap.routable();
+    return hostEnvironments != null && routes.ready();
   }
 
   /**
@@ -938,10 +920,9 @@ public class EdgeRouter {
    */
   public Reach reach(String host) {
     HostEnvironments names = hostEnvironments;
-    if (names == null || !projectionBootstrap.routable()) {
+    if (names == null || !routes.ready()) {
       return Reach.CATCHING_UP;
     }
-    boolean authoritative = projectionBootstrap.authoritative();
     HostEnvironments.Route named =
         names.route(host, projects.projects(), routes.landingEnvironments());
     if (named.reading() == HostEnvironments.Reading.UNKNOWN_PROJECT
@@ -951,9 +932,7 @@ public class EdgeRouter {
     if (routesToSnapshot(named, routes::serviceHost)) {
       return Reach.SNAPSHOT;
     }
-    // Before the head, a name the stored snapshot does not route may still be one this edge is
-    // about to: never send it to the public address on the strength of a stale view.
-    return authoritative ? Reach.ELSEWHERE : Reach.CATCHING_UP;
+    return Reach.ELSEWHERE;
   }
 
   /**
@@ -1663,7 +1642,7 @@ public class EdgeRouter {
    * private deployments'; {@code NavigationRoute} reads them on that class alone for the same
    * reason. A private edge withdraws {@code public} deployments, and a public name that reaches it
    * is a resolver answering the tunnel address for a name the private edge does not route — not
-   * this case. {@link ExposureClass#ALL} withdraws nothing. And only a withdrawal whose declared
+   * this case — and its table withdraws nothing anyway. And only a withdrawal whose declared
    * exposure is {@code private}: a name nobody publishes or withdraws keeps its 404 exactly as
    * before. Static so it is asserted without a boot — see {@code EdgeRouterNamesTest}.
    *

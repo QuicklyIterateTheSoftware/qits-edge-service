@@ -78,6 +78,10 @@
              the edge's pact against qits-idp from them (ticket qits-1149). Moves like every
              internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
         <qits.idp-golden-masters.version>2026.1109.13349</qits.idp-golden-masters.version>
+        <!-- qits-deployments' recorded answers, test scope: DeploymentsConsumerPactTest builds the
+             private edge's pact on GET /deployments/api/edge-routes/private from them (epic
+             qits-2174). Moves like every internal pin, by a qits-maintenance bump. -->
+        <qits.deployments-golden-masters.version>2026.1116.1339</qits.deployments-golden-masters.version>
         <!-- THE CONSUMER PACTS ConsumerPactVerificationTest verifies (ticket qits-1284): fourteen
              frontends, each through @qits/ui-components' main-navigation call, each publishing
              eu.wohlben.qits:qits-<frontend>-pacts-qits-edge-service carrying
@@ -467,6 +471,13 @@
             <groupId>eu.wohlben.qits</groupId>
             <artifactId>qits-idp-golden-masters</artifactId>
             <version>${qits.idp-golden-masters.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- Recordings a test reads, never code: the deployer's route table (qits-2174). -->
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-deployments-golden-masters</artifactId>
+            <version>${qits.deployments-golden-masters.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

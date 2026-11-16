@@ -2,7 +2,6 @@ package eu.wohlben.qits.edge;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -10,54 +9,23 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
- * The class table, and what a private edge makes of the platform's own labels — asserted without a
+ * The two variants, and what a private edge makes of the platform's own labels — asserted without a
  * boot, because {@code EdgeRoutingTest} runs the public profile only and a second boot is the
  * restart its socket tests cannot afford.
  */
 class ExposureClassTest {
 
   @Test
-  void aPublicEdgeKeepsPublicAndBoth() {
-    assertTrue(ExposureClass.PUBLIC.keeps("public"));
-    assertTrue(ExposureClass.PUBLIC.keeps("both"));
-    assertFalse(ExposureClass.PUBLIC.keeps("private"));
-  }
-
-  @Test
-  void aPrivateEdgeKeepsPrivateAndBoth() {
-    assertTrue(ExposureClass.PRIVATE.keeps("private"));
-    assertTrue(ExposureClass.PRIVATE.keeps("both"));
-    assertFalse(ExposureClass.PRIVATE.keeps("public"));
-  }
-
-  @Test
-  void theBreakGlassKeepsEveryDeclaredExposure() {
-    assertTrue(ExposureClass.ALL.keeps("public"));
-    assertTrue(ExposureClass.ALL.keeps("private"));
-    assertTrue(ExposureClass.ALL.keeps("both"));
-    assertTrue(ExposureClass.ALL.keeps(null));
-    assertThrows(IllegalArgumentException.class, () -> ExposureClass.ALL.keeps("internal"));
-  }
-
-  @Test
-  void aFrameWithoutTheFieldIsPublic() {
-    // Every frame written before qits-1976: why neither edge needed a migration for the field.
-    assertTrue(ExposureClass.PUBLIC.keeps(null));
-    assertTrue(ExposureClass.PUBLIC.keeps("  "));
-    assertFalse(ExposureClass.PRIVATE.keeps(null));
-    assertEquals("public", ExposureClass.declared(null));
-  }
-
-  @Test
-  void theSpellingIsNormalisedAndAnythingElseIsRefused() {
-    assertTrue(ExposureClass.PRIVATE.keeps(" Private "));
-    assertThrows(IllegalArgumentException.class, () -> ExposureClass.PUBLIC.keeps("internal"));
+  void theVariantIsPublicOrPrivate() {
+    assertEquals(
+        List.of(ExposureClass.PUBLIC, ExposureClass.PRIVATE), List.of(ExposureClass.values()));
+    assertTrue(ExposureClass.PUBLIC.servesPlatformApps());
+    assertFalse(ExposureClass.PRIVATE.servesPlatformApps());
   }
 
   @Test
   void onlyAPublicEdgeServesThePlatformLabels() {
     assertEquals(PlatformApps.labels(), EdgeRouter.platformLabels(ExposureClass.PUBLIC));
-    assertEquals(PlatformApps.labels(), EdgeRouter.platformLabels(ExposureClass.ALL));
     assertTrue(EdgeRouter.platformLabels(ExposureClass.PRIVATE).isEmpty());
   }
 

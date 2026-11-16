@@ -14,7 +14,7 @@
 # decommission the running service and start a stranger beside it.
 application: qits-edge
 
-# The edge is now a durable projection consumer. `edge` holds its active endpoint snapshots;
+# `edge` holds the route table qits-deployments pushes and the edge's own projections;
 # `eventstream` is qits-eventstream's claim ledger and catch-up watermark. They cannot share a
 # database or Flyway history: both start at V1 and both must survive an edge replacement. The names
 # become QITS_RESOURCE_EDGE_* and QITS_RESOURCE_EVENTSTREAM_* respectively, which the two shipped

@@ -9,15 +9,16 @@ browser session of its own: the browser gate reads idp's, caches what idp said, 
 
 ## Deployment routes
 
-`qits-deployments` publishes every successful deployment as a durable `DeploymentActive` event.
-The edge consumes both the live stream and qits-events' catch-up log, then replaces that
-application's snapshot in its own PostgreSQL database. A snapshot is three things:
+`qits-deployments` builds **one route table per edge** and pushes it (epic qits-2174): `public` for
+this edge's public variant, `private` for the private one. The table is the whole of what an edge
+routes — the edge keeps no projection of deployment events any more. Each entry is one application in
+one environment:
 
-- **endpoints** — `path`, `upstreamHost`, `upstreamPort`, in declaration order. The **first** is the
+- **`endpoints`** — `path`, `upstreamHost`, `upstreamPort`, in declaration order. The **first** is the
   application's primary route: the segment its SPA is served under, and the upstream its own name
   resolves to;
-- **`browserHost`** — the DNS label the service answers to, `ci` for `ci.dev.example.com`. Absent
-  until a service has been flipped, and that absence is what makes this release inert;
+- **`browserHost`** — the DNS label the service answers to, `ci` for `ci.dev.example.com`;
+- **`apiDocsPath`** — where its browsable API document lives, under one of its own routes;
 - **`navigation`** — placements, at most one per `(slot, label)` pair:
   `{"slot":"services.details","label":"CI","position":2}`. The slot vocabulary is closed and lives
   in `EdgeRoutes.SLOTS`. **One application may fill several entries of one slot**, so the slot
@@ -25,74 +26,89 @@ application's snapshot in its own PostgreSQL database. A snapshot is three thing
   `position` is not: the document breaks that tie by label, whether the two entries belong to one
   application or to two.
 
-An **older frame** carried one `navigationLabel`/`navigationPosition` pair on an endpoint instead.
-Every frame ever published is replayed on every start, so that shape still means what it meant: one
-`system` placement, and no host — the edge never invents a public name for a service that has not
-been flipped.
+The public table also lists **`withdrawn`** applications — the private ones, with the host they
+answer to on the private edge. They route nothing here; `/main-navigation` names them to an admitted
+caller, a request for one is a `421` (qits-2223), and the public DNS zone points them at the tunnel
+(qits-2273). The private table's `withdrawn` is empty.
 
-A newer event replaces the complete snapshot, so removing a route removes it rather than leaving a
-stale endpoint live. An older event delivered late is ignored. The `/main-navigation` GET/HEAD
-document is derived from the same snapshots, carries `Cache-Control: no-store`, and is never
-proxied.
+**A table is accepted whole or refused whole** (`RouteTables`): it must name this edge, carry a
+positive `version`, and publish no path another application in that environment publishes, no host
+another one publishes, no host that is not a DNS label or that is an environment name, no unknown
+slot, no `(slot, label)` placement twice, no api-docs path outside the application's own routes, and
+— on the public edge — no host that is also a platform app label (`PlatformApps`) pointing somewhere
+else. The last one is a match rather than a ban: `registry` is both a platform vhost and the name
+qits-artifacts publishes, and they are the same service exactly when the derived alias is the address
+the deployer published. The reserved `landing` label is held to the same rule as every host: two
+claimants refuse the table.
 
-A frame is **refused whole** — logged and settled, routes unchanged — when it publishes a path
-another application owns, a host another application owns, a host that is not a DNS label, a host
-that is an environment name, an unknown slot, the same `(slot, label)` placement twice, or a host
-that is also a platform app label (`PlatformApps`) pointing somewhere else. The last one is a match
-rather than a ban: `registry` is both a platform vhost and the name qits-artifacts publishes, and
-they are the same service exactly when the derived alias is the address the deployment published.
+- **`PUT /edge-route-table`**, on every vhost, answered by the edge (`RouteTableRoute`). Only the
+  deployer may push: a bearer JWT the edge accepts, carrying `qits:system`, whose `sub` (the idp
+  client id) is `qits.edge.routes.publisher` (default `${QITS_ENVIRONMENT:dev}-qits-deployments`);
+  anything else is a `403`. A valid table whose `version` is above the held one is stored in
+  `edge_route_table` **and served from that moment**: `204`, and INFO `route table <edge> <old> ->
+  <new>: <n> applications`. A version that is not above it is `200 {"held":<v>}` and changes
+  nothing; an invalid table is `422 {"error":"<reason>"}`, ERROR `refused route table <version>:
+  <reason>`, and the held table stays served.
+- **`GET /edge-route-table`** answers the deployer or any `qits:system` service bearer with
+  `{"edge":"public|private","version":<v>|null,"receivedAt":"…"|null}`. The deployer compares that
+  version on every observation pass and pushes again when the edge is behind. Both tasks of a
+  start-first update share the one `edge_route_table` row, and a push lands on whichever the ingress
+  picked: a task serving an older table than the row loads the row on the next `GET` or repeated
+  `PUT`, so it never stays behind a table its sibling stored.
 
-The deployed edge therefore needs two provisioned PostgreSQL resources: `edge` for this projection
-(`QITS_RESOURCE_EDGE_URL`, `_USERNAME`, `_PASSWORD`) and `eventstream` for the durable consumer's
-claim ledger (the variables named by the qits-eventstream library). `qits.eventstream.enabled` is
-left on in deployments; development and test profiles turn it off while Flyway still migrates both
-stores.
+The served copy is one immutable `View` in `EdgeRoutes`, swapped whole when a table is stored, so a
+request reads one table or the next and never half of each, and never touches PostgreSQL on the
+event loop. `/main-navigation` (GET/HEAD) is derived from the same view, carries `Cache-Control:
+no-store`, and is never proxied.
 
-### Startup is a rebuild, not a cache read
+The deployed edge needs two provisioned PostgreSQL resources: `edge` for the route table and the
+edge's own projections (`QITS_RESOURCE_EDGE_URL`, `_USERNAME`, `_PASSWORD`) and `eventstream` for the
+durable consumers' claim ledger (the variables named by the qits-eventstream library).
+`qits.eventstream.enabled` is left on in deployments; development and test profiles turn it off
+while Flyway still migrates both stores.
 
-On every production start the edge resets the `edge-active-endpoints` consumer and replays its
-`DeploymentActive` history from the epoch. It does this even when the eventstream claim ledger
-survived: a durable watermark without the edge projection would otherwise make a freshly empty
-database look caught up. Snapshot replacement is idempotent and last-writer-wins, so replaying over
-a surviving projection is safe and there is no projection truncate.
+### Startup serves the cached table; the private edge also fetches
 
-Until qits-events explicitly marks the final catch-up page as its head, `/q/health/ready` is DOWN
-(`deployment-projection: catching-up`). **Meanwhile the edge serves the snapshot it stored**
-(qits-2160): every name is routed, and `/main-navigation` answered, from the persisted projection,
-and the replay converges that same projection in place, so the routes become the replayed ones frame
-by frame until the head flips readiness UP. A stale route is a 502 at worst, which is no worse than
-a 503, and a stored snapshot keeps the estate reachable through a qits-events outage of any length.
-Readiness reports `serving-snapshot: true` while it does. A name the stored snapshot does not route
-is answered `503 Retry-After: 1` rather than a 404 until the head: it may be one published while
-this edge was down. The edge logs `deployment routing projection: serving stored snapshot while
-catching up` once when it starts.
+**The boot serves the stored table first** (`RouteTables.load`), before the HTTP server takes a
+request and before anything is pushed or fetched: a restarted or redeployed edge routes exactly what
+it routed when it stopped, and logs `route table <edge> <v> served from the cache`. A newer table
+replaces it the moment it is stored.
 
-A stored snapshot is served only when it is worth serving: the class reconcile at boot kept it (see
-the exposure class below — a reset truncates it), and it routes at least one endpoint. A first
-boot, a wiped database or a class reset therefore still answers every request but the edge's own
-`/q` (on its own names — see below), and
-`/main-navigation`, with a retryable `503 Retry-After: 1` until the head — **except a platform app
-label's** (`PlatformApps`: `registry`, `mirror`, `githost`, `idp`), which is served from code
-throughout, exactly as if nothing had been published (qits-1403). The persisted snapshot is not
-consulted for those four names until the head is reached, whether or not it is served for the rest.
-The exception is not a convenience: the edge's own catch-up dials qits-events, and qits-events
-fetches the keys it checks that call's token with from `https://idp.qits.<domain>/idp/jwks` —
-through the edge. Holding `idp` behind the replay would be a boot that waits for itself, and a stale
-idp entry in a snapshot must not be able to stand in for it. An unavailable event log or a failed
-event handler leaves readiness down and retries after `qits.edge.projection.catchup.retry`; a
-confirmed head makes the projection authoritative. The ordinary generic eventstream startup sweep is
-disabled here because this named, readiness-owning rebuild is the startup path; scheduled sweeps
-remain the post-start safety net.
+**The private edge fetches at start** (`RouteTableFetch`): `GET
+${qits.edge.routes.url}/deployments/api/edge-routes/private` with the `qits` oidc client's bearer,
+on a virtual thread, retried after 1, 2, 4 … 30 s until the deployer answers, with one WARN `route
+table fetch failed: <reason>`. `qits.edge.routes.url` (`http://<env>-qits-deployments:8080`) is
+stated by `PrivateVariantConfigSource` alone, because both sit on `qits-private`. **The public edge
+never fetches**: it sits on `qits-net`, the deployer on `qits-private`, and nothing bridges them, so
+it serves its cached table and waits for a push — which the deployer sends after every public-edge
+deploy, and on each observation pass while the edge reports an older version.
+
+**Readiness** (`/q/health/ready`, `EdgeRoutes.ready`, reported as `route-table: <version|none>`):
+
+- **the private edge** is ready once a table is loaded — from its cache at boot, or from the fetch or
+  a push on an empty database. Until then every request but the edge's own `/q` (on its own names —
+  see below) and `/main-navigation` answers `503 Retry-After: 1`, and the tunnel DNS answers
+  SERVFAIL, so a private name is never sent anywhere on the strength of nothing.
+- **the public edge** is ready with a table, **or with none ever received**. The deployer pushes its
+  first table only once the edge reports healthy, so a public edge that waited for that push would
+  wait forever. A cold start — an empty database — therefore serves the **platform app labels**
+  (`PlatformApps`: `registry`, `mirror`, `githost`, `idp`) from code, every other name as the `404`
+  it is until the first push a few seconds later, and an empty `/main-navigation`.
+
+The platform labels are code for a second reason (qits-1403): the edge's own project and peer
+catch-ups dial qits-events, and qits-events fetches the keys it checks that call's token with from
+`https://idp.qits.<domain>/idp/jwks` — through the edge — so `idp` can never wait for anything the
+edge has not got yet. `PrivateHostRecords` decides nothing until a table is actually loaded: a public
+edge that has never received one knows of no private host, and deleting their DNS records on that
+word would be a wrong answer published to the internet.
 
 **Swarm's healthcheck is liveness, `/q/health/live`, not readiness** (qits-2160). A not-ready edge
-must still receive traffic: the catch-up barrier lives inside the router, not in swarm's routing
-mesh. Gated on readiness, swarm never routed the published port to a catching-up edge and killed it
-every ~90 s — so the platform labels it serves during the catch-up never reached it, qits-events
-could not fetch idp's keys through it, and the edge and qits-events deadlocked at boot.
+must still receive traffic: the barrier lives inside the router, not in swarm's routing mesh.
 
-A **second** consumer, `edge-project-sans`, rebuilds the project-slug projection, and
-`ProjectSansBootstrap` is deliberately not folded into that barrier: holding the whole edge down
-would refuse every request over a projection that decides two spellings out of four. It catches up
+The durable consumer `edge-project-sans` rebuilds the project-slug projection from qits-events at
+every start (`ProjectSansBootstrap`, retried after `qits.edge.catchup.retry`), and it is
+deliberately not part of readiness: holding the whole edge down would refuse every request over a
+projection that decides two spellings out of four. It catches up
 in the background and, once it reaches the head, requests one reconcile — which closes the boot race
 where the certificate manager's own startup reconcile runs before any slug is known.
 
@@ -133,33 +149,8 @@ Historical mentions of it below are exactly that; nothing on the platform runs o
         │ dev-qits-artifacts  │  │ prod-qits-artifacts│  │ dev-qits-ci        │
         │  :8080              │  │  :8080             │  │  :8080             │
         └─────────────────────┘  └────────────────────┘  └────────────────────┘
-         platform app label, in code                      deployment projection
+         platform app label, in code                      route table
 ```
-
-### The pushed route table (stored, not yet served)
-
-Epic qits-2174 moves routing from the `DeploymentActive` projection to a **route table qits-deployments
-builds and pushes**, one per edge. This release (D2a) only receives and stores it; everything above
-still describes how the edge routes, and nothing about readiness changes.
-
-- **`PUT /edge-route-table`**, on every vhost, answered by the edge (`RouteTableRoute`). Only the
-  deployer may push: a bearer JWT the edge accepts, carrying `qits:system`, whose `sub` (the idp client id) is
-  `qits.edge.routes.publisher` (default `${QITS_ENVIRONMENT:dev}-qits-deployments`); anything else is
-  a `403`. The table is validated whole (`RouteTables`) — every host a DNS label and no environment
-  name, a `PlatformApps` label on the public edge only at that platform application's own address,
-  no `(environment, path)` and no `(environment, host)` twice, slots from the closed vocabulary —
-  and stored in `edge_route_table` when its `version` is above the held one: `204`, and INFO `route
-  table <edge> <old> -> <new>: <n> applications`. A version that is not above it is `200
-  {"held":<v>}`; an invalid table is `422 {"error":"<reason>"}`, ERROR `refused route table
-  <version>: <reason>`, and the held table stays.
-- **`GET /edge-route-table`** answers any `qits:system` service bearer with
-  `{"edge":"public|private","version":<v>|null,"receivedAt":"…"|null}`.
-- **The private edge fetches at start**: `GET ${qits.edge.routes.url}/deployments/api/edge-routes/private`
-  with the `qits` oidc client's bearer, on a virtual thread, retried after 1, 2, 4 … 30 s until the
-  deployer answers, with one WARN `route table fetch failed: <reason>` (a deployer without the door
-  yet answers 404, which is retried the same way). `qits.edge.routes.url` is stated by
-  `PrivateVariantConfigSource` alone; the public edge never fetches — it is not on the deployer's
-  network — and waits for a push.
 
 ## The routing model
 
@@ -241,7 +232,7 @@ projection knows the second set.
 
 **A name reaches a service two ways.** The platform app labels are the first — `registry`,
 `mirror`, `githost` and `idp` under the platform project, and the auth attributes that go with them,
-in code (`PlatformApps`). The deployment projection is the other: a service
+in code (`PlatformApps`). The route table is the other: a service
 publishes the name it answers to, and that name then serves its SPA at `/` and every wire route it
 owns. The two are the same kind of vhost, so everything below treats them alike.
 
@@ -261,7 +252,7 @@ answers its CORS.
 `https://<QITS_DOMAIN>`, and locally `http://<…>.localhost:<edge port>` — gets that origin echoed in
 `Access-Control-Allow-Origin` with `Access-Control-Allow-Credentials: true` and a short
 `Access-Control-Expose-Headers` list. The rule is the same domain anchor the login return is checked
-against, and deliberately not narrowed to the hosts the projection publishes. A foreign origin gets
+against, and deliberately not narrowed to the hosts the route table publishes. A foreign origin gets
 no `Access-Control-Allow-Origin`. A preflight (`OPTIONS` with `Origin` and
 `Access-Control-Request-Method`) from an admitted origin is answered `204` by the edge itself,
 before the gate and without touching any session, echoing the requested method and headers with
@@ -269,7 +260,7 @@ before the gate and without touching any session, echoing the requested method a
 every service-host response carries `Vary: Origin`.
 
 Nothing in a request ever contributes a character to an address: a `Host` selects an *index into a
-fixed list* or a *row of the projection*, which is the whole SSRF guard.
+fixed list* or a *row of the route table*, which is the whole SSRF guard.
 
 ### The environment vhost is a door, and a door serves nothing
 
@@ -279,7 +270,7 @@ is a second origin, a second cookie scope and a second thing to keep in step.
 
 What the door answers is:
 
-- `GET /` (and `HEAD /`) — `302` to qits-projects' host once the projection names one: the `system`
+- `GET /` (and `HEAD /`) — `302` to qits-projects' host once the route table names one: the `system`
   placement qits-projects publishes, or a host called `projects`. An anonymous visitor lands on the
   login through the host that owns it. `404` while no such host is known;
 - `/main-navigation` and `/upstream-pools` — the edge's own surfaces. `/q` is NOT one of them on a
@@ -295,30 +286,24 @@ machine token are both answered `404` like any other request.
 ### The exposure class, and the listener in front of it
 
 One image runs as two edges (epic qits-1976). **`qits.edge.exposure`** (`QITS_EDGE_EXPOSURE`) is
-`public` — every edge before the epic, and the default — or `private`, the second deployment behind
-the WireGuard tunnel — or `all`, the break-glass below, which keeps every frame. An edge is never
-`both`; a deployment may be, and `DeploymentActive.exposure` carries which:
+`public` — the default — or `private`, the second deployment behind the WireGuard tunnel. It decides
+which route table the edge accepts and serves: qits-deployments builds one per edge (epic qits-2174)
+from what each deployment declares, and a table named for the other edge is refused.
 
-| deployment declares | public edge | private edge |
+| deployment declares | public table | private table |
 | --- | --- | --- |
-| `public`, or nothing (every frame written before the field) | served | withdrawn |
-| `private` | withdrawn | served |
+| `public`, or nothing | served | — |
+| `private` | `withdrawn` | served |
 | `both` | served | served |
 
-**Withdrawn is stored, not skipped.** A frame outside the edge's class goes through the same
-`EdgeRoutes.replace` an explicit empty `endpoints` array does — no route, no host, no navigation —
-so a deployment that changes class leaves the edge it left exactly as a retirement would, and a later
-frame back inside the class restores it by the usual frame-time order. An exposure that is none of
-the three is an unusable frame and changes nothing. Navigation follows on its own, because it is
-built from the snapshots each edge holds.
+**Navigation follows on its own**, because it is built from the table each edge serves. A deployment
+that changes class moves from one table to the other at the deployer's next build, and each edge
+serves the change the moment its new table is stored.
 
-**A withdrawal keeps the name, and nothing that routes** (qits-2061). The stored snapshot also
-records the host the deployment declared — checked by the same rules as a served host, and simply
-dropped when it fails them, so a bad host can never keep an application routed — and its declared
-exposure (`withdrawn_host`, `withdrawn_exposure`; migration V10 resets the projection so the boot's
-replay fills them). Neither is a vhost, a route, a host claim or a certificate SAN, and
-`EdgeRoutes.applicationHosts` does not list it. `/main-navigation` reads them, through
-`EdgeRoutes.withdrawnHosts` — see below — and so does one refusal:
+**A withdrawal keeps the name, and nothing that routes** (qits-2061). The public table lists each
+private application's host and exposure under `withdrawn`. Neither is a vhost, a route, a host claim
+or a certificate SAN, and `EdgeRoutes.applicationHosts` does not list it. `/main-navigation` reads
+them, through `EdgeRoutes.withdrawnHosts` — see below — and so does one refusal:
 
 **A private deployment's name on the public edge is `421 Misdirected Request`** (qits-2223), not
 the 404 an unknown label gets. Since qits-2273 the public zone answers a private name with the
@@ -337,7 +322,7 @@ tunnel DNS, is unchanged.
 
 **The platform app labels are public-edge code.** On a private edge `registry`, `mirror`, `githost`
 and `idp` are ordinary unknown names — a 404 unless a private or `both` deployment publishes one —
-and the qits-1403 exception that answers them before the catch-up does not apply: the private edge
+and the qits-1403 exception that answers them with no table does not apply: the private edge
 is off `qits-net` (qits-2174) and dials qits-events and idp by their PUBLIC names, over the apex the
 public edge routes, and never waits for itself.
 
@@ -549,15 +534,13 @@ fails aborts the pass before any write.
 **Who writes.** The PUBLIC edge (`qits-edge`), with the Hetzner token its DNS-01 orders already use
 (`qits.edge.acme.hetzner-token` / `-file`, the file winning) — whether or not ACME is enabled.
 `PrivateHostRecords` is inactive, and says why once at INFO, on the private edge and on an edge with
-no token. The break-glass class `all` withdraws nothing, so it deletes every owned record and the
-private names fall back to the wildcard, i.e. the public edge serving them; the way back recreates
-them.
+no token.
 
-**When.** A debounced reconcile (5 s) is requested whenever a `DeploymentActive` frame stores or
-clears a private withdrawal, when a new tunnel address is announced, and once each projection
-(deployments, projects) reaches the log head at start; a 10-minute schedule is the backstop.
-Nothing is created or deleted before both projections are authoritative, and nothing at all before
-a tunnel address is known. A reconcile that changed something logs one INFO line naming what it
+**When.** A debounced reconcile (5 s) is requested whenever a route table is served — the cached
+one at boot and every newer one stored — when a new tunnel address is announced, and once the
+project projection reaches the log head at start; a 10-minute schedule is the backstop. Nothing is
+created or deleted before a route table is loaded and the project projection is authoritative, and
+nothing at all before a tunnel address is known. A reconcile that changed something logs one INFO line naming what it
 created, set and deleted; a Hetzner failure is a WARN with its status and body (the token is never
 logged) and is retried on the next trigger — routing and event consumption never see it.
 
@@ -579,60 +562,6 @@ is a WARN and the name is skipped. Anything unlabelled stays exactly as it is.
   person adding the zone (e.g. `qits.wohlben.eu`) to the router's rebind exceptions — on a
   FRITZ!Box: Heimnetz → Netzwerk → Netzwerkeinstellungen → DNS-Rebind-Schutz. The tunnel resolver
   `100.96.0.1` (split DNS) answers the same names on the tunnel and is unaffected either way.
-
-## Break-glass: the public edge serves every class
-
-When the tunnel or `qits-edge-private` breaks, every private service goes dark at once — CI, release
-requests, the deployer UI and mcp — and the fix for the edge can then be neither built, approved nor
-watched. `QITS_EDGE_EXPOSURE=all` makes the **public** edge serve every class until the next
-qits-edge release. Authentication stays on every door, exactly as on the public edge today. It is
-set from a shell on the platform host, never through a door: a door would be internet-facing, or
-behind the very edge that is broken.
-
-The class is re-derived at boot (qits-2120). `edge_projection_class` holds the class the projection
-was last rebuilt under; when it is absent or differs from `qits.edge.exposure`,
-`DeploymentProjectionBootstrap` deletes the projection and writes the new class in one transaction,
-replays from the epoch, and logs `edge projection rebuilt: class <old> -> <new>` (`<none>` the first
-time). Without the truncate, a snapshot withdrawn under the old class would survive the replay,
-because `EdgeRoutes.replace` writes only a strictly newer frame.
-
-**The old task runs beside the new one.** `docker service update` starts the new task first and
-gives the old one a 10 m stop grace; both share the edge database and the durable consumer
-`edge-active-endpoints`, so the new task's epoch reset makes the old one replay too, under its old
-class. The first drill (qits-2121) showed what that does without a guard: the old public task
-re-withdrew qits-stt under `all` (404), and the old `all` task re-activated it after the way back
-(still routed on the public edge). Three things hold it now:
-
-- **The write fence.** Every projection write reads `edge_projection_class` in its own transaction,
-  under a share lock the reset takes exclusively; when the stored class is not this edge's, it
-  writes nothing, logs once at WARN `edge projection is class <stored>, this edge is <mine>: not
-  writing DeploymentActive <id>`, and throws, so the durable claim rolls back and the frame stays
-  owed to the task that rebuilt the projection. Until it stops, the old task's eventstream log
-  shows those frames as failed and owed — expected, and harmless.
-- **Self-heal at boot.** An unchanged class is rebuilt too when the kept projection holds a
-  snapshot the class would not have written: an active one whose exposure (`edge_deployment_snapshot.exposure`,
-  V12) the class does not keep, one that routes with no recorded exposure (every row from before
-  V12, so each edge rebuilds once on it), or a withdrawal the class would keep. The reason is
-  logged: `edge projection rebuilt: class public -> public (kept projection routes qits-stt in dev,
-  exposure private, outside the class)`.
-- **The serving copy follows the database.** The in-memory view is re-read whole when the replay
-  reaches the head, and a 15 s tick re-reads it whenever the snapshot rows changed under it — a
-  frame the other task of the same class claimed lands in the database, not in this process's view.
-
-On the platform host, as a user with the docker socket. The service name is `<env>-qits-edge`, `dev-qits-edge` on this estate; `docker service ls --filter label=qits.platform.deployments.app-name=qits-edge` confirms it:
-
-    docker service update \
-      --network-add name=qits-private \
-      --env-add QITS_EDGE_EXPOSURE=all \
-      dev-qits-edge
-
-- **What it does:** the public edge restarts, rebuilds its projection under `all`, and routes every private app by wire alias over `qits-private`. Swarm registers each service's aliases on every network it joins (`SwarmDeploymentDriver.networkFlags`, ~:1881-1900).
-- **Check:** from outside the tunnel, `curl -H "Authorization: Bearer $T" https://projects.qits.<d>/projects/q/health/ready` answers 200.
-- **Way out:** release qits-edge-service (the fix). The deployer sees network drift on `dev-qits-edge` and recreates it as declared, on `qits-net` only and without the env. Ordinary updates also strip env the config does not state (`envRemovals`). So the break-glass ends by itself at the next edge release, which is the intent.
-- **To end it by hand:**
-
-      docker service update --network-rm qits-private --env-rm QITS_EDGE_EXPOSURE dev-qits-edge
-- **Never leave it on:** it puts every private app back on the internet behind authentication alone.
 
 ## What it does not do — the non-goals, on purpose
 
@@ -766,7 +695,7 @@ On the platform host, as a user with the docker socket. The service name is `<en
   array with one entry per pool and origin holding a connection, fullest first —
   `{"name":"qits-projects","environment":"dev","origin":"dev-qits-projects:8080","pool":"stream","open":12,"max":256,"held":[{"method":"GET","path":"/projects/mcp","ageMs":3605211,"client":"10.0.0.7","userAgent":"…","workspaceId":"ws-1","traceId":"4bf9…"}]}`.
   `held` is the pool's leases on that origin, oldest first.
-  `name` and `environment` come from the deployment projection, then the platform app grid, then
+  `name` and `environment` come from the route table, then the platform app grid, then
   the wire alias read as `<env>-<application>`; an origin none of them names is listed under its
   host with a null environment. `max` is that pool's configured size. It answers only a caller the
   edge would let through to a service — a machine credential carrying the platform audience, or,
@@ -777,8 +706,8 @@ On the platform host, as a user with the docker socket. The service name is `<en
   alias, the bare domain). On any other name `/q/*` is an ordinary path: an app's vhost proxies it
   to the app behind the gate, a name nothing routes answers `404`. An app's name never reports the
   edge's health — it did until qits-2222, and a stopped app read healthy. Readiness
-  reports the resolved environment → upstream map as health data and stays DOWN until the
-  deployment projection has reached qits-events' confirmed head.
+  reports the served route table's version (`route-table`, or `none`) and is DOWN only while no
+  table is served on the private edge — see *Startup serves the cached table*.
 
 ### A loopback page's socket: the bearer rides the subprotocol offer
 
@@ -829,8 +758,8 @@ pinned only the half that works is how it would stop being documented.
 
 Every download on the platform passes through this process, so a redeploy of it is a redeploy of
 every transfer in flight (qits-1170). The update is start-first: the successor passes
-`/q/health/live` — swarm's healthcheck, which is liveness (qits-2160), so the successor may still be
-catching up over its stored snapshot — and only then does swarm send the predecessor SIGTERM and
+`/q/health/live` — swarm's healthcheck, which is liveness (qits-2160); the successor serves the
+cached route table from its first request — and only then does swarm send the predecessor SIGTERM and
 take it out of the ingress balancer, so nothing new reaches it. What happens to the old task after that:
 
 - **Streams end at once.** `EdgeRouter.draining` runs in Quarkus' pre-shutdown pass
@@ -873,12 +802,12 @@ a file.
 | `qits.edge.environments` | `QITS_EDGE_ENVIRONMENTS` | `prod` | The routable environment names, comma separated |
 | `qits.edge.default-environment` | `QITS_EDGE_DEFAULT_ENVIRONMENT` | `prod` | Where the apex and every unmatched host go. **Must be in the list** |
 | `qits.edge.apps.<app>.hosts.<env>` | `QITS_EDGE_APPS_<APP>_HOSTS_<ENV>` | — | A local process's or a suite's override of one **platform** label in one environment, `host` or `host:port`. It cannot add a label; a live deployment sets none |
-| `qits.edge.exposure` | `QITS_EDGE_EXPOSURE` | `public` | Which deployments this edge serves, `public` or `private` — see *The exposure class* — or `all`, the break-glass |
+| `qits.edge.exposure` | `QITS_EDGE_EXPOSURE` | `public` | Which variant this edge is, and so which route table it accepts, `public` or `private` — see *The exposure class* |
 | `qits.edge.listen.allowed-local-cidrs` | `QITS_EDGE_LISTEN_ALLOWED_LOCAL_CIDRS` | — (any) | Local addresses a connection may arrive on, as CIDR blocks; set, anything else is closed before routing and the loopback is always added |
 | `qits.edge.wireguard.peers` | `QITS_EDGE_WIREGUARD_PEERS` | — | Static peers, `name:base64PublicKey:tunnelIp` comma separated; names the caller in the private edge's peer log. A malformed entry is dropped with a WARN |
 | `qits.edge.peer-log.overlay-cidr` | `QITS_EDGE_PEER_LOG_OVERLAY_CIDR` | `10.231.0.0/20` | The `qits-private` overlay; a remote inside it is `peer=overlay` |
-| `qits.edge.projection.catchup.required` | `QITS_EDGE_PROJECTION_CATCHUP_REQUIRED` | `true` | Requires a complete deployment-history rebuild before the edge is ready; turn off only in an intentionally offline test/dev setup |
-| `qits.edge.projection.catchup.retry` | `QITS_EDGE_PROJECTION_CATCHUP_RETRY` | `PT1S` | Delay before retrying an incomplete, failed, or unavailable deployment-history read |
+| `qits.edge.catchup.required` | `QITS_EDGE_CATCHUP_REQUIRED` | `true` | Runs the project and WireGuard-peer projections' startup catch-up to qits-events' head; turn off only in an intentionally offline test/dev setup |
+| `qits.edge.catchup.retry` | `QITS_EDGE_CATCHUP_RETRY` | `PT1S` | Delay before retrying an incomplete, failed, or unavailable catch-up read |
 | `qits.edge.shutdown.linger` | `QITS_EDGE_SHUTDOWN_LINGER` | `10s` | How long the process stays alive after the HTTP drain so the kernel can send what the last responses queued; with `quarkus.shutdown.timeout` it must stay under the 10m stop grace (qits-1170) |
 | `qits.edge.idp.dial-url` | `QITS_EDGE_IDP_DIAL_URL` | `http://${QITS_ENVIRONMENT:dev}-qits-idp:8080/idp` | The address the edge dials. `/jwks`, `/token` and the two introspection paths are derived from it, never configured. It is never the issuer: the accepted `iss` is `https://idp.qits.<qits.edge.domain>` alone, derived in code and not configurable (qits-730). **Internal on purpose** (qits-1403, exception E1): `QITS_RESOURCE_IDP_URL` is not read any more, because the deployer makes it idp's public name — which this process serves — and the edge must not dial its own gate to check a token. Nothing injects `QITS_EDGE_IDP_DIAL_URL`. `QITS_IDP_DIAL_URL` is not read either (qits-540) |
 | `qits.edge.auth.enforce-on-apps` | `QITS_EDGE_AUTH_ENFORCE_ON_APPS` | `true` | Service vhosts require a valid idp token |
@@ -927,8 +856,8 @@ gives every service on qits-net:
 | `githost` | `qits-githost` | `dev-qits-githost:8080` |
 | `idp` | `qits-idp` | `dev-qits-idp:8080` |
 
-`idp` joined the three byte-plane labels in qits-1403 so its name answers before the deployment
-catch-up ends (see *Startup is a rebuild*). Its gate is the one it had as a published host — the
+`idp` joined the three byte-plane labels in qits-1403 so its name answers with no route table at
+all (see *Startup serves the cached table*). Its gate is the one it had as a published host — the
 anonymous prefixes (`/idp/`, so the login page and `/idp/jwks`) on its own name, the session gate
 for a cookie, the ordinary service-vhost gate off its route — with one addition: **under idp's own
 route, a request carrying `Authorization` passes through untouched.** idp judges every credential
@@ -937,9 +866,9 @@ own Bearer on reads), so the edge checks, spends, mints and rewrites nothing the
 nothing; spending a Basic pair and forwarding the minted JWT instead would break every grant made on
 idp's public name. The `X-Qits-*` namespace is still stripped, attribution included: keeping a
 service bearer's three headers would need the credential checked. This holds whether the name came
-from the projection or from `PlatformApps`, before the catch-up and after. `PlatformApps` states idp's own route, `/idp`, so that "on the
-name that owns them" holds without the projection; once idp's deployment is replayed, its published
-`idp` host must point at the same `<env>-qits-idp:8080` or the frame is refused, as `registry`'s is.
+from the route table or from `PlatformApps`, with a table and without one. `PlatformApps` states idp's own route, `/idp`, so that "on the
+name that owns them" holds without a table; once idp is in one, its published `idp` host must point
+at the same `<env>-qits-idp:8080` or the table is refused, as for `registry`.
 
 These used to be keys — `qits.edge.apps.<app>.host-pattern`, `audience-pattern` and `port` — and
 the live store held six `QITS_EDGE_APPS_*_PATTERN` entries spelling this one rule, one of them a
@@ -1307,7 +1236,7 @@ project against the ceiling below.
 
 **The project tiers are fed by events, not by configuration.** qits-projects publishes
 `ProjectCreated` and `ProjectDeleted`; `ProjectLifecycleSubscriber` projects them into `edge_project`
-(a durable, replay-from-epoch consumer like the routing one, tombstoned so a late create cannot
+(a durable, replay-from-epoch consumer, tombstoned so a late create cannot
 resurrect a deleted project) and `EdgeProjects.slugs()` is what the name set is built from. A
 project created on Tuesday is on the certificate on Tuesday — which is what retired the older
 arrangement, where a project's host reached the certificate only if somebody remembered to add it to

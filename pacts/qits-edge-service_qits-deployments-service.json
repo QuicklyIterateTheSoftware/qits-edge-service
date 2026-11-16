@@ -1,0 +1,199 @@
+{
+  "consumer": {
+    "name": "qits-edge-service"
+  },
+  "interactions": [
+    {
+      "comments": {
+        "references": {
+          "qits-call": {
+            "app": "qits-deployments-service",
+            "operationId": "getEdgeRoutes"
+          },
+          "qits-trigger": {
+            "app": "qits-edge-service",
+            "kind": "operation",
+            "operationId": "RouteTableFetch (the private edge, at start)"
+          }
+        }
+      },
+      "description": "RouteTableFetch (the private edge, at start): getEdgeRoutes",
+      "key": "357772e7",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "two edges with routes",
+          "params": {
+            "edge": "private"
+          }
+        }
+      ],
+      "request": {
+        "generators": {
+          "path": {
+            "dataType": "RAW",
+            "expression": "/deployments/api/edge-routes/${edge}",
+            "type": "ProviderState"
+          }
+        },
+        "method": "GET",
+        "path": "/deployments/api/edge-routes/private"
+      },
+      "response": {
+        "body": {
+          "content": {
+            "applications": [
+              {
+                "apiDocsPath": "/contract-routes-private/q/openapi",
+                "application": "contract-routes-private",
+                "browserHost": "contract-priv",
+                "endpoints": [
+                  {
+                    "path": "/contract-routes-private",
+                    "upstreamHost": "dev-contract-routes-private",
+                    "upstreamPort": 8080
+                  }
+                ],
+                "environment": "dev",
+                "exposure": "private"
+              }
+            ],
+            "edge": "private",
+            "version": 1763025600000
+          },
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "matchingRules": {
+          "body": {
+            "$.applications": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 0
+                }
+              ]
+            },
+            "$.applications[*].apiDocsPath": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.applications[*].application": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.applications[*].browserHost": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.applications[*].endpoints": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type",
+                  "min": 0
+                }
+              ]
+            },
+            "$.applications[*].endpoints[*].path": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.applications[*].endpoints[*].upstreamHost": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.applications[*].endpoints[*].upstreamPort": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "number"
+                }
+              ]
+            },
+            "$.applications[*].environment": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.applications[*].exposure": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.edge": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            },
+            "$.version": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "number"
+                }
+              ]
+            }
+          },
+          "header": {
+            "Content-Type": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "regex",
+                  "regex": "application/json.*"
+                }
+              ]
+            }
+          }
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    }
+  ],
+  "metadata": {
+    "pactSpecification": {
+      "version": "4.0"
+    },
+    "plugins": []
+  },
+  "provider": {
+    "name": "qits-deployments-service"
+  }
+}

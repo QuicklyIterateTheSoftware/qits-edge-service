@@ -42,6 +42,7 @@ class RouteTablesTest {
     JsonObject table = table();
     JsonObject copy = table.getJsonArray("applications").getJsonObject(0).copy();
     copy.put("application", "qits-second").put("browserHost", "second");
+    copy.put("apiDocsPath", "/second/q/openapi");
     copy.getJsonArray("endpoints").getJsonObject(0).put("path", "/second");
     second.accept(copy);
     table.getJsonArray("applications").add(copy);
@@ -65,7 +66,6 @@ class RouteTablesTest {
   @Test
   void theTableMustBeForThisEdge() {
     refused(problem(table(), ExposureClass.PRIVATE), "is for the `public` edge");
-    assertNull(problem(table(), ExposureClass.ALL), "the break-glass class is the public edge");
   }
 
   @Test
@@ -106,6 +106,18 @@ class RouteTablesTest {
   }
 
   @Test
+  void anApiDocsPathSitsUnderOneOfTheApplicationsOwnRoutes() {
+    assertNull(problem(changed(app -> app.put("apiDocsPath", "/ci"))), "the route itself is under");
+    assertNull(problem(changed(app -> app.remove("apiDocsPath"))), "api docs are optional");
+    refused(
+        problem(changed(app -> app.put("apiDocsPath", "/docs/q/swagger-ui"))),
+        "sits under none of its own routes");
+    refused(
+        problem(changed(app -> app.put("apiDocsPath", "/cix/q/openapi"))),
+        "sits under none of its own routes");
+  }
+
+  @Test
   void aPathOrAHostBelongsToOneApplicationPerEnvironment() {
     refused(
         problem(
@@ -123,6 +135,7 @@ class RouteTablesTest {
             withSecond(
                 second -> {
                   second.put("environment", "prod").put("browserHost", "ci");
+                  second.put("apiDocsPath", "/ci/q/openapi");
                   second.getJsonArray("endpoints").getJsonObject(0).put("path", "/ci");
                 })));
     refused(problem(withSecond(second -> second.put("application", "qits-ci"))), "twice");
@@ -131,7 +144,8 @@ class RouteTablesTest {
   private static JsonArray twoLandings() {
     JsonObject first = table().getJsonArray("applications").getJsonObject(0).copy();
     first.put("browserHost", "landing");
-    JsonObject second = first.copy().put("application", "qits-other-landing");
+    JsonObject second =
+        first.copy().put("application", "qits-other-landing").put("apiDocsPath", "/other");
     second.getJsonArray("endpoints").getJsonObject(0).put("path", "/other");
     return new JsonArray().add(first).add(second);
   }

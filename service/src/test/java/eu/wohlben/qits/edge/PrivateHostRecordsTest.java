@@ -273,18 +273,6 @@ class PrivateHostRecordsTest {
   }
 
   @Test
-  void theBreakGlassClassDeletesEveryOwnedRecordAndNothingElse() throws Exception {
-    estate.exposure = ExposureClass.ALL;
-    zone.put("projects.qits", "A", 60, true, TUNNEL);
-    zone.put("status.qits", "A", 300, false, "203.0.113.7");
-
-    records.reconcile();
-
-    assertEquals(List.of("delete projects.qits"), zone.writes);
-    assertTrue(zone.rrsets.containsKey("status.qits/A"));
-  }
-
-  @Test
   void aFailedWriteIsRetriedOnTheNextReconcileAndNeverThrown() {
     estate.withdraw("dev", "qits-projects", "projects", "private");
     PrivateHostRecords failing =

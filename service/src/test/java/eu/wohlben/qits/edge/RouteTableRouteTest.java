@@ -28,7 +28,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@code PUT/GET /edge-route-table} on a running edge (qits-2174, D2a): who may push and read, the
+ * {@code PUT/GET /edge-route-table} on a running edge (qits-2174): who may push and read, the
  * version rule, a refused table keeping the held one, and the GET's shape. The edge under test is
  * the public one, so it also proves the public edge never fetches.
  */
@@ -45,6 +45,8 @@ class RouteTableRouteTest {
 
   @Inject EdgeRoutes routes;
 
+  @Inject RouteTables tables;
+
   @Inject
   @DataSource("edge")
   AgroalDataSource edge;
@@ -55,6 +57,7 @@ class RouteTableRouteTest {
         PreparedStatement delete = connection.prepareStatement("delete from edge_route_table")) {
       delete.executeUpdate();
     }
+    tables.load();
   }
 
   /** A valid public table, one application in dev on `ci`. */
@@ -206,13 +209,15 @@ class RouteTableRouteTest {
   }
 
   @Test
-  void aStoredTableIsNotServedYet() throws Exception {
-    // D2a: routing stays the projection's, so a table naming a new host changes nothing.
+  void aStoredTableIsServedAtOnce() throws Exception {
+    // D2b: the table is what the edge routes, so a stored one naming a new host is served by the
+    // time the PUT is answered.
     JsonObject table = table(100);
-    table.getJsonArray("applications").getJsonObject(0).put("application", "qits-unrouted");
-    table.getJsonArray("applications").getJsonObject(0).put("browserHost", "unrouted");
+    table.getJsonArray("applications").getJsonObject(0).put("application", "qits-routed");
+    table.getJsonArray("applications").getJsonObject(0).put("browserHost", "routed");
     assertEquals(204, put(table.encode(), publisher()).statusCode());
-    assertFalse(routes.applicationHosts("dev").containsKey("qits-unrouted"));
+    assertEquals("qits-routed", routes.applicationHosts("dev").get("qits-routed").application());
+    assertEquals(100L, routes.version());
   }
 
   @Test
