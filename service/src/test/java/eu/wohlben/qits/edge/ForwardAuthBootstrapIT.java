@@ -378,7 +378,7 @@ public class ForwardAuthBootstrapIT {
       and this is the container that binds the host's only published port, so nothing on the
       platform would come up behind it. On `localhost`, an address, the wire alias or the bare
       domain it is answered by this process rather than proxied, and it says what a booted edge is
-      ready FOR: a deployment routing projection it has caught up with.
+      ready FOR: the route table qits-deployments pushed it (qits-2174).
 
       On any other name the same path is that name's, like every other path on it. A service's name
       gates it and would hand it to the service; a door serves nothing on it; a name nobody claims
@@ -486,7 +486,7 @@ public class ForwardAuthBootstrapIT {
     assertTrue(ready.body().contains("\"status\""), ready.body());
     assertTrue(ready.body().contains("UP"), ready.body());
     assertTrue(
-        ready.body().contains("deployment-projection"),
+        ready.body().contains("route-table"),
         "readiness says what a booted edge is ready FOR: " + ready.body());
     assertEquals(200, StoryEdge.client().get(StoryTarget.OWN_HOST, StoryTarget.LIVE).status());
     assertEquals(
@@ -507,10 +507,10 @@ public class ForwardAuthBootstrapIT {
     // service without a credential either; the door and a name nobody claims answer their 404.
     EdgeClient.Answer gated = StoryEdge.client().get(StoryTarget.PROJECTS_HOST, StoryTarget.READY);
     assertEquals(401, gated.status(), "a service's name gates its health path like any other");
-    assertTrue(!gated.body().contains("deployment-projection"), gated.body());
+    assertTrue(!gated.body().contains("route-table"), gated.body());
     EdgeClient.Answer atTheDoor = StoryEdge.client().get(StoryTarget.DOOR_HOST, StoryTarget.READY);
     assertEquals(404, atTheDoor.status(), "the door serves nothing, health included");
-    assertTrue(!atTheDoor.body().contains("deployment-projection"), atTheDoor.body());
+    assertTrue(!atTheDoor.body().contains("route-table"), atTheDoor.body());
     EdgeClient.Answer unclaimed404 =
         StoryEdge.client().get(StoryTarget.UNCLAIMED_HOST, StoryTarget.READY);
     assertEquals(404, unclaimed404.status(), "a name nobody claims is a 404 on every path");
