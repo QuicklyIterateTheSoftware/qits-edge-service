@@ -101,6 +101,7 @@
         <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1116.73651</qits.orchestrator-frontend-pacts-qits-edge-service.version>
         <qits.system-frontend-pacts-qits-edge-service.version>2026.1116.73546</qits.system-frontend-pacts-qits-edge-service.version>
         <qits.idp-frontend-pacts-qits-edge-service.version>2026.1116.73346</qits.idp-frontend-pacts-qits-edge-service.version>
+        <qits.landing-app-pacts-qits-edge-service.version>2026.1116.105602</qits.landing-app-pacts-qits-edge-service.version>
         <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
         <qits.pact-consumer.version>2026.1106.507</qits.pact-consumer.version>
 
@@ -464,6 +465,13 @@
             <groupId>eu.wohlben.qits</groupId>
             <artifactId>qits-idp-frontend-pacts-qits-edge-service</artifactId>
             <version>${qits.idp-frontend-pacts-qits-edge-service.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- qits-2220: the landing app's bumps menu asks getUpstreamPools in "an open upstream pool". -->
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-landing-app-pacts-qits-edge-service</artifactId>
+            <version>${qits.landing-app-pacts-qits-edge-service.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
