@@ -523,11 +523,28 @@ the ones the navigation document composes for a private withdrawal (`EdgeRoutes.
 exposure `private`): `<host>.<project>.<domain>` for an env-less project in the default
 environment, `<host>.<env>.<project>.<domain>` for one with environments — once per known project,
 because the grammar serves an application under every project's tier. An exact name outranks the
-zone's wildcard `*.qits`, which keeps answering the public edge for everything else. The value is
+zone's wildcard (`*`, i.e. `*.wohlben.eu` → the public edge), which keeps answering the public edge
+for every name that does not exist. The value is
 the newest `PrivateEdgeAnnounced.tunnelAddress` (any `/prefix` stripped), projected by
 `PrivateEdgeAddressSubscriber` (consumer `edge-private-edge-address`, replayed from the epoch) into
 `edge_private_edge_address` (V14); with several private edges the newest announcement overall wins.
 There is no setting.
+
+**Shadow records, and why they exist** (RFC 4592). A wildcard answers only for names that do NOT
+exist, and a name exists as soon as anything exists below it. The zone has one wildcard, `*`, which
+used to answer `qits.wohlben.eu`, `idp.qits.wohlben.eu` and the rest; creating `projects.qits`
+turned `qits` into an empty non-terminal, so `qits.wohlben.eu` answered NOERROR with no data and
+every other `<x>.qits.wohlben.eu` NXDOMAIN — `*` never synthesises at or below an existing name.
+That was the first rollout's public outage. So for every ancestor P strictly between a private name
+and the apex (`qits` for `projects.qits`; `acme` and `dev.acme` for `ci.dev.acme`) the edge restates
+what answered P before: the nearest UNLABELLED wildcard A walking up from P's parent (`*.<parent>`
+… `*`), written as two owned RRSets, `P` and `*.P`, with all of that wildcard's A values, TTL 60 and
+the same label. With no wildcard above P nothing answered P before and no shadow is written; a
+hand-made `A`/`CNAME` at `P` or `*.P` already does the job and is left alone (another type there,
+a TXT say, does not stop the shadow). Order is the safety: every shadow is created or set before
+any private record, a private record is written only when its shadows are in place, and deletes run
+private records first and a shadow only once nothing owned is left under it. A wildcard lookup that
+fails aborts the pass before any write.
 
 **Who writes.** The PUBLIC edge (`qits-edge`), with the Hetzner token its DNS-01 orders already use
 (`qits.edge.acme.hetzner-token` / `-file`, the file winning) — whether or not ACME is enabled.
