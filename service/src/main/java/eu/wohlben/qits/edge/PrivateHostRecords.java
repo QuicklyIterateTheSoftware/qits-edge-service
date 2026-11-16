@@ -11,6 +11,7 @@ import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -19,6 +20,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -30,9 +32,12 @@ import org.jboss.logging.Logger;
 /**
  * Publishes one DNS {@code A} record in the public zone for every PRIVATE application host
  * (qits-2273): {@code projects.qits.wohlben.eu A 100.96.0.1}, the tunnel address the private edge
- * listens on. An exact name outranks the zone's wildcard, which keeps answering the public edge for
- * everything else, so a client off the tunnel resolves a private name to an address it cannot
- * reach, and one on the tunnel reaches the private edge whatever resolver it asked.
+ * listens on. An exact name outranks the zone's wildcard, so a client off the tunnel resolves a
+ * private name to an address it cannot reach, and one on the tunnel reaches the private edge
+ * whatever resolver it asked. Because a record below a name turns that name into an empty
+ * non-terminal the wildcard no longer answers for, each ancestor also gets SHADOW records restating
+ * the wildcard's answer ({@link #shadows}) — without them the qits-2273 rollout made {@code
+ * qits.<domain>} and every other {@code *.qits.<domain>} name stop resolving.
  *
  * <p><b>Who writes.</b> The PUBLIC edge, and only while it holds a Hetzner token — the same token,
  * read the same way ({@link HetznerToken}), that its DNS-01 orders use, and independent of whether
@@ -315,6 +320,16 @@ public class PrivateHostRecords {
     apply(zones.apply(token.orElseThrow(), domain), desired);
   }
 
+  /**
+   * Converges the owned RRSets on {@code desired} plus the shadows it needs (see {@link #shadows}).
+   *
+   * <p><b>Order is the safety</b> (the qits-2273 outage): every shadow is created or set before any
+   * private host record, and a private record is written only when every shadow above it is in
+   * place — written in this pass, already there, or a hand-made record at that name; deletes go the
+   * other way, private records first and a shadow only once nothing owned remains under it. So no
+   * pass ever leaves a private record standing without its shadows, which is the state that turned
+   * the zone's {@code *} off for a whole subtree.
+   */
   private void apply(AddressRecords zone, Map<String, String> desired) throws Exception {
     Map<String, AddressRecords.RrSet> actual = new TreeMap<>();
     for (AddressRecords.RrSet rrset : zone.owned()) {
@@ -324,57 +339,203 @@ public class PrivateHostRecords {
         actual.put(rrset.name().toLowerCase(Locale.ROOT), rrset);
       }
     }
+    // Every lookup before any write: a wildcard that cannot be read aborts the pass untouched.
+    Map<String, Set<String>> needs = new TreeMap<>();
+    Map<String, List<String>> shadows = shadows(zone, desired.keySet(), needs);
+
     List<String> created = new ArrayList<>();
     List<String> set = new ArrayList<>();
     List<String> deleted = new ArrayList<>();
+    Set<String> failedShadows = new HashSet<>();
+    for (Map.Entry<String, List<String>> shadow : shadows.entrySet()) {
+      if (!write(zone, actual, shadow.getKey(), shadow.getValue(), created, set)) {
+        failedShadows.add(shadow.getKey());
+      }
+    }
     for (Map.Entry<String, String> entry : desired.entrySet()) {
       String name = entry.getKey();
-      String value = entry.getValue();
-      AddressRecords.RrSet existing = actual.get(name);
-      try {
-        if (existing == null) {
-          if (collides(zone, name)) {
-            continue;
-          }
-          zone.create(name, value);
-          created.add(name);
-          continue;
-        }
-        boolean changed = false;
-        if (!existing.values().equals(List.of(value))) {
-          zone.setRecords(name, value);
-          changed = true;
-        }
-        if (existing.ttl() != AddressRecords.TTL) {
-          zone.changeTtl(name);
-          changed = true;
-        }
-        if (changed) {
-          set.add(name);
-        }
-      } catch (Exception failure) {
+      Set<String> missing = new TreeSet<>(needs.getOrDefault(name, Set.of()));
+      missing.retainAll(failedShadows);
+      if (!missing.isEmpty()) {
         LOG.warnf(
-            "private host record %s was not written, retried on the next trigger: %s",
-            name, failure.getMessage());
-      }
-    }
-    for (String name : actual.keySet()) {
-      if (desired.containsKey(name)) {
+            "private host record %s is not written: its shadow record(s) %s could not be, and"
+                + " without them the zone's wildcard stops answering beside it",
+            name, missing);
         continue;
       }
-      try {
-        zone.delete(name);
+      write(zone, actual, name, List.of(entry.getValue()), created, set);
+    }
+
+    Set<String> stale = new TreeSet<>(actual.keySet());
+    stale.removeAll(desired.keySet());
+    stale.removeAll(shadows.keySet());
+    List<String> staleShadows = new ArrayList<>();
+    Set<String> remaining = new TreeSet<>(desired.keySet());
+    for (String name : stale) {
+      if (shadowLike(name, actual.keySet())) {
+        staleShadows.add(name);
+        continue;
+      }
+      if (delete(zone, name)) {
         deleted.add(name);
-      } catch (Exception failure) {
-        LOG.warnf(
-            "private host record %s was not deleted, retried on the next trigger: %s",
-            name, failure.getMessage());
+      } else {
+        remaining.add(name);
       }
     }
-    collisions.retainAll(desired.keySet());
+    for (String name : staleShadows) {
+      String base = name.startsWith("*.") ? name.substring(2) : name;
+      if (remaining.stream().anyMatch(other -> other.endsWith("." + base))) {
+        // A private record under it is still there — one whose delete just failed: keep its
+        // shadow, or the wildcard goes dark beside it.
+        continue;
+      }
+      if (delete(zone, name)) {
+        deleted.add(name);
+      }
+    }
+    Set<String> wanted = new HashSet<>(desired.keySet());
+    wanted.addAll(shadows.keySet());
+    collisions.retainAll(wanted);
     if (!created.isEmpty() || !set.isEmpty() || !deleted.isEmpty()) {
       LOG.infof(
           "private host records reconciled: created %s, set %s, deleted %s", created, set, deleted);
+    }
+  }
+
+  /**
+   * One owned RRSet brought to {@code values}: created (unless a hand-made A or CNAME is there), or
+   * set and re-TTL'd where it differs.
+   *
+   * @return whether the name is in place after the call — written, unchanged, or hand-made
+   */
+  private boolean write(
+      AddressRecords zone,
+      Map<String, AddressRecords.RrSet> actual,
+      String name,
+      List<String> values,
+      List<String> created,
+      List<String> set) {
+    AddressRecords.RrSet existing = actual.get(name);
+    try {
+      if (existing == null) {
+        if (collides(zone, name)) {
+          return true;
+        }
+        zone.create(name, values);
+        created.add(name);
+        return true;
+      }
+      boolean changed = false;
+      if (!new HashSet<>(existing.values()).equals(new HashSet<>(values))) {
+        zone.setRecords(name, values);
+        changed = true;
+      }
+      if (existing.ttl() != AddressRecords.TTL) {
+        zone.changeTtl(name);
+        changed = true;
+      }
+      if (changed) {
+        set.add(name);
+      }
+      return true;
+    } catch (Exception failure) {
+      LOG.warnf(
+          "private host record %s was not written, retried on the next trigger: %s",
+          name, failure.getMessage());
+      return false;
+    }
+  }
+
+  private boolean delete(AddressRecords zone, String name) {
+    try {
+      zone.delete(name);
+      return true;
+    } catch (Exception failure) {
+      LOG.warnf(
+          "private host record %s was not deleted, retried on the next trigger: %s",
+          name, failure.getMessage());
+      return false;
+    }
+  }
+
+  /**
+   * A stale owned name that is a shadow: a {@code *.} name, or an ancestor of another owned one.
+   */
+  private static boolean shadowLike(String name, Set<String> owned) {
+    return name.startsWith("*.") || owned.stream().anyMatch(other -> other.endsWith("." + name));
+  }
+
+  /**
+   * The SHADOW records the private names need, name to the A values they carry.
+   *
+   * <p><b>Why they exist</b> (RFC 4592). A wildcard answers only for names that do not exist, and a
+   * name exists as soon as anything exists BELOW it: creating {@code projects.qits} makes {@code
+   * qits} an empty non-terminal, so the zone's {@code *} no longer answers {@code qits} itself
+   * (NOERROR, no data) nor anything else under it ({@code idp.qits} becomes NXDOMAIN — {@code *}
+   * never synthesises below an existing name). So for every ancestor P strictly between a private
+   * name and the apex, the value W that answered P before — the nearest UNLABELLED wildcard A
+   * walking up from P's parent, {@code *.<parent>} ... {@code *} — is restated as two owned RRSets,
+   * {@code P → W} and {@code *.P → W}. No wildcard above P: nothing answered P before, and nothing
+   * is needed.
+   *
+   * @param needs filled with each private name's shadow names, for the write order
+   */
+  Map<String, List<String>> shadows(
+      AddressRecords zone, Set<String> privateNames, Map<String, Set<String>> needs)
+      throws Exception {
+    Map<String, Optional<AddressRecords.RrSet>> looked = new HashMap<>();
+    Map<String, List<String>> shadows = new TreeMap<>();
+    for (String name : privateNames) {
+      Set<String> mine = new TreeSet<>();
+      String[] labels = name.split("\\.");
+      for (int i = 1; i < labels.length; i++) {
+        String ancestor = String.join(".", List.of(labels).subList(i, labels.length));
+        List<String> covering = wildcardAbove(zone, ancestor, looked);
+        if (covering.isEmpty()) {
+          continue;
+        }
+        for (String shadow : List.of(ancestor, "*." + ancestor)) {
+          if (privateNames.contains(shadow)) {
+            continue;
+          }
+          shadows.put(shadow, covering);
+          mine.add(shadow);
+        }
+      }
+      needs.put(name, mine);
+    }
+    return shadows;
+  }
+
+  /**
+   * The A values of the nearest unlabelled wildcard above {@code ancestor}, or empty. Each wildcard
+   * is fetched by its own path ({@link AddressRecords#get}), never through a list filter whose
+   * reading of {@code *} is unknown, and once per pass.
+   */
+  private static List<String> wildcardAbove(
+      AddressRecords zone, String ancestor, Map<String, Optional<AddressRecords.RrSet>> looked)
+      throws Exception {
+    String parent = ancestor.contains(".") ? ancestor.substring(ancestor.indexOf('.') + 1) : null;
+    while (true) {
+      String wildcard = parent == null ? "*" : "*." + parent;
+      Optional<AddressRecords.RrSet> found = looked.get(wildcard);
+      if (found == null) {
+        found = zone.get(wildcard, "A");
+        looked.put(wildcard, found);
+      }
+      if (found.isPresent()) {
+        AddressRecords.RrSet rrset = found.orElseThrow();
+        if (!rrset.owned()
+            && "A".equalsIgnoreCase(rrset.type())
+            && wildcard.equalsIgnoreCase(rrset.name())
+            && !rrset.values().isEmpty()) {
+          return rrset.values().stream().sorted().toList();
+        }
+      }
+      if (parent == null) {
+        return List.of();
+      }
+      parent = parent.contains(".") ? parent.substring(parent.indexOf('.') + 1) : null;
     }
   }
 
@@ -384,7 +545,10 @@ public class PrivateHostRecords {
    * while it lasts.
    */
   private boolean collides(AddressRecords zone, String name) throws Exception {
-    for (AddressRecords.RrSet rrset : zone.named(name)) {
+    List<AddressRecords.RrSet> there = new ArrayList<>();
+    zone.get(name, "A").ifPresent(there::add);
+    zone.get(name, "CNAME").ifPresent(there::add);
+    for (AddressRecords.RrSet rrset : there) {
       if (!rrset.owned()
           && name.equalsIgnoreCase(rrset.name())
           && ("A".equalsIgnoreCase(rrset.type()) || "CNAME".equalsIgnoreCase(rrset.type()))) {

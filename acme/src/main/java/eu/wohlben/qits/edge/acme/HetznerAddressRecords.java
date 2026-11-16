@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * {@link AddressRecords} through Hetzner Cloud's RRSet API, the same API and bearer the DNS-01
@@ -67,28 +68,38 @@ public final class HetznerAddressRecords implements AddressRecords {
   }
 
   @Override
-  public List<RrSet> named(String name) throws Exception {
-    return rrsets(get(hetzner.rrsets() + "?name=" + HetznerApi.encode(name)));
+  public Optional<RrSet> get(String name, String type) throws Exception {
+    HttpResponse<String> response =
+        call(
+            "GET",
+            hetzner.rrsets() + "/" + HetznerApi.encode(name) + "/" + HetznerApi.encode(type),
+            null,
+            true);
+    if (response.statusCode() == 404) {
+      return Optional.empty();
+    }
+    JsonNode rrset = json.readTree(response.body()).path("rrset");
+    return rrset.isObject() ? Optional.of(rrset(rrset)) : Optional.empty();
   }
 
   @Override
-  public void create(String name, String value) throws Exception {
+  public void create(String name, List<String> values) throws Exception {
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("name", name);
     body.put("type", "A");
     body.put("ttl", TTL);
     body.put("labels", Map.of(OWNER_LABEL, OWNER_VALUE));
-    body.put("records", List.of(Map.of("value", value)));
+    body.put("records", records(values));
     call("POST", hetzner.rrsets(), body, false);
   }
 
   @Override
-  public void setRecords(String name, String value) throws Exception {
-    call(
-        "POST",
-        rrset(name) + "/actions/set_records",
-        Map.of("records", List.of(Map.of("value", value))),
-        false);
+  public void setRecords(String name, List<String> values) throws Exception {
+    call("POST", rrset(name) + "/actions/set_records", Map.of("records", records(values)), false);
+  }
+
+  private static List<Map<String, String>> records(List<String> values) {
+    return values.stream().map(value -> Map.of("value", value)).toList();
   }
 
   @Override
@@ -139,23 +150,26 @@ public final class HetznerAddressRecords implements AddressRecords {
   private static List<RrSet> rrsets(JsonNode body) {
     List<RrSet> found = new ArrayList<>();
     for (JsonNode rrset : body.path("rrsets")) {
-      Map<String, String> labels = new LinkedHashMap<>();
-      rrset
-          .path("labels")
-          .properties()
-          .forEach(label -> labels.put(label.getKey(), label.getValue().asText()));
-      List<String> values = new ArrayList<>();
-      for (JsonNode record : rrset.path("records")) {
-        values.add(record.path("value").asText());
-      }
-      found.add(
-          new RrSet(
-              rrset.path("name").asText(),
-              rrset.path("type").asText(),
-              rrset.path("ttl").asInt(0),
-              labels,
-              values));
+      found.add(rrset(rrset));
     }
     return found;
+  }
+
+  private static RrSet rrset(JsonNode rrset) {
+    Map<String, String> labels = new LinkedHashMap<>();
+    rrset
+        .path("labels")
+        .properties()
+        .forEach(label -> labels.put(label.getKey(), label.getValue().asText()));
+    List<String> values = new ArrayList<>();
+    for (JsonNode record : rrset.path("records")) {
+      values.add(record.path("value").asText());
+    }
+    return new RrSet(
+        rrset.path("name").asText(),
+        rrset.path("type").asText(),
+        rrset.path("ttl").asInt(0),
+        labels,
+        values);
   }
 }

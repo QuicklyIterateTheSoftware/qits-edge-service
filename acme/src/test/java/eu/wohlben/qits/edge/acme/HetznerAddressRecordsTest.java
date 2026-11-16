@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -77,7 +78,7 @@ class HetznerAddressRecordsTest {
   void createsALabelledARrsetWithTheShortTtl() throws Exception {
     var records = serve(request -> new Response(201, "{\"rrset\":{},\"action\":{}}"));
 
-    records.create("projects.qits", "100.96.0.1");
+    records.create("projects.qits", List.of("100.96.0.1"));
 
     assertThat(requests).hasSize(1);
     assertThat(requests.get(0).method()).isEqualTo("POST");
@@ -101,7 +102,7 @@ class HetznerAddressRecordsTest {
                     ? new Response(404, "{\"error\":{\"code\":\"not_found\"}}")
                     : new Response(201, "{\"action\":{}}"));
 
-    records.setRecords("projects.qits", "100.96.0.9");
+    records.setRecords("projects.qits", List.of("100.96.0.9", "100.96.0.10"));
     records.changeTtl("projects.qits");
     records.delete("projects.qits");
 
@@ -114,28 +115,42 @@ class HetznerAddressRecordsTest {
                 "POST", "/v1/zones/wohlben.eu/rrsets/projects.qits/A/actions/change_ttl"),
             org.assertj.core.groups.Tuple.tuple(
                 "DELETE", "/v1/zones/wohlben.eu/rrsets/projects.qits/A"));
-    assertThat(requests.get(0).body()).isEqualTo("{\"records\":[{\"value\":\"100.96.0.9\"}]}");
+    assertThat(requests.get(0).body())
+        .isEqualTo("{\"records\":[{\"value\":\"100.96.0.9\"},{\"value\":\"100.96.0.10\"}]}");
     assertThat(requests.get(1).body()).isEqualTo("{\"ttl\":60}");
   }
 
   @Test
-  void looksUpOneNameOfAnyType() throws Exception {
+  void getsOneRrsetByNameAndTypeOnItsOwnPath() throws Exception {
     var records =
         serve(
             request ->
-                new Response(
-                    200,
-                    """
-                    {"rrsets":[{"name":"projects.qits","type":"CNAME","ttl":300,"labels":{},
-                      "records":[{"value":"elsewhere.example."}]}]}
-                    """));
+                request.path().endsWith("/*/A")
+                    ? new Response(
+                        200,
+                        """
+                        {"rrset":{"name":"*","type":"A","ttl":300,"labels":{},
+                          "records":[{"value":"46.224.171.33"}]}}
+                        """)
+                    : new Response(404, "{\"error\":{\"code\":\"not_found\"}}"));
 
-    List<AddressRecords.RrSet> found = records.named("projects.qits");
+    Optional<AddressRecords.RrSet> wildcard = records.get("*", "A");
+    Optional<AddressRecords.RrSet> none = records.get("qits", "CNAME");
 
-    assertThat(requests.get(0).path()).isEqualTo("/v1/zones/wohlben.eu/rrsets?name=projects.qits");
-    assertThat(found).hasSize(1);
-    assertThat(found.get(0).type()).isEqualTo("CNAME");
-    assertThat(found.get(0).owned()).isFalse();
+    assertThat(requests.get(0).method()).isEqualTo("GET");
+    assertThat(requests.get(0).path()).isEqualTo("/v1/zones/wohlben.eu/rrsets/*/A");
+    assertThat(requests.get(1).path()).isEqualTo("/v1/zones/wohlben.eu/rrsets/qits/CNAME");
+    assertThat(wildcard)
+        .contains(new AddressRecords.RrSet("*", "A", 300, Map.of(), List.of("46.224.171.33")));
+    assertThat(wildcard.orElseThrow().owned()).isFalse();
+    assertThat(none).isEmpty();
+  }
+
+  @Test
+  void getAnyOtherRefusalThrows() throws Exception {
+    var records = serve(request -> new Response(503, "busy"));
+
+    assertThatThrownBy(() -> records.get("*", "A")).hasMessageContaining("HTTP 503: busy");
   }
 
   @Test
@@ -144,7 +159,7 @@ class HetznerAddressRecordsTest {
         "{\"error\":{\"code\":\"invalid_input\",\"message\":\"" + "x".repeat(500) + "\"}}";
     var records = serve(request -> new Response(422, body));
 
-    assertThatThrownBy(() -> records.create("projects.qits", "100.96.0.1"))
+    assertThatThrownBy(() -> records.create("projects.qits", List.of("100.96.0.1")))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("HTTP 422")
         .hasMessageContaining("invalid_input")
@@ -159,7 +174,7 @@ class HetznerAddressRecordsTest {
   void aMissingRrsetOnAnyOtherCallIsARefusal() throws Exception {
     var records = serve(request -> new Response(404, ""));
 
-    assertThatThrownBy(() -> records.setRecords("projects.qits", "100.96.0.1"))
+    assertThatThrownBy(() -> records.setRecords("projects.qits", List.of("100.96.0.1")))
         .hasMessageContaining("HTTP 404: (empty body)");
   }
 

@@ -2,6 +2,7 @@ package eu.wohlben.qits.edge.acme;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * The A RRSets the public edge owns in its DNS zone (qits-2273): one per private application host,
@@ -47,14 +48,17 @@ public interface AddressRecords {
   /** Every A RRSet carrying the ownership label, every page of them. */
   List<RrSet> owned() throws Exception;
 
-  /** Every RRSet of any type at this one name — the collision check before a create. */
-  List<RrSet> named(String name) throws Exception;
+  /**
+   * The one RRSet of {@code type} at {@code name}, by its own path rather than a list filter — the
+   * wildcard lookup and the collision check before a create. Empty when there is none.
+   */
+  Optional<RrSet> get(String name, String type) throws Exception;
 
-  /** Creates the owned A RRSet {@code name} with the one record {@code value} and {@link #TTL}. */
-  void create(String name, String value) throws Exception;
+  /** Creates the owned A RRSet {@code name} with the records {@code values} and {@link #TTL}. */
+  void create(String name, List<String> values) throws Exception;
 
-  /** Replaces the records of the A RRSet {@code name} with the one record {@code value}. */
-  void setRecords(String name, String value) throws Exception;
+  /** Replaces the records of the A RRSet {@code name} with {@code values}. */
+  void setRecords(String name, List<String> values) throws Exception;
 
   /** Sets the A RRSet {@code name}'s TTL to {@link #TTL}. */
   void changeTtl(String name) throws Exception;
