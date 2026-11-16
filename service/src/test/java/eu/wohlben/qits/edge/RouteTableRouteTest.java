@@ -171,7 +171,7 @@ class RouteTableRouteTest {
           StubGateways.platformBearer(),
           // a service, but not the deployer
           StubGateways.serviceBearer("dev-qits-ci"),
-          // the deployer's azp on a token the edge's idp never signed
+          // the deployer's client id on a token the edge's idp never signed
           "Bearer "
               + TestTokens.mint(
                   TestTokens.IMPOSTOR,
@@ -182,7 +182,7 @@ class RouteTableRouteTest {
                           List.of(StubGateways.PLATFORM_AUDIENCE),
                           Instant.now().plusSeconds(300))
                       .put("groups", new JsonArray(List.of("qits:system")))
-                      .put("azp", config.routes().publisher())),
+                      .put("sub", config.routes().publisher())),
           StubGateways.basic(StubGateways.EDGE_ID, StubGateways.EDGE_SECRET),
         }) {
       HttpResponse<String> put = put(table(100).encode(), refused);

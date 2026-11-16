@@ -85,7 +85,7 @@ paths:
       summary: "Store the route table qits-deployments built for this edge, when it\
         \ is newer than the held one."
       description: "Only qits-deployments may push: a bearer JWT the edge accepts,\
-        \ carrying qits:system, whose azp is qits.edge.routes.publisher (the deployer's\
+        \ carrying qits:system, whose sub is qits.edge.routes.publisher (the deployer's\
         \ idp client, <env>-qits-deployments). The table is validated whole — hosts\
         \ are DNS labels and no environment name, a platform app label on the public\
         \ edge must be that platform application's own address, and no (environment,\

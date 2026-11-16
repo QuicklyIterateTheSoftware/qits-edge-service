@@ -137,7 +137,7 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
    * the idp client it was minted for. With qits-deployments' client id it is the one credential
    * {@code PUT /edge-route-table} accepts (qits-2174). Public for the provider states.
    */
-  public static String serviceBearer(String azp) {
+  public static String serviceBearer(String clientId) {
     return "Bearer "
         + TestTokens.mint(
             TestTokens.IDP,
@@ -146,7 +146,7 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
             TestTokens.claims(
                     ISSUER, List.of(PLATFORM_AUDIENCE), java.time.Instant.now().plusSeconds(300))
                 .put("groups", new io.vertx.core.json.JsonArray(List.of("qits:system")))
-                .put("azp", azp));
+                .put("sub", clientId));
   }
 
   /** The edge's OWN idp client, the one it introspects browser sessions with. */

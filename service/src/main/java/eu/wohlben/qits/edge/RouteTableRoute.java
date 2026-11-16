@@ -23,7 +23,10 @@ import org.jboss.logging.Logger;
  * <p><b>Only the deployer may push.</b> A {@code PUT} needs a credential {@link
  * EdgeAuth#checkCredential} accepts, presented as a service bearer ({@link
  * EdgeAuth#isServiceBearer}: a JWT carrying {@code qits:system}, never an opaque token or a Basic
- * pair), whose {@code azp} is {@code qits.edge.routes.publisher} — the deployer's own idp client.
+ * pair), whose {@code sub} is {@code qits.edge.routes.publisher} — the deployer's own idp client.
+ * qits-idp writes a client token's client id into {@code sub} and sets no {@code azp} (its
+ * TokenService.signFor); a granted claim is copied into the token verbatim, so an {@code azp} would
+ * be the client's to choose and is never read (qits-2174, the first live push answered 403).
  * Anything else is a {@code 403}. It answers {@code 204} when the table is stored, {@code 200
  * {"held":<v>}} when its version is not above the held one, and {@code 422 {"error":"<reason>"}}
  * when it is invalid.
@@ -69,7 +72,7 @@ public class RouteTableRoute {
     // stood for: only what the caller presented says whether it is a service speaking for itself.
     String presented = request.getHeader(HttpHeaders.AUTHORIZATION);
     String publisher = config.routes().publisher();
-    admit(request, presented, () -> publisher.equals(azp(presented)))
+    admit(request, presented, () -> publisher.equals(clientId(presented)))
         .onSuccess(
             yes -> {
               if (!yes) {
@@ -89,7 +92,7 @@ public class RouteTableRoute {
   private void get(RoutingContext context) {
     HttpServerRequest request = context.request();
     String presented = request.getHeader(HttpHeaders.AUTHORIZATION);
-    // Any qits:system service — the deployer, whose azp is a special case of that, included.
+    // Any qits:system service — the deployer, whose sub is a special case of that, included.
     admit(request, presented, () -> true)
         .onSuccess(
             yes -> {
@@ -119,15 +122,17 @@ public class RouteTableRoute {
     return auth.checkCredential(request).map(problem -> problem == null && further.getAsBoolean());
   }
 
-  /** The {@code azp} claim of a presented bearer JWT; null for anything else. */
-  static String azp(String authorization) {
+  /**
+   * The {@code sub} claim — the idp client id — of a presented bearer JWT; null for anything else.
+   */
+  static String clientId(String authorization) {
     if (authorization == null || !authorization.toLowerCase(Locale.ROOT).startsWith(BEARER)) {
       return null;
     }
     try {
       return SignedJwt.parse(authorization.substring(BEARER.length()).trim())
           .claims()
-          .getString("azp");
+          .getString("sub");
     } catch (RuntimeException unreadable) {
       return null;
     }

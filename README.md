@@ -143,7 +143,7 @@ builds and pushes**, one per edge. This release (D2a) only receives and stores i
 still describes how the edge routes, and nothing about readiness changes.
 
 - **`PUT /edge-route-table`**, on every vhost, answered by the edge (`RouteTableRoute`). Only the
-  deployer may push: a bearer JWT the edge accepts, carrying `qits:system`, whose `azp` is
+  deployer may push: a bearer JWT the edge accepts, carrying `qits:system`, whose `sub` (the idp client id) is
   `qits.edge.routes.publisher` (default `${QITS_ENVIRONMENT:dev}-qits-deployments`); anything else is
   a `403`. The table is validated whole (`RouteTables`) — every host a DNS label and no environment
   name, a `PlatformApps` label on the public edge only at that platform application's own address,
