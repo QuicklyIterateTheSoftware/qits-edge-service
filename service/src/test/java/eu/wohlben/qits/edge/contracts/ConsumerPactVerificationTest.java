@@ -34,7 +34,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
  * that jar as a test dependency, and qits-maintenance bumps the pin when the consumer releases a
  * changed pact. {@link ClasspathPactLoader} finds them all.
  *
- * <p><b>Thirteen consumers pin a pact</b> (qits-1284), every one of them a frontend asking through
+ * <p><b>Fourteen consumers pin a pact</b>. Thirteen (qits-1284) are frontends asking through
  * {@code @qits/ui-components}' main navigation: qits-ci-frontend, qits-projects-frontend,
  * qits-docs-frontend, qits-events-frontend, qits-githost-frontend, qits-maintenance-frontend,
  * qits-artifacts-frontend, qits-deployments-frontend, qits-mirror-frontend,
@@ -42,8 +42,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
  * qits-idp-frontend (each {@code eu.wohlben.qits:<consumer>-pacts-qits-edge-service}, holding
  * {@code pacts/<consumer>_qits-ui-components-jslib_qits-edge-service.json}), all test-scoped in
  * {@code service/pom.xml}. Each asks {@code getMainNavigation} in the state {@code a published
- * navigation}, the one the golden master is recorded in. {@link ClasspathPactLoader#REQUIRED} is
- * true, so a classpath that lost them fails rather than verifying nothing.
+ * navigation}, the one the golden master is recorded in. The fourteenth is qits-landing-app
+ * (qits-2220, {@code eu.wohlben.qits:qits-landing-app-pacts-qits-edge-service}, holding {@code
+ * pacts/qits-landing-app_qits-edge-service.json}): its bumps menu asks {@code getUpstreamPools} in
+ * the state {@code an open upstream pool}. {@link ClasspathPactLoader#REQUIRED} is true, so a
+ * classpath that lost them fails rather than verifying nothing.
  *
  * <p><b>The edge routes on {@code Host}</b>, which a consumer's pact does not carry: the consumer
  * asks its own origin. So each request gets the {@code Host} its provider state names, and {@code
@@ -53,9 +56,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
  * <p>Each interaction runs against this {@code @QuarkusTest} application over real HTTP. {@code
  * /main-navigation} is open; {@code /upstream-pools} is not, so for {@code an open upstream pool}
  * {@link ProviderStates#requestHeaders} also sets a live {@code Authorization} over whatever the
- * pact's request carries — no consumer pins a pact against it yet. Every {@code @State} method
- * delegates to {@link ProviderStates}; {@link #target} fails an unknown state, and an interaction
- * without {@code comments.references.qits-call} or {@code qits-trigger}.
+ * pact's request carries (the landing app's pact sends none). Every {@code @State} method delegates
+ * to {@link ProviderStates}; {@link #target} fails an unknown state, and an interaction without
+ * {@code comments.references.qits-call} or {@code qits-trigger}.
  *
  * <p>It runs in the {@code contract-tests} surefire execution, a JVM of its own: see {@code
  * service/pom.xml}.
