@@ -4,12 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import eu.wohlben.qits.http.RawHttpClient;
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -19,33 +15,19 @@ import java.util.Map;
         "api.hetzner.cloud is the DNS provider API, not a qits service: no trace or caller header belongs on it")
 public final class HetznerDnsChallengeProvider implements DnsChallengeProvider {
 
-  private static final URI DEFAULT_API = URI.create("https://api.hetzner.cloud/v1/");
-
-  private final HttpClient http;
+  private final HetznerApi hetzner;
   private final ObjectMapper json;
-  private final URI api;
-  private final String token;
   private final String zone;
 
   public HetznerDnsChallengeProvider(String token, String zone) {
-    this(
-        HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build(),
-        new ObjectMapper(),
-        DEFAULT_API,
-        token,
-        zone);
+    this(HetznerApi.defaultClient(), new ObjectMapper(), HetznerApi.DEFAULT_API, token, zone);
   }
 
   HetznerDnsChallengeProvider(
       HttpClient http, ObjectMapper json, URI api, String token, String zone) {
-    this.http = http;
+    this.hetzner = new HetznerApi(http, json, api, token, zone);
     this.json = json;
-    this.api = api;
-    this.token = token;
-    this.zone = zone.toLowerCase(java.util.Locale.ROOT);
-    if (token.isBlank()) {
-      throw new IllegalArgumentException("Hetzner DNS token is blank");
-    }
+    this.zone = hetzner.zone();
   }
 
   @Override
@@ -119,20 +101,7 @@ public final class HetznerDnsChallengeProvider implements DnsChallengeProvider {
 
   private HttpResponse<String> request(
       String method, String path, byte[] body, boolean acceptMissing) throws Exception {
-    var builder =
-        HttpRequest.newBuilder(api.resolve(path))
-            .timeout(Duration.ofSeconds(30))
-            .header("Authorization", "Bearer " + token)
-            .header("Accept", "application/json");
-    if (body == null) {
-      builder.method(method, HttpRequest.BodyPublishers.noBody());
-    } else {
-      builder
-          .header("Content-Type", "application/json")
-          .method(method, HttpRequest.BodyPublishers.ofByteArray(body));
-    }
-    HttpResponse<String> response =
-        http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    HttpResponse<String> response = hetzner.send(method, path, body);
     if (response.statusCode() / 100 == 2 || (acceptMissing && response.statusCode() == 404)) {
       return response;
     }
@@ -157,6 +126,6 @@ public final class HetznerDnsChallengeProvider implements DnsChallengeProvider {
   }
 
   private static String encode(String value) {
-    return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    return HetznerApi.encode(value);
   }
 }

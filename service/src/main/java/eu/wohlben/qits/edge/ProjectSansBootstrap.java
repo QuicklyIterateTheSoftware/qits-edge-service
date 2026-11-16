@@ -46,6 +46,9 @@ public class ProjectSansBootstrap {
   @Inject EdgeConfig config;
   @Inject EdgeCertificateManager certificates;
 
+  /** Asked for a reconcile at the head (qits-2273); null under the suites' own constructor. */
+  @Inject PrivateHostRecords privateHosts;
+
   /** Test-only escape hatch for suites that deliberately turn qits-eventstream off. */
   boolean required;
 
@@ -115,6 +118,10 @@ public class ProjectSansBootstrap {
             "project SAN projection caught up to qits-events (%d frame(s) handled)",
             result.handled());
         certificates.requestReconcile();
+        // The project tiers are an input to the private host names too (qits-2273).
+        if (privateHosts != null) {
+          privateHosts.requestReconcile();
+        }
         return;
       }
       LOG.warnf("project SAN projection is not ready (%s); retrying in %s", result.status(), retry);
