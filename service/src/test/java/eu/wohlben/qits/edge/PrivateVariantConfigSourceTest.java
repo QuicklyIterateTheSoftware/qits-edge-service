@@ -61,7 +61,7 @@ class PrivateVariantConfigSourceTest {
 
   @Test
   void anAbsentOrOtherVariantIsEmpty() {
-    for (String variant : new String[] {null, "", "PRIVATE", "public", "privat"}) {
+    for (String variant : new String[] {null, "", "PRIVATE", "public", "privat", "OVERLAY"}) {
       PrivateVariantConfigSource source = new PrivateVariantConfigSource(() -> variant);
       assertTrue(source.getPropertyNames().isEmpty(), String.valueOf(variant));
       assertTrue(source.getProperties().isEmpty(), String.valueOf(variant));
@@ -193,6 +193,75 @@ class PrivateVariantConfigSourceTest {
     assertEquals(
         "http://dev-qits-observability:8080/observability/api/otel",
         publicConfig.getValue("qits.telemetry.endpoint", String.class));
+  }
+
+  @Test
+  void theOverlayVariantIsThePrivateEdgeWithoutTheTunnelOrTheShortDrain() {
+    // qits-2304: qits-edge-overlay serves qits-private alone and updates start-first.
+    PrivateVariantConfigSource source = new PrivateVariantConfigSource(() -> " overlay ");
+
+    assertEquals("private", source.getValue("qits.edge.exposure"));
+    assertEquals("false", source.getValue("qits.edge.wireguard.enabled"), "no tunnel");
+    assertNull(source.getValue("qits.edge.wireguard.listen-port"), "nothing listens");
+    assertEquals("true", source.getValue("qits.edge.dns.enabled"));
+    assertEquals("10.231.0.0/20", source.getValue("qits.edge.dns.overlay-cidr"));
+    assertEquals(
+        "10.231.0.0/20",
+        source.getValue("qits.edge.listen.allowed-local-cidrs"),
+        "the overlay alone, no tunnel block");
+    assertEquals("false", source.getValue("qits.edge.acme.enabled"));
+    assertEquals("https://idp.qits.${QITS_DOMAIN}/idp", source.getValue("qits.edge.idp.dial-url"));
+    assertEquals("https://events.qits.${QITS_DOMAIN}", source.getValue("qits.events.url"));
+    assertEquals(
+        "https://observability.qits.${QITS_DOMAIN}", source.getValue("qits.observability.url"));
+    assertEquals(
+        "http://${QITS_ENVIRONMENT:dev}-qits-deployments:8080",
+        source.getValue("qits.edge.routes.url"),
+        "it fetches the private table at start, as the private edge does");
+    assertEquals("80", source.getValue("quarkus.http.port"));
+    assertEquals("443", source.getValue("quarkus.http.ssl-port"));
+    assertEquals(
+        "/work/.letsencrypt/current/lets-encrypt.crt",
+        source.getValue("quarkus.tls.key-store.pem.acme.cert"));
+    assertEquals(
+        "/work/.letsencrypt/current/lets-encrypt.key",
+        source.getValue("quarkus.tls.key-store.pem.acme.key"));
+    assertEquals("1m", source.getValue("quarkus.tls.reload-period"));
+    assertNull(
+        source.getValue("quarkus.shutdown.timeout"),
+        "start-first: application.properties' 9m30s drain stands");
+    assertEquals(
+        "${QITS_ENVIRONMENT:dev}-${QITS_APPLICATION:qits-edge-overlay}",
+        source.getValue("qits.edge.dns.service-alias"));
+    assertEquals(16, source.getPropertyNames().size());
+    assertEquals(source.getPropertyNames(), source.getProperties().keySet());
+    assertNull(
+        new PrivateVariantConfigSource(() -> "private").getValue("qits.edge.dns.service-alias"),
+        "the private edge answers its task address and states no alias");
+  }
+
+  @Test
+  void theOverlayAliasAndDrainResolveAsDeployed() {
+    SmallRyeConfig config =
+        new SmallRyeConfigBuilder()
+            .addDefaultInterceptors()
+            .withProfile("prod")
+            .withSources(
+                new PropertiesConfigSource(
+                    Map.of("quarkus.shutdown.timeout", "9m30s", "qits.edge.shutdown.linger", "10s"),
+                    "application.properties",
+                    250))
+            .withSources(
+                new EnvConfigSource(
+                    Map.of("QITS_ENVIRONMENT", "prod", "QITS_APPLICATION", "qits-edge-overlay"),
+                    300))
+            .withSources(new PrivateVariantConfigSource(() -> "overlay"))
+            .build();
+
+    assertEquals(
+        "prod-qits-edge-overlay", config.getValue("qits.edge.dns.service-alias", String.class));
+    assertEquals("9m30s", config.getRawValue("quarkus.shutdown.timeout"));
+    assertEquals("10s", config.getRawValue("qits.edge.shutdown.linger"));
   }
 
   @Test

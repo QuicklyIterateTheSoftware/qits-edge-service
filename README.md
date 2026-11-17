@@ -10,7 +10,8 @@ browser session of its own: the browser gate reads idp's, caches what idp said, 
 ## Deployment routes
 
 `qits-deployments` builds **one route table per edge** and pushes it (epic qits-2174): `public` for
-this edge's public variant, `private` for the private one. The table is the whole of what an edge
+this edge's public variant, `private` for the private one — which the overlay edge serves too
+(qits-2304, see *The overlay edge*). The table is the whole of what an edge
 routes — the edge keeps no projection of deployment events any more. Each entry is one application in
 one environment:
 
@@ -78,7 +79,9 @@ replaces it the moment it is stored.
 ${qits.edge.routes.url}/deployments/api/edge-routes/private` with the `qits` oidc client's bearer,
 on a virtual thread, retried after 1, 2, 4 … 30 s until the deployer answers, with one WARN `route
 table fetch failed: <reason>`. `qits.edge.routes.url` (`http://<env>-qits-deployments:8080`) is
-stated by `PrivateVariantConfigSource` alone, because both sit on `qits-private`. **The public edge
+stated by `PrivateVariantConfigSource` alone, because both sit on `qits-private`. The overlay edge
+(qits-2304) fetches the same way and the same table, `private`: the fetch runs for any edge whose
+class is `private` and that states the url, and the variant source states it for both. **The public edge
 never fetches**: it sits on `qits-net`, the deployer on `qits-private`, and nothing bridges them, so
 it serves its cached table and waits for a push — which the deployer sends after every public-edge
 deploy, and on each observation pass while the edge reports an older version.
@@ -285,7 +288,8 @@ machine token are both answered `404` like any other request.
 
 ### The exposure class, and the listener in front of it
 
-One image runs as two edges (epic qits-1976). **`qits.edge.exposure`** (`QITS_EDGE_EXPOSURE`) is
+One image runs as two edges (epic qits-1976) — three since qits-2304, the third being a second
+`private` one, *The overlay edge*. **`qits.edge.exposure`** (`QITS_EDGE_EXPOSURE`) is
 `public` — the default — or `private`, the second deployment behind the WireGuard tunnel. It decides
 which route table the edge accepts and serves: qits-deployments builds one per edge (epic qits-2174)
 from what each deployment declares, and a table named for the other edge is refused.
@@ -336,7 +340,8 @@ the earliest hook there is: the TLS handshake and the request head have been rea
 http://localhost…` inside the container, and an IPv4-mapped address (`::ffff:100.96.0.2`) is read
 as its IPv4 address. A refusal is logged at DEBUG. The private edge states
 `100.96.0.0/24,10.231.0.0/20` — the tunnel and the `qits-private` overlay, the only two networks this
-edge sits on (qits-2174) — which is what keeps anything else from walking in.
+edge sits on (qits-2174) — which is what keeps anything else from walking in. The overlay edge has
+no tunnel and states `10.231.0.0/20` alone.
 
 **The peer log.** On a private edge every request this process answers or proxies writes one INFO
 line on the logger `eu.wohlben.qits.edge.peer`:
@@ -348,10 +353,12 @@ for a remote inside `qits.edge.peer-log.overlay-cidr`, and `unknown` otherwise. 
 socket's, never `X-Forwarded-For`, which the edge documents as untrusted. Values off the wire are
 percent-encoded where they could end the line or forge a field. A public edge writes none.
 
-**The forwarding guard.** On a private edge the readiness check `edge forwarding guard` reads
-`/proc/sys/net/ipv4/ip_forward`: anything but `0` is DOWN with the reason, because the tunnel must
-never route a peer onward. A file that cannot be read is UP with a note. A public edge reports UP
-without checking.
+**The forwarding guard.** On a private edge with a tunnel the readiness check `edge forwarding guard`
+reads `/proc/sys/net/ipv4/ip_forward`: anything but `0` is DOWN with the reason, because the tunnel
+must never route a peer onward. A file that cannot be read is UP with a note. A public edge reports
+UP without checking, and so does the overlay edge (qits-2304): it is private but terminates no
+tunnel (`qits.edge.wireguard.enabled=false`), declares no `sysctls`, and its inherited
+`ip_forward=1` is every other `qits-private` container's.
 
 ## The private edge
 
@@ -425,7 +432,8 @@ A workspace that names `100.96.0.1` first now gets its outside names answered he
 by its next resolver.
 
 **The responder answers the overlay too** (qits-1991). A host container on `qits-private` — a
-DIRECT admin workspace — names the private edge's swarm VIP there as its first `--dns`, and
+DIRECT admin workspace — names the private edge's swarm VIP there as its first `--dns` (until
+qits-deployments names the overlay edge's instead, see *The overlay edge*), and
 `100.96.0.1` is not on that network. So `qits.edge.dns.overlay-cidr` (`10.231.0.0/20` on the
 private edge, unset and inert on the public one) makes `TunnelDns` read this container's IPv4
 addresses at start and bind one more UDP and TCP socket on port 53 for each address inside the
@@ -498,6 +506,68 @@ usable settings, no key yet, no public address yet). Publishing is the edge's on
 qits-events, and it needs `EventEnvelope` and `CanonicalJson$QitsEventMixin` in
 `EventWireReflection`: without them the native binary cannot serialize the PUT body, and the library
 reports that only at DEBUG while the outbox retries it forever (qits-edge-private 2026.1110.173435).
+**Only an edge with a tunnel announces**: the gate is `qits.edge.wireguard.enabled`, so the overlay
+edge — private, no tunnel — never publishes `PrivateEdgeAnnounced`, whatever it is told, and says
+`private edge not announced yet: wireguard is off` once (qits-2304).
+
+## The overlay edge
+
+`qits-edge-overlay` (qits-2304) is the third application from this image and release:
+`.config/qits/deployments.yml` says `variants: private, overlay`, and
+`.config/qits/deployments.overlay.yml` declares it — `exposure: private`, its own databases
+(`qits_edge_overlay`, `qits_edge_overlay_eventstream`) and idp client, the public edge's
+`qits-edge-letsencrypt` read-only, and nothing published, no capability, no sysctl and no
+`update_order`, so **start-first**.
+
+**Three edges, three jobs.**
+
+| edge | serves | update |
+| --- | --- | --- |
+| `qits-edge` | the public internet, on the node's published ports; the `public` table | start-first (ingress) |
+| `qits-edge-private` | WireGuard peers on `100.96.0.1` — DNS, HTTP, forwarding of outside names — and its own `qits-private` sockets; the `private` table | stop-first (host-mode UDP port) |
+| `qits-edge-overlay` | containers on `qits-private` — DNS and HTTP on its overlay address and VIP; the `private` table | start-first |
+
+**Why it exists.** The private edge used to be the overlay clients' only private-aware resolver, and
+it must update stop-first: every redeploy left them for 90-180 s with no resolver that knew a private
+name, so docker's embedded resolver fell through to public DNS, which answers a private name with
+`100.96.0.1` — unroutable on the overlay. The overlay edge holds no host port, so its successor starts
+while its predecessor still answers, and the overlay never goes without. qits-edge-private is
+unchanged: it keeps its tunnel and its own overlay sockets, and **tunnel peers keep using it** — the
+overlay edge has no `wg0`, no `100.96.0.1`, and announces nothing.
+
+**Which clients use which.** A `private` service's container gets the private edge's VIP as its first
+`--dns` from qits-deployments today (qits-2117); moving that to the overlay edge's VIP is the
+deployer's half of qits-2304. HTTP to a private name follows the DNS answer, so a container whose
+first resolver is the overlay edge is also served by it.
+
+**`QITS_VARIANT=overlay` is the whole configuration.** `PrivateVariantConfigSource` answers per
+variant; the overlay's values are the private table above but for these:
+
+| key | overlay value |
+| --- | --- |
+| `qits.edge.wireguard.enabled` | `false` — no `wg0`, no UAPI, no announcement, no forwarding guard |
+| `qits.edge.wireguard.listen-port` | not stated: nothing listens |
+| `qits.edge.listen.allowed-local-cidrs` | `10.231.0.0/20` — the overlay alone |
+| `quarkus.shutdown.timeout` | not stated: `application.properties`' 9m30s stands, start-first makes a long drain free; `stop_grace_period: 10m` covers it and the 10s linger |
+| `qits.edge.dns.service-alias` | `<env>-<QITS_APPLICATION>`, `dev-qits-edge-overlay` — its own wire alias, see below |
+
+The entrypoint brings `wg0` up for `private` alone, so `overlay` starts as the public edge does.
+
+**DNS on the overlay alone.** With wireguard off `TunnelDns` binds no tunnel socket: the overlay
+addresses (`qits.edge.dns.overlay-cidr`) are bound and decide alone — none bound, nothing runs, said
+at ERROR. The answers are the overlay sockets' everywhere: a name outside the zone REFUSED (never
+forwarded), an unrouted in-zone name the public address, SERVFAIL until the routes view is ready.
+
+    overlay DNS responder on 10.231.0.7:53 (UDP and TCP), no tunnel: zone …, routed names the VIP of dev-qits-edge-overlay, looked up, …
+
+**A routed name is the service VIP, not the task.** Start-first replaces the task a caller asked
+while the caller still holds its answer; the service's VIP on `qits-private` outlives every task and
+swarm balances it onto whichever one serves. So the overlay edge resolves its own wire alias
+(`qits.edge.dns.service-alias`) through its container's resolver at start and every five minutes, off
+the event loop, and answers a routed name with that address — only an IPv4 address inside
+`10.231.0.0/20` is accepted, a failed lookup keeps the last one, and until one is known the address
+the query arrived on is the answer, as before. qits-edge-private states no alias and keeps answering
+its task address on the overlay and `100.96.0.1` on the tunnel.
 
 ### Host records in public DNS (qits-2273, qits-2292)
 

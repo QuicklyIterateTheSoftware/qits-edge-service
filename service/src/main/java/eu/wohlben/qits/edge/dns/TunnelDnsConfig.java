@@ -6,8 +6,9 @@ import java.time.Duration;
 import java.util.Optional;
 
 /**
- * The private edge's tunnel DNS responder, {@code qits.edge.dns.*} — see {@link TunnelDns}. Its
- * zone is not here: it is {@code qits.edge.domain}, the one domain the platform states.
+ * The private edge's tunnel DNS responder, and the overlay edge's overlay-only one, {@code
+ * qits.edge.dns.*} — see {@link TunnelDns}. Its zone is not here: it is {@code qits.edge.domain},
+ * the one domain the platform states.
  */
 @ConfigMapping(prefix = "qits.edge.dns")
 public interface TunnelDnsConfig {
@@ -31,6 +32,17 @@ public interface TunnelDnsConfig {
    * with the tunnel's, which the overlay cannot route (qits-1991).
    */
   Optional<String> overlayCidr();
+
+  /**
+   * This edge's own wire alias on the overlay, {@code <env>-qits-edge-overlay} on the overlay edge
+   * (qits-2304) and unset everywhere else. Set, and only on an edge without a tunnel, a routed name
+   * asked on an overlay socket is answered with what the alias resolves to through this container's
+   * resolver — the swarm service's VIP, which outlives the task that answered — rather than the
+   * task's own address. Looked up at start and every five minutes ({@link
+   * TunnelDns.ServiceAddress}); an answer outside {@link #overlayCidr()} is never used, and until
+   * one is known the task address is answered as before.
+   */
+  Optional<String> serviceAlias();
 
   /** The port every socket binds, UDP and TCP alike, the tunnel's and the overlay's. */
   @WithDefault("53")
