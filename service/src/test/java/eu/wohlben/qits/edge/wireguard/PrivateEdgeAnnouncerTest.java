@@ -106,4 +106,24 @@ class PrivateEdgeAnnouncerTest {
         IllegalArgumentException.class,
         () -> PrivateEdgeAnnouncer.Settings.of("a", 1, "100.96.0.1", "d", 1380, "x"));
   }
+
+  @Test
+  void anEdgeWithoutATunnelNeverAnnouncesWhateverItIsTold() throws Exception {
+    // qits-2304: the overlay edge is private but has wireguard off. Even with usable settings, a
+    // key and a public address — which it is never handed — it must publish nothing.
+    PrivateEdgeAnnouncer overlay =
+        new PrivateEdgeAnnouncer(
+            PrivateEdgeAnnouncer.Settings.of(
+                "qits-edge-overlay", 47812, "100.96.0.1/24", "100.96.0.1", 1380, "wohlben.eu"),
+            published::add,
+            Clock.fixed(NOW, ZoneOffset.UTC),
+            false);
+
+    overlay.publicAddress(ip("46.224.171.33"));
+    overlay.deviceConfigured(PUBLIC_KEY);
+    overlay.publicAddress(ip("46.224.171.34"));
+
+    assertEquals(List.of(), published);
+    assertEquals("wireguard is off", overlay.declined());
+  }
 }

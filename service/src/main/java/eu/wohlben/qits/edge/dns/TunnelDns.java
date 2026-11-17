@@ -3,6 +3,7 @@ package eu.wohlben.qits.edge.dns;
 import eu.wohlben.qits.edge.Cidr;
 import eu.wohlben.qits.edge.EdgeConfig;
 import eu.wohlben.qits.edge.EdgeRouter;
+import eu.wohlben.qits.edge.WireguardConfig;
 import eu.wohlben.qits.edge.wireguard.PrivateEdgeAnnouncer;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
@@ -68,6 +69,7 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import org.jboss.logging.Logger;
 
@@ -132,6 +134,26 @@ import org.jboss.logging.Logger;
  * that is a new process. An overlay address that cannot be bound is logged and skipped, and a block
  * this container has no address in is a WARN; neither stops the tunnel, which is bound first and
  * decides alone whether the responder runs.
+ *
+ * <p><b>The overlay alone, without a tunnel</b> (qits-2304). The overlay edge, qits-edge-overlay,
+ * runs this responder with {@code qits.edge.wireguard.enabled=false}: there is no {@code wg0} and
+ * so no tunnel address to bind. With {@code qits.edge.dns.overlay-cidr} set it binds the overlay
+ * addresses alone, and they alone decide — none bound, nothing runs, said at ERROR. Everything they
+ * answer is the overlay sockets' answer above: out-of-zone REFUSED, an unrouted in-zone name the
+ * public address, SERVFAIL until the routes view is ready. It forwards nothing, and it never tells
+ * the {@link PrivateEdgeAnnouncer} anything — this edge has nothing to announce. The private edge,
+ * whose tunnel is on, starts exactly as described above.
+ *
+ * <p><b>A routed name is the service VIP there, not the task</b>. qits-edge-overlay updates
+ * start-first, so the task that answered a caller is replaced while the caller still holds the
+ * answer for up to the TTL; the service's VIP on {@code qits-private} stays, and swarm balances it
+ * onto whichever task is serving. So with {@code qits.edge.dns.service-alias} set — its own wire
+ * alias, stated only by the overlay variant — the edge resolves that alias through its own
+ * container's resolver at start and every {@link #REFRESH}, off the event loop as {@link
+ * PublicAddress} does, and answers a routed name with it ({@link #hereAddress}). Only an IPv4
+ * address inside the overlay block is accepted; until one is known the address the query arrived on
+ * is the answer, which is what it always was. The private edge never states the alias and keeps
+ * answering its task address on the overlay and {@code 100.96.0.1} on the tunnel.
  */
 @ApplicationScoped
 public class TunnelDns {
@@ -147,6 +169,9 @@ public class TunnelDns {
 
   @Inject EdgeRouter router;
 
+  /** Whether this edge has a tunnel to answer on: {@code qits.edge.wireguard.enabled}. */
+  @Inject WireguardConfig wireguard;
+
   /** Told the public address whenever it becomes known or changes (epic qits-1977). */
   @Inject PrivateEdgeAnnouncer announcer;
 
@@ -157,13 +182,38 @@ public class TunnelDns {
   /** This container's IPv4 addresses, the overlay's candidates; a seam so tests choose them. */
   Supplier<List<Inet4Address>> interfaces = TunnelDns::interfaceAddresses;
 
+  /** A name to its IPv4 address through this container's resolver; a seam for a test. */
+  Function<String, Inet4Address> resolver = TunnelDns::resolveIpv4;
+
+  /** The overlay edge's VIP lookup, null on every other edge; for a test to read. */
+  private volatile ServiceAddress serviceAddress;
+
   private volatile ScheduledExecutorService refresher;
 
   void start(@Observes StartupEvent ignored) {
     if (!config.enabled()) {
       return;
     }
-    String zone = EdgeRouter.domain(edge.domain());
+    start(
+        EdgeRouter.domain(edge.domain()),
+        wireguard.enabled(),
+        router::ready,
+        name ->
+            switch (router.reach(name)) {
+              case CATCHING_UP -> Reach.CATCHING_UP;
+              case SNAPSHOT -> Reach.HERE;
+              case ELSEWHERE -> Reach.ELSEWHERE;
+            });
+  }
+
+  /**
+   * The start itself, with the router's two answers handed in so a test drives it without a boot.
+   *
+   * @param zone the stated domain, normalised
+   * @param tunnel whether wireguard is on: the tunnel socket is bound first and decides, or — off —
+   *     the overlay sockets alone ({@link #startOverlayOnly})
+   */
+  void start(String zone, boolean tunnel, BooleanSupplier ready, Function<String, Reach> reach) {
     String stated = config.publicAddress().filter(value -> !value.isBlank()).orElse(null);
     Inet4Address override = ipv4(stated);
     if (stated != null && override == null) {
@@ -173,8 +223,12 @@ public class TunnelDns {
           stated);
       return;
     }
+    if (!tunnel) {
+      startOverlayOnly(zone, override, ready, reach);
+      return;
+    }
     PublicAddress publicAddress =
-        new PublicAddress(zone, override, TunnelDns::resolveIpv4, announcer::publicAddress);
+        new PublicAddress(zone, override, resolver, announcer::publicAddress);
     Inet4Address bind = ipv4(config.bind());
     if (bind == null) {
       LOG.errorf(
@@ -183,18 +237,7 @@ public class TunnelDns {
           config.bind());
       return;
     }
-    Answers answers =
-        new Answers(
-            zone,
-            publicAddress,
-            config.ttl().toSeconds(),
-            router::ready,
-            name ->
-                switch (router.reach(name)) {
-                  case CATCHING_UP -> Reach.CATCHING_UP;
-                  case SNAPSHOT -> Reach.HERE;
-                  case ELSEWHERE -> Reach.ELSEWHERE;
-                });
+    Answers answers = new Answers(zone, publicAddress, config.ttl().toSeconds(), ready, reach);
     Forwarder forwarder = forwarder(zone, bind);
     try {
       server = Server.listen(bind, config.port(), answers, forwarder);
@@ -238,6 +281,114 @@ public class TunnelDns {
             : forwarder.upstreams().stream()
                 .map(InetSocketAddress::toString)
                 .collect(Collectors.joining(", ", "forwarded to ", "")));
+  }
+
+  /**
+   * The overlay edge's start (qits-2304): no tunnel, so the overlay sockets alone, no forwarder, no
+   * announcement, and a routed name answered with the service VIP once it is known. Without an
+   * overlay block, or with no overlay address bound, nothing runs and that is an ERROR: a
+   * DNS-enabled edge answering nowhere is a misconfiguration, not a posture.
+   */
+  private void startOverlayOnly(
+      String zone, Inet4Address override, BooleanSupplier ready, Function<String, Reach> reach) {
+    String block =
+        config.overlayCidr().map(String::strip).filter(value -> !value.isEmpty()).orElse(null);
+    Cidr overlayBlock;
+    try {
+      overlayBlock = block == null ? null : Cidr.parse(block);
+    } catch (IllegalArgumentException unreadable) {
+      overlayBlock = null;
+    }
+    if (overlayBlock == null) {
+      LOG.errorf(
+          "the DNS responder is NOT started: wireguard is off, so there is no tunnel, and"
+              + " qits.edge.dns.overlay-cidr names no overlay to answer instead (it is `%s`)",
+          block == null ? "" : block);
+      return;
+    }
+    // No announcer: an edge without a tunnel has nothing to announce (PrivateEdgeAnnouncer).
+    PublicAddress publicAddress = new PublicAddress(zone, override, resolver);
+    String alias =
+        config.serviceAlias().map(String::strip).filter(value -> !value.isEmpty()).orElse(null);
+    ServiceAddress vip = alias == null ? null : new ServiceAddress(alias, overlayBlock, resolver);
+    Cidr answeredBlock = overlayBlock;
+    Answers answers =
+        new Answers(
+            zone,
+            publicAddress,
+            config.ttl().toSeconds(),
+            ready,
+            reach,
+            local -> hereAddress(local, vip == null ? null : vip.get(), answeredBlock));
+    List<Server> overlaid =
+        listenOverlay(config.overlayCidr(), null, config.port(), answers, interfaces);
+    if (overlaid.isEmpty()) {
+      LOG.errorf(
+          "the DNS responder is NOT started: wireguard is off, so there is no tunnel, and no"
+              + " address of this container inside the overlay %s could be bound (see above)",
+          overlayBlock);
+      return;
+    }
+    overlay = overlaid;
+    serviceAddress = vip;
+    if (override == null || vip != null) {
+      // At once, then every REFRESH, off the event loop: the JDK lookup blocks.
+      ScheduledExecutorService schedule =
+          Executors.newSingleThreadScheduledExecutor(
+              new DefaultThreadFactory("edge-overlay-dns-lookup", true));
+      schedule.scheduleWithFixedDelay(
+          () -> {
+            publicAddress.refresh();
+            if (vip != null) {
+              vip.refresh();
+            }
+          },
+          0,
+          REFRESH.toSeconds(),
+          TimeUnit.SECONDS);
+      refresher = schedule;
+    }
+    LOG.infof(
+        "overlay DNS responder on %s (UDP and TCP), no tunnel: zone %s, public address %s, routed"
+            + " names %s, ttl %ds; other names REFUSED",
+        overlaid.stream()
+            .map(each -> each.address().getHostAddress() + ":" + config.port())
+            .collect(Collectors.joining(", ")),
+        zone,
+        override != null ? override.getHostAddress() : "the A record of " + zone + ", looked up",
+        alias == null ? "the task address" : "the VIP of " + alias + ", looked up",
+        config.ttl().toSeconds());
+  }
+
+  /**
+   * What a routed name asked on {@code local} is answered with: the service's {@code vip} when one
+   * is known and both it and {@code local} sit inside {@code overlay}, else {@code local} itself —
+   * the address the query arrived on, which is what every edge answered before qits-2304. A pure
+   * function, so the selection is asserted without a socket.
+   *
+   * @param vip the overlay edge's service VIP as last looked up, or null while none is known
+   * @param overlay the overlay block, or null for none (then always {@code local})
+   */
+  static Inet4Address hereAddress(Inet4Address local, Inet4Address vip, Cidr overlay) {
+    if (vip == null || overlay == null || local == null) {
+      return local;
+    }
+    return overlay.contains(vip) && overlay.contains(local) ? vip : local;
+  }
+
+  /** The overlay edge's VIP lookup, or null when this edge does none; for a test. */
+  ServiceAddress serviceAddress() {
+    return serviceAddress;
+  }
+
+  /** The bound overlay sockets; for a test. */
+  List<Server> overlayServers() {
+    return overlay;
+  }
+
+  /** Whether a tunnel socket is bound; for a test. */
+  boolean tunnelBound() {
+    return server != null;
   }
 
   /**
@@ -293,9 +444,10 @@ public class TunnelDns {
    * One UDP and one TCP socket on each of {@code addresses}' members inside {@code stated}, on
    * {@code port} — see the class comment for why one per address. Unset or blank, the public edge's
    * case, binds nothing and reads no address. The tunnel's own address is skipped should the block
-   * contain it: it is bound already. Never throws: an unreadable block, an address that cannot be
-   * bound, or a block holding none of this container's addresses is logged, and whatever did bind
-   * is returned.
+   * contain it: it is bound already. {@code tunnel} is null on an edge without one (qits-2304), and
+   * then every address inside the block is bound. Never throws: an unreadable block, an address
+   * that cannot be bound, or a block holding none of this container's addresses is logged, and
+   * whatever did bind is returned.
    */
   static List<Server> listenOverlay(
       Optional<String> stated,
@@ -313,8 +465,8 @@ public class TunnelDns {
     } catch (IllegalArgumentException unreadable) {
       LOG.errorf(
           "the tunnel DNS responder does NOT serve the overlay: qits.edge.dns.overlay-cidr must be"
-              + " an address block, and it is `%s`; the tunnel alone is answered",
-          block);
+              + " an address block, and it is `%s`; %s",
+          block, rest(tunnel));
       return List.of();
     }
     List<Inet4Address> inside;
@@ -329,15 +481,16 @@ public class TunnelDns {
       LOG.errorf(
           failed,
           "the tunnel DNS responder does NOT serve the overlay %s: this container's addresses"
-              + " could not be read; the tunnel alone is answered",
-          overlay);
+              + " could not be read; %s",
+          overlay,
+          rest(tunnel));
       return List.of();
     }
     if (inside.isEmpty()) {
       LOG.warnf(
           "the tunnel DNS responder does NOT serve the overlay %s: this container has no IPv4"
-              + " address inside it; the tunnel alone is answered",
-          overlay);
+              + " address inside it; %s",
+          overlay, rest(tunnel));
       return List.of();
     }
     List<Server> bound = new ArrayList<>();
@@ -357,6 +510,13 @@ public class TunnelDns {
       }
     }
     return List.copyOf(bound);
+  }
+
+  /** What is still answered when the overlay is not: the tunnel, or — without one — nothing. */
+  private static String rest(Inet4Address tunnel) {
+    return tunnel == null
+        ? "there is no tunnel, so nothing is answered"
+        : "the tunnel alone is answered";
   }
 
   /** Every IPv4 address of every interface that is up, as the JDK reads them now. */
@@ -484,6 +644,81 @@ public class TunnelDns {
     }
   }
 
+  /**
+   * The overlay edge's own service VIP (qits-2304): its wire alias, resolved through this
+   * container's resolver — docker's embedded DNS answers a VIP-mode service's alias with the VIP —
+   * at start and every {@link #REFRESH}. Only an IPv4 address inside the overlay block is taken; a
+   * lookup that finds nothing or something else keeps the address known before, because a service's
+   * VIP does not change for the life of the service and a resolver hiccup is no reason to fall
+   * back.
+   */
+  static final class ServiceAddress implements Supplier<Inet4Address> {
+
+    private final String alias;
+    private final Cidr overlay;
+    private final Function<String, Inet4Address> resolver;
+    private final AtomicReference<Inet4Address> current = new AtomicReference<>();
+
+    /** What the last unusable lookup was, so each kind of miss is logged once. */
+    private volatile String missed;
+
+    ServiceAddress(String alias, Cidr overlay, Function<String, Inet4Address> resolver) {
+      this.alias = alias;
+      this.overlay = overlay;
+      this.resolver = resolver;
+    }
+
+    @Override
+    public Inet4Address get() {
+      return current.get();
+    }
+
+    /** Look the alias up again. Never throws. */
+    void refresh() {
+      Inet4Address found;
+      try {
+        found = resolver.apply(alias);
+      } catch (RuntimeException failed) {
+        found = null;
+      }
+      if (found == null) {
+        miss(
+            "unresolved",
+            "the overlay edge's own alias %s resolves to no IPv4 address here: routed names are"
+                + " answered with %s",
+            alias,
+            current.get() == null ? "the task address until it does" : "the VIP known before");
+        return;
+      }
+      if (!overlay.contains(found)) {
+        miss(
+            "outside " + found.getHostAddress(),
+            "the overlay edge's own alias %s resolves to %s, outside the overlay %s: not used,"
+                + " routed names are answered with %s",
+            alias,
+            found.getHostAddress(),
+            overlay,
+            current.get() == null ? "the task address" : "the VIP known before");
+        return;
+      }
+      missed = null;
+      Inet4Address before = current.getAndSet(found);
+      if (!found.equals(before)) {
+        LOG.infof(
+            "overlay DNS answers routed names with the service VIP %s, the address of %s",
+            found.getHostAddress(), alias);
+      }
+    }
+
+    private void miss(String kind, String format, Object... parameters) {
+      if (kind.equals(missed)) {
+        return;
+      }
+      missed = kind;
+      LOG.warnf(format, parameters);
+    }
+  }
+
   /** What the router says about one in-zone name, in this responder's terms. */
   enum Reach {
     /** Nothing may be said yet: SERVFAIL. */
@@ -501,13 +736,26 @@ public class TunnelDns {
    * @param publicAddress the public edge's address now, null while none is known
    * @param ready whether the routes view is ready; false answers every query SERVFAIL
    * @param reach a normalised in-zone name to what the router says about it
+   * @param here the address a query arrived on to the answer for a routed name: itself on every
+   *     edge but the overlay edge, which answers its service VIP ({@link #hereAddress}, qits-2304)
    */
   record Answers(
       String zone,
       Supplier<Inet4Address> publicAddress,
       long ttlSeconds,
       BooleanSupplier ready,
-      Function<String, Reach> reach) {
+      Function<String, Reach> reach,
+      UnaryOperator<Inet4Address> here) {
+
+    /** A routed name is answered with the address the query arrived on: the private edge's. */
+    Answers(
+        String zone,
+        Supplier<Inet4Address> publicAddress,
+        long ttlSeconds,
+        BooleanSupplier ready,
+        Function<String, Reach> reach) {
+      this(zone, publicAddress, ttlSeconds, ready, reach, UnaryOperator.identity());
+    }
 
     /**
      * Fill {@code response}, already carrying the query's id and opcode, with the answer to {@code
@@ -544,7 +792,7 @@ public class TunnelDns {
         if (said == Reach.CATCHING_UP) {
           return code(response, DnsResponseCode.SERVFAIL);
         }
-        answer = said == Reach.HERE ? local : publicAddress.get();
+        answer = said == Reach.HERE ? here.apply(local) : publicAddress.get();
         if (answer == null) {
           return code(response, DnsResponseCode.SERVFAIL);
         }

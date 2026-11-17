@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import eu.wohlben.qits.edge.Cidr;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
@@ -39,6 +40,7 @@ import io.netty.handler.codec.dns.TcpDnsResponseDecoder;
 import io.netty.util.ReferenceCountUtil;
 import java.net.Inet4Address;
 import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -483,6 +485,208 @@ class TunnelDnsTest {
       }
     } finally {
       client.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+    }
+  }
+
+  // --- the overlay edge: no tunnel, the service VIP (qits-2304)
+  // -----------------------------------
+
+  private static final Cidr OVERLAY_BLOCK = Cidr.parse("10.231.0.0/20");
+
+  @Test
+  void aRoutedNameIsTheVipOnlyWhenBothSitInsideTheOverlay() {
+    Inet4Address task = TunnelDns.ipv4("10.231.0.5");
+    Inet4Address vip = TunnelDns.ipv4("10.231.0.2");
+    assertEquals(vip, TunnelDns.hereAddress(task, vip, OVERLAY_BLOCK));
+    assertEquals(task, TunnelDns.hereAddress(task, null, OVERLAY_BLOCK), "until one is known");
+    assertEquals(
+        task,
+        TunnelDns.hereAddress(task, TunnelDns.ipv4("172.18.0.2"), OVERLAY_BLOCK),
+        "a VIP outside the overlay is never answered");
+    assertEquals(
+        LOCAL,
+        TunnelDns.hereAddress(LOCAL, vip, OVERLAY_BLOCK),
+        "a query that arrived on the tunnel keeps its own address");
+    assertEquals(task, TunnelDns.hereAddress(task, vip, null), "no overlay, no VIP");
+  }
+
+  @Test
+  void theAnswersHandARoutedNameThroughHereAndNothingElse() {
+    Inet4Address vip = TunnelDns.ipv4("10.231.0.2");
+    TunnelDns.Answers viaVip =
+        new TunnelDns.Answers(
+            answers.zone(),
+            answers.publicAddress(),
+            answers.ttlSeconds(),
+            answers.ready(),
+            answers.reach(),
+            local -> vip);
+    DnsQuery routed = query("ci.dev.acme.wohlben.eu", DnsRecordType.A);
+    assertArrayEquals(
+        vip.getAddress(),
+        address(
+            viaVip.respond(routed, LOCAL, new DefaultDnsResponse(routed.id(), routed.opCode()))));
+    DnsQuery unrouted = query("nope.wohlben.eu", DnsRecordType.A);
+    assertArrayEquals(
+        PUBLIC.getAddress(),
+        address(
+            viaVip.respond(
+                unrouted, LOCAL, new DefaultDnsResponse(unrouted.id(), unrouted.opCode()))));
+    assertArrayEquals(
+        LOCAL.getAddress(),
+        address(ask("ci.dev.acme.wohlben.eu", DnsRecordType.A)),
+        "the five-argument answers — the private edge's — keep the local address");
+  }
+
+  @Test
+  void theServiceAddressTakesOnlyAnIpv4InsideTheOverlayAndKeepsItAcrossAMiss() {
+    AtomicReference<Inet4Address> resolved = new AtomicReference<>();
+    List<String> asked = new ArrayList<>();
+    TunnelDns.ServiceAddress vip =
+        new TunnelDns.ServiceAddress(
+            "dev-qits-edge-overlay",
+            OVERLAY_BLOCK,
+            name -> {
+              asked.add(name);
+              return resolved.get();
+            });
+    vip.refresh();
+    assertNull(vip.get(), "nothing resolved yet");
+    resolved.set(TunnelDns.ipv4("172.18.0.2"));
+    vip.refresh();
+    assertNull(vip.get(), "outside the overlay is never taken");
+    resolved.set(TunnelDns.ipv4("10.231.0.2"));
+    vip.refresh();
+    assertEquals(TunnelDns.ipv4("10.231.0.2"), vip.get());
+    resolved.set(null);
+    vip.refresh();
+    assertEquals(TunnelDns.ipv4("10.231.0.2"), vip.get(), "a failed lookup keeps the VIP");
+    assertEquals(List.of("dev-qits-edge-overlay"), asked.stream().distinct().toList());
+  }
+
+  /** A stand-in for the mapping, as the overlay variant states it, on ephemeral ports. */
+  private static TunnelDnsConfig overlayConfig(String block, String alias) {
+    return new TunnelDnsConfig() {
+      @Override
+      public boolean enabled() {
+        return true;
+      }
+
+      @Override
+      public String bind() {
+        return "100.96.0.1";
+      }
+
+      @Override
+      public Optional<String> overlayCidr() {
+        return Optional.ofNullable(block);
+      }
+
+      @Override
+      public Optional<String> serviceAlias() {
+        return Optional.ofNullable(alias);
+      }
+
+      @Override
+      public int port() {
+        return 0;
+      }
+
+      @Override
+      public Optional<String> publicAddress() {
+        return Optional.empty();
+      }
+
+      @Override
+      public Optional<String> upstream() {
+        return Optional.empty();
+      }
+
+      @Override
+      public Duration upstreamTimeout() {
+        return Duration.ofSeconds(2);
+      }
+
+      @Override
+      public Duration ttl() {
+        return Duration.ofSeconds(30);
+      }
+    };
+  }
+
+  @Test
+  void withoutATunnelTheOverlayAloneIsServedAndARoutedNameBecomesTheVip() throws Exception {
+    // The overlay edge's start: wireguard off, so no tunnel socket — the overlay addresses decide.
+    // The announcer is left unset: telling it anything would throw, and nothing may.
+    Inet4Address vip = TunnelDns.ipv4("127.0.0.3");
+    TunnelDns dns = new TunnelDns();
+    dns.config = overlayConfig("127.0.0.0/29", "dev-qits-edge-overlay");
+    dns.interfaces = () -> List.of(TunnelDns.ipv4("127.0.0.1"), OVERLAY, NOT_HERE);
+    dns.resolver =
+        name ->
+            switch (name) {
+              case "dev-qits-edge-overlay" -> vip;
+              case "wohlben.eu" -> PUBLIC;
+              default -> null;
+            };
+    EventLoopGroup client = new NioEventLoopGroup(1);
+    try {
+      dns.start(
+          "wohlben.eu",
+          false,
+          () -> true,
+          name ->
+              name.equals("ci.dev.acme.wohlben.eu")
+                  ? TunnelDns.Reach.HERE
+                  : TunnelDns.Reach.ELSEWHERE);
+
+      assertFalse(dns.tunnelBound(), "no tunnel socket without a tunnel");
+      List<TunnelDns.Server> served = dns.overlayServers();
+      assertEquals(
+          List.of(TunnelDns.ipv4("127.0.0.1"), OVERLAY),
+          served.stream().map(TunnelDns.Server::address).toList(),
+          "every address inside the block, none outside it");
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      while (dns.serviceAddress().get() == null && System.nanoTime() < deadline) {
+        Thread.onSpinWait();
+      }
+      assertEquals(vip, dns.serviceAddress().get(), "looked up at start, off the event loop");
+
+      TunnelDns.Server overlay = served.get(1);
+      String routed = "ci.dev.acme.wohlben.eu";
+      assertArrayEquals(
+          vip.getAddress(), wireAddress(udp(client, OVERLAY, overlay.udpPort(), routed)));
+      assertArrayEquals(
+          vip.getAddress(), wireAddress(tcp(client, OVERLAY, overlay.tcpPort(), routed)));
+      long publicDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      DnsResponse unrouted;
+      do {
+        unrouted = udp(client, OVERLAY, overlay.udpPort(), "nope.wohlben.eu");
+      } while (unrouted.code() != DnsResponseCode.NOERROR && System.nanoTime() < publicDeadline);
+      assertArrayEquals(PUBLIC.getAddress(), wireAddress(unrouted), "the public address");
+      assertEquals(
+          DnsResponseCode.REFUSED,
+          udp(client, OVERLAY, overlay.udpPort(), "example.com").code(),
+          "outside the zone stays REFUSED: no forwarder without a tunnel");
+    } finally {
+      dns.stop(null);
+      client.shutdownGracefully(0, 1, TimeUnit.SECONDS).sync();
+    }
+    assertTrue(dns.overlayServers().isEmpty(), "closed at shutdown");
+  }
+
+  @Test
+  void withoutATunnelAndWithoutAnOverlayNothingRuns() {
+    for (String block : new String[] {null, " ", "not-a-block", "192.0.2.0/24"}) {
+      TunnelDns dns = new TunnelDns();
+      dns.config = overlayConfig(block, null);
+      dns.interfaces = () -> List.of(OVERLAY);
+      dns.resolver = name -> PUBLIC;
+      dns.start("wohlben.eu", false, () -> true, name -> TunnelDns.Reach.HERE);
+      assertFalse(dns.tunnelBound(), String.valueOf(block));
+      assertTrue(dns.overlayServers().isEmpty(), String.valueOf(block));
+      assertNull(dns.serviceAddress(), String.valueOf(block));
+      dns.stop(null);
     }
   }
 

@@ -22,6 +22,14 @@ import org.jboss.logging.Logger;
  * private edge) and the tunnel DNS knows the public address ({@code TunnelDns}) — and again
  * whenever that address, looked up every five minutes, changes. Nothing else is a reason to
  * publish: every other field is fixed for the life of the process.
+ *
+ * <p><b>Only an edge that terminates the tunnel ever announces</b>: the gate is {@code
+ * qits.edge.wireguard.enabled}, not the exposure class. The overlay edge (qits-edge-overlay,
+ * qits-2304) is private but has no tunnel; announcing it would hand every peer a key and endpoint
+ * that answer nothing, and with several private edges the newest announcement wins the public
+ * zone's private records. So with wireguard off nothing is published whatever this is told — its
+ * {@code TunnelDns} does not tell it the public address in the first place, and no {@code
+ * WireguardDevice} ever configures a key there — and the reason is logged once at INFO.
  */
 @ApplicationScoped
 public class PrivateEdgeAnnouncer {
@@ -103,12 +111,22 @@ public class PrivateEdgeAnnouncer {
   /** What {@link #announceIfDue} last declined for, so each reason is logged once. */
   private String declined;
 
+  /** Whether this edge terminates the tunnel at all: {@code qits.edge.wireguard.enabled}. */
+  private boolean tunnel = true;
+
   PrivateEdgeAnnouncer() {}
 
   PrivateEdgeAnnouncer(Settings settings, Consumer<PrivateEdgeAnnounced> publisher, Clock clock) {
+    this(settings, publisher, clock, true);
+  }
+
+  /** As a test's, with the tunnel switch stated: false is an edge that never announces. */
+  PrivateEdgeAnnouncer(
+      Settings settings, Consumer<PrivateEdgeAnnounced> publisher, Clock clock, boolean tunnel) {
     this.settings = settings;
     this.publisher = publisher;
     this.clock = clock;
+    this.tunnel = tunnel;
   }
 
   @PostConstruct
@@ -124,7 +142,8 @@ public class PrivateEdgeAnnouncer {
                       bus.publish(event);
                       logAnnounced(event);
                     });
-    if (!wireguard.enabled()) {
+    tunnel = wireguard.enabled();
+    if (!tunnel) {
       return;
     }
     try {
@@ -191,10 +210,11 @@ public class PrivateEdgeAnnouncer {
 
   /** Why no announcement can be made yet, or null when it can. */
   private String missing() {
+    if (!tunnel) {
+      return "wireguard is off";
+    }
     if (settings == null) {
-      return wireguard != null && !wireguard.enabled()
-          ? "wireguard is off"
-          : "its settings are unusable (qits.edge.wireguard.address, see the ERROR at start)";
+      return "its settings are unusable (qits.edge.wireguard.address, see the ERROR at start)";
     }
     if (publicKey == null) {
       return "wg0 has no key yet (not configured)";
@@ -211,7 +231,7 @@ public class PrivateEdgeAnnouncer {
       return;
     }
     declined = missing;
-    if (settings == null && wireguard != null && wireguard.enabled()) {
+    if (settings == null && tunnel) {
       LOG.warnf("private edge not announced: %s", missing);
     } else {
       LOG.infof("private edge not announced yet: %s", missing);

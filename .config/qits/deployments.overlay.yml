@@ -1,0 +1,65 @@
+# The OVERLAY EDGE, qits-edge-overlay: the variant `deployments.yml` names with `variants: private,
+# overlay` (qits-2304). The deployer reads this file at the same sha as the main one and deploys it as
+# an application of its own, from the same release, with QITS_VARIANT=overlay in its container. As
+# for the private edge, that variable is everything the edge needs to know: its exposure class, its
+# DNS responder on the overlay, the listener allow-list, ports 80/443, the certificate paths and its
+# own wire alias are derived from it in code (PrivateVariantConfigSource), so this file declares no
+# settings and there are none to set.
+#
+# WHY A THIRD EDGE. qits-edge-private serves two jobs — the WireGuard tunnel and DNS+HTTP for the
+# containers on qits-private — and the tunnel's host-mode UDP port makes it update stop-first. Every
+# redeploy therefore left the overlay's clients with no private-aware resolver for 90-180 s; docker's
+# resolver fell back to public DNS, which answers a private name with 100.96.0.1, unroutable on the
+# overlay. This edge carries the second job alone, holds no host port, and so updates start-first:
+# the successor serves before the predecessor stops. qits-edge-private keeps both jobs unchanged;
+# tunnel peers keep using it.
+#
+# THE NAME IS THE APPLICATION, not the image: the swarm service, the wire alias (and so the VIP this
+# edge answers private names with), the container, the databases and the idp client hang off it, and
+# none of them may collide with the other two edges'.
+application: qits-edge-overlay
+
+# THE SAME IMAGE as the other two edges, qits/qits-edge:<version>. With QITS_VARIANT=overlay the
+# entrypoint takes the public edge's path: no wg0, no device, no root-only step beyond the uid drop.
+image: qits-edge
+
+# QITS-PRIVATE ALONE, like qits-edge-private and for the same owner rule (epic qits-2174): this edge
+# serves only that overlay, and dials idp, qits-events and observability by their public names
+# (PrivateVariantConfigSource). Its databases live on the private Postgres. The listener closes every
+# connection whose local address is outside 10.231.0.0/20 (qits-private), loopback aside. No `host:`
+# and no routes, so no edge serves a vhost for this application itself.
+exposure: private
+
+# Its own databases, never another edge's: `edge` holds the PRIVATE route table — the same table
+# qits-edge-private serves, fetched at start and pushed after — and `eventstream` its claim ledger
+# and watermark; a fresh database rebuilds from the epoch. The idp client is its own too,
+# dev-qits-edge-overlay.
+resources: postgresql:edge:qits_edge_overlay, postgresql:eventstream:qits_edge_overlay_eventstream, idp:client
+
+# A COMMAND, not a path, because HTTP listens on port 80 here rather than the image's 8080, as on the
+# private edge. READINESS, unlike the public edge's liveness: this edge must not take the overlay's
+# DNS and HTTP over from its predecessor before it holds a route table, and the readiness checks are
+# what say so — start-first keeps the predecessor serving for as long as that takes.
+health_cmd: curl -fsS http://localhost:80/q/health/ready || exit 1
+
+# NO publish_mode, NO publishes: nothing is published on the node. DNS (53, UDP and TCP), HTTP and
+# HTTPS are served on this task's qits-private address and reached through the service's VIP there.
+#
+# NO update_order: the default, start-first, is the reason this application exists. No host port
+# means no single binder, so the successor starts while the predecessor still answers.
+#
+# NO cap_add and NO sysctls: there is no tunnel, so no TUN device to create and no peer whose packets
+# the kernel could forward onward. The forwarding guard is skipped for an edge without wireguard
+# (ForwardingGuardHealthCheck), so this container's inherited ip_forward=1 does not keep it unready.
+
+# `shared:qits-edge-letsencrypt` is the PUBLIC edge's certificate volume, read-only, as on the private
+# edge: this edge orders nothing and serves the certificate the public edge renews, which Quarkus' TLS
+# registry reloads. The deployer refuses it mounted read-write. No `private:` volume: no WireGuard key.
+volumes: shared:qits-edge-letsencrypt:/work/.letsencrypt:ro
+
+# THE PUBLIC EDGE'S TEN MINUTES, not the private edge's one (qits-2223). Start-first means the
+# successor is already serving and the VIP balances onto it while this task drains, so a long drain
+# costs nothing and lets a transfer in flight finish. The drain bound is application.properties'
+# 9m30s, which PrivateVariantConfigSource leaves alone for this variant, and the 10s linger follows:
+# 9m40s < 10m, so the process always exits on its own before swarm would kill it.
+stop_grace_period: 10m

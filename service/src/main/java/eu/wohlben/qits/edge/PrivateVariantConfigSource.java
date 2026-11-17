@@ -38,19 +38,40 @@ import org.eclipse.microprofile.config.spi.ConfigSource;
  * runtime key, so this source overrides it. A long transfer through the private edge is cut at 30s
  * by a redeploy; that is accepted. The linger, {@code qits.edge.shutdown.linger=10s}, is kept, and
  * {@code stop_grace_period: 1m} in {@code .config/qits/deployments.private.yml} covers both.
+ *
+ * <p><b>The overlay variant, {@code QITS_VARIANT=overlay}</b> (qits-2304): qits-edge-overlay, the
+ * edge that serves {@code qits-private} alone — DNS and HTTP for the containers on that overlay —
+ * and so can update START-first, which the private edge cannot ({@code
+ * .config/qits/deployments.overlay.yml}). Its values are the private ones ({@link #OVERLAY}) but
+ * three: no tunnel ({@code qits.edge.wireguard.enabled=false}, and no listen port to state), a
+ * listener that admits the overlay alone ({@code 10.231.0.0/20}), and NO {@code
+ * quarkus.shutdown.timeout}: start-first means the successor already serves while this task drains,
+ * so the public edge's 9m30s from {@code application.properties} costs nothing and is kept. It adds
+ * one: {@code qits.edge.dns.service-alias}, its own wire alias, which {@code TunnelDns} resolves to
+ * the swarm VIP it answers routed names with, so a caller survives the task it asked being
+ * replaced. The source is one class answering per variant rather than two, because the two maps
+ * differ in four lines and must not drift apart in the other fourteen.
  */
 public class PrivateVariantConfigSource implements ConfigSource {
 
   /** The variable qits-deployments sets on a variant's container. */
   static final String VARIANT = "QITS_VARIANT";
 
-  /** The variant this source answers for. */
+  /** The private edge's variant: the tunnel, and the overlay beside it. */
   static final String PRIVATE = "private";
+
+  /** The overlay edge's variant: {@code qits-private} alone, no tunnel (qits-2304). */
+  static final String OVERLAY_VARIANT = "overlay";
 
   static final int ORDINAL = 275;
 
   /** The private edge's values, in the order they are documented in README.md. */
   static final Map<String, String> VALUES;
+
+  /**
+   * The overlay edge's values: the private edge's, but the tunnel, listener and drain (qits-2304).
+   */
+  static final Map<String, String> OVERLAY;
 
   static {
     Map<String, String> values = new LinkedHashMap<>();
@@ -90,6 +111,29 @@ public class PrivateVariantConfigSource implements ConfigSource {
     // 30s + the 10s linger stays under deployments.private.yml's 1m stop_grace_period.
     values.put("quarkus.shutdown.timeout", "30s");
     VALUES = Collections.unmodifiableMap(values);
+
+    Map<String, String> overlay = new LinkedHashMap<>(values);
+    // No tunnel: no wg0 (the entrypoint brings it up for `private` alone), no UAPI dial, no
+    // PrivateEdgeAnnounced — the announcer is gated on this very switch — and no forwarding guard,
+    // which only an edge terminating a tunnel needs. No listen port, because nothing listens.
+    overlay.put("qits.edge.wireguard.enabled", "false");
+    overlay.remove("qits.edge.wireguard.listen-port");
+    // The overlay alone: this task is on qits-private and on nothing else that routes a caller
+    // here.
+    overlay.put("qits.edge.listen.allowed-local-cidrs", "10.231.0.0/20");
+    // Start-first: application.properties' 9m30s drain stands, and deployments.overlay.yml's 10m
+    // stop_grace_period covers it and the 10s linger, as the public edge's does.
+    overlay.remove("quarkus.shutdown.timeout");
+    // Its own wire alias on qits-private, `<env>-<application>` as the deployer composes it:
+    // resolved
+    // through this container's resolver, it is the service's VIP, which outlives every task behind
+    // it
+    // (TunnelDns.ServiceAddress). QITS_APPLICATION is the deployer's; the fallback is the name
+    // deployments.overlay.yml declares.
+    overlay.put(
+        "qits.edge.dns.service-alias",
+        "${QITS_ENVIRONMENT:dev}-${QITS_APPLICATION:qits-edge-overlay}");
+    OVERLAY = Collections.unmodifiableMap(overlay);
   }
 
   private final Supplier<String> variant;
@@ -103,29 +147,37 @@ public class PrivateVariantConfigSource implements ConfigSource {
     this.variant = variant;
   }
 
-  private boolean isPrivate() {
+  /** The values for the variant this process is now, or none: read afresh on every call. */
+  private Map<String, String> values() {
     String value = variant.get();
-    return value != null && PRIVATE.equals(value.strip());
+    if (value == null) {
+      return Map.of();
+    }
+    return switch (value.strip()) {
+      case PRIVATE -> VALUES;
+      case OVERLAY_VARIANT -> OVERLAY;
+      default -> Map.of();
+    };
   }
 
   @Override
   public Map<String, String> getProperties() {
-    return isPrivate() ? VALUES : Map.of();
+    return values();
   }
 
   @Override
   public Set<String> getPropertyNames() {
-    return isPrivate() ? VALUES.keySet() : Set.of();
+    return values().keySet();
   }
 
   @Override
   public String getValue(String propertyName) {
-    return isPrivate() ? VALUES.get(propertyName) : null;
+    return values().get(propertyName);
   }
 
   @Override
   public String getName() {
-    return "qits-edge private variant (QITS_VARIANT=private)";
+    return "qits-edge variant (QITS_VARIANT=private or overlay)";
   }
 
   @Override

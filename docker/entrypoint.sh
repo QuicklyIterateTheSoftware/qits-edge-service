@@ -4,8 +4,10 @@
 # groups) and execs the edge — so the proxy never runs as root, public or private.
 #
 # QITS_VARIANT is set by qits-deployments on a variant's container and on nothing else: `private` is
-# the private edge (.config/qits/deployments.private.yml), which also needs wg0. Any other value, or
-# none, is the public edge, which runs exactly as it did under `USER 1001`.
+# the private edge (.config/qits/deployments.private.yml), which also needs wg0. `overlay`, the overlay
+# edge (.config/qits/deployments.overlay.yml, qits-2304), has no tunnel and so takes the same path as
+# the public edge: no wg0, no device, no ip_forward refusal. Any other value, or none, is the public
+# edge, which runs exactly as it did under `USER 1001`.
 #
 # The two -D flags are the image's historical ENTRYPOINT, verbatim; see the Dockerfile for why each.
 set -eu

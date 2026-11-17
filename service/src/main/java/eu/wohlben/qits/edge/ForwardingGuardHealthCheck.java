@@ -22,6 +22,13 @@ import org.eclipse.microprofile.health.Readiness;
  * <p>A file that cannot be read is UP with a note: not every host this runs on — a laptop, a test
  * runner — has it, and the entrypoint already checked where it matters. A public edge does not
  * check at all; it terminates no tunnel.
+ *
+ * <p><b>Nor does the overlay edge</b> (qits-edge-overlay, qits-2304): it is private, but {@code
+ * qits.edge.wireguard.enabled} is false there, so there is no {@code wg0} and no peer whose packets
+ * the kernel could route onward. Its {@code ip_forward} is the host's {@code 1}, as in every other
+ * container on {@code qits-private}, and its deployment declares no {@code sysctls}; refusing it
+ * would make that edge never ready for a guard that protects nothing. What is checked is the
+ * tunnel, not the exposure class.
  */
 @Readiness
 @ApplicationScoped
@@ -33,18 +40,30 @@ public class ForwardingGuardHealthCheck implements HealthCheck {
 
   @Inject EdgeConfig config;
 
+  @Inject WireguardConfig wireguard;
+
   @Override
   public HealthCheckResponse call() {
-    return check(config.exposure(), IP_FORWARD);
+    return check(config.exposure(), wireguard.enabled(), IP_FORWARD);
   }
 
-  /** The answer for an edge of {@code exposure} whose forwarding switch is {@code ipForward}. */
-  static HealthCheckResponse check(ExposureClass exposure, Path ipForward) {
+  /**
+   * The answer for an edge of {@code exposure}, terminating a tunnel or not, whose forwarding
+   * switch is {@code ipForward}.
+   */
+  static HealthCheckResponse check(ExposureClass exposure, boolean tunnel, Path ipForward) {
     if (exposure != ExposureClass.PRIVATE) {
       return HealthCheckResponse.named(NAME)
           .up()
           .withData("exposure", "public")
           .withData("ip_forward", "not checked: a public edge terminates no tunnel")
+          .build();
+    }
+    if (!tunnel) {
+      return HealthCheckResponse.named(NAME)
+          .up()
+          .withData("exposure", "private")
+          .withData("ip_forward", "not checked: wireguard is off, this edge terminates no tunnel")
           .build();
     }
     String value;
