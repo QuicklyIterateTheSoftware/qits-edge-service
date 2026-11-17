@@ -238,7 +238,7 @@ public class EdgeRoutes {
 
   /**
    * Whether a table is loaded at all — what anything that withdraws or deletes on the table's word
-   * asks ({@link PrivateHostRecords}), since an edge that never received one knows nothing yet.
+   * asks ({@link HostRecords}), since an edge that never received one knows nothing yet.
    */
   public boolean tableLoaded() {
     return version != null;

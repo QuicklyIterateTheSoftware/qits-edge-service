@@ -94,6 +94,30 @@ public interface EdgeConfig {
     Optional<List<String>> allowedLocalCidrs();
   }
 
+  /** The public zone's own facts, {@code qits.edge.dns.*} — see {@link PublicDns}. */
+  PublicDns dns();
+
+  /**
+   * What the public edge needs to write every public name into its DNS zone (qits-2292) — see
+   * {@link HostRecords}. It shares the {@code qits.edge.dns} prefix with the private edge's tunnel
+   * responder ({@code TunnelDnsConfig}), and the two never read each other's keys.
+   */
+  interface PublicDns {
+
+    /**
+     * The node's public address, {@code QITS_EDGE_DNS_NODE_ADDRESS}: a comma-separated list of IPv4
+     * and IPv6 literals, {@code 46.224.171.33} on the estate. The edge writes it as the {@code A}
+     * (and {@code AAAA}) records of {@code node.<domain>} and of the apex, and every public host
+     * becomes a {@code CNAME} to {@code node.<domain>.}.
+     *
+     * <p>It is the bootstrap's input ({@code qits-bootstrap-cli --public-ip}, which sets it through
+     * the deployment settings beside the Hetzner token, qits-2293), never looked up or derived.
+     * Absent or empty, the edge writes and deletes no public record and says so once at INFO; the
+     * private records keep working without it.
+     */
+    Optional<List<String>> nodeAddress();
+  }
+
   /** The private edge's per-request line — see {@link eu.wohlben.qits.edge.PeerLog}. */
   PeerLogConfig peerLog();
 

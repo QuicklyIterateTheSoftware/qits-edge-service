@@ -16,7 +16,7 @@ import java.util.UUID;
 /**
  * {@code edge_private_edge_address}: the newest tunnel address per private-edge application — see
  * {@code V14__private_edge_address.sql}. {@link PrivateEdgeAddressSubscriber} writes it, {@code
- * PrivateHostRecords} reads {@link #newest()}.
+ * HostRecords} reads {@link #newest()}.
  */
 @ApplicationScoped
 public class PrivateEdgeAddressProjection {

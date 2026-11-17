@@ -1636,7 +1636,7 @@ public class EdgeRouter {
    * Misdirected Request} (RFC 9110 §15.5.20) says exactly what happened — this server is not the
    * one for that authority, another connection may succeed — see {@link #misdirected}. Since
    * qits-2273 the public zone answers such a name with the tunnel address too ({@link
-   * PrivateHostRecords}), so what still lands here is a resolver's cached or filtered answer.
+   * HostRecords}), so what still lands here is a resolver's cached or filtered answer.
    *
    * <p><b>Only on a {@link ExposureClass#PUBLIC} edge</b>, the one class whose withdrawals are
    * private deployments'; {@code NavigationRoute} reads them on that class alone for the same

@@ -45,7 +45,7 @@ public class ProjectSansBootstrap {
   @Inject EdgeCertificateManager certificates;
 
   /** Asked for a reconcile at the head (qits-2273); null under the suites' own constructor. */
-  @Inject PrivateHostRecords privateHosts;
+  @Inject HostRecords hostRecords;
 
   /** Test-only escape hatch for suites that deliberately turn qits-eventstream off. */
   boolean required;
@@ -117,8 +117,8 @@ public class ProjectSansBootstrap {
             result.handled());
         certificates.requestReconcile();
         // The project tiers are an input to the private host names too (qits-2273).
-        if (privateHosts != null) {
-          privateHosts.requestReconcile();
+        if (hostRecords != null) {
+          hostRecords.requestReconcile();
         }
         return;
       }

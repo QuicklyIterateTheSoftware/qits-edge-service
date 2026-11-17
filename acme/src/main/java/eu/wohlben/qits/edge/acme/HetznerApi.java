@@ -13,9 +13,9 @@ import java.util.Locale;
 
 /**
  * The HTTP half of Hetzner Cloud's RRSet API that {@link HetznerDnsChallengeProvider} (TXT) and
- * {@link HetznerAddressRecords} (A) share: one bearer, one zone, one request shape. It answers the
- * raw response and judges nothing, so each caller keeps its own refusal — the TXT side's message is
- * the one it always had.
+ * {@link HetznerAddressRecords} (A, AAAA, CNAME) share: one bearer, one zone, one request shape. It
+ * answers the raw response and judges nothing, so each caller keeps its own refusal — the TXT
+ * side's message is the one it always had.
  */
 @RawHttpClient(
     reason =

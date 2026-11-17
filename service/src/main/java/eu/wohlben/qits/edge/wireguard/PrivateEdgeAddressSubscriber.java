@@ -1,6 +1,6 @@
 package eu.wohlben.qits.edge.wireguard;
 
-import eu.wohlben.qits.edge.PrivateHostRecords;
+import eu.wohlben.qits.edge.HostRecords;
 import eu.wohlben.qits.eventstream.QitsDurableEventListener;
 import eu.wohlben.qits.eventstream.control.CanonicalJson;
 import eu.wohlben.qits.eventstream.control.EventFrame;
@@ -13,7 +13,7 @@ import org.jboss.logging.Logger;
 /**
  * Durable projection of {@link PrivateEdgeAnnounced}'s tunnel address (qits-2273) into {@code
  * edge_private_edge_address} ({@link PrivateEdgeAddressProjection}): the value the public edge
- * writes into every private host's A record in the public zone ({@link PrivateHostRecords}).
+ * writes into every private host's A record in the public zone ({@link HostRecords}).
  *
  * <p>It runs on every edge, which is harmless — the rows are a few bytes and only the public edge
  * reads them. Every environment's frames are read: the address is wg0's, and which environment a
@@ -39,11 +39,11 @@ public class PrivateEdgeAddressSubscriber implements QitsDurableEventListener {
   public record PrivateEdgeAddressPayload(String application, String tunnelAddress) {}
 
   @Inject PrivateEdgeAddressProjection rows;
-  @Inject PrivateHostRecords records;
+  @Inject HostRecords records;
 
   public PrivateEdgeAddressSubscriber() {}
 
-  PrivateEdgeAddressSubscriber(PrivateEdgeAddressProjection rows, PrivateHostRecords records) {
+  PrivateEdgeAddressSubscriber(PrivateEdgeAddressProjection rows, HostRecords records) {
     this.rows = rows;
     this.records = records;
   }

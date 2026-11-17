@@ -17,7 +17,10 @@ import java.util.function.Function;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-/** The A side of the Hetzner client against a fake API, the way the TXT side's test fakes it. */
+/**
+ * The address side of the Hetzner client — A, AAAA and CNAME (qits-2273, qits-2292) — against a
+ * fake API, the way the TXT side's test fakes it.
+ */
 class HetznerAddressRecordsTest {
 
   private static final String TOKEN = "not-a-real-token";
@@ -31,7 +34,7 @@ class HetznerAddressRecordsTest {
   }
 
   @Test
-  void listsTheOwnedARrsetsAcrossEveryPage() throws Exception {
+  void listsTheOwnedRrsetsOfEitherLabelAndEveryTypeAcrossEveryPage() throws Exception {
     var records =
         serve(
             request -> {
@@ -44,11 +47,16 @@ class HetznerAddressRecordsTest {
                      "meta":{"pagination":{"page":1,"next_page":2}}}
                     """);
               }
+              // A public CNAME, and two the zone should not have answered: an unlabelled one and a
+              // TXT. The client hands on only what is ours.
               return new Response(
                   200,
                   """
-                  {"rrsets":[{"name":"mcp.qits","type":"A","ttl":300,
-                    "labels":{"qits-exposure":"private"},"records":[{"value":"100.96.0.2"}]}],
+                  {"rrsets":[{"name":"ci.dev.qits","type":"CNAME","ttl":300,
+                    "labels":{"qits-exposure":"public"},"records":[{"value":"node.wohlben.eu."}]},
+                   {"name":"stray","type":"A","ttl":300,"labels":{},"records":[{"value":"1.2.3.4"}]},
+                   {"name":"txt","type":"TXT","ttl":300,"labels":{"qits-exposure":"public"},
+                    "records":[{"value":"\\"x\\""}]}],
                    "meta":{"pagination":{"page":2,"next_page":null}}}
                   """);
             });
@@ -64,12 +72,20 @@ class HetznerAddressRecordsTest {
                 Map.of("qits-exposure", "private"),
                 List.of("100.96.0.1")),
             new AddressRecords.RrSet(
-                "mcp.qits", "A", 300, Map.of("qits-exposure", "private"), List.of("100.96.0.2")));
+                "ci.dev.qits",
+                "CNAME",
+                300,
+                Map.of("qits-exposure", "public"),
+                List.of("node.wohlben.eu.")));
     assertThat(owned).allMatch(AddressRecords.RrSet::owned);
+    assertThat(owned)
+        .extracting(AddressRecords.RrSet::exposure)
+        .containsExactly("private", "public");
     assertThat(requests).hasSize(2);
     assertThat(requests.get(0).path())
         .isEqualTo(
-            "/v1/zones/wohlben.eu/rrsets?type=A&label_selector=qits-exposure%3Dprivate"
+            "/v1/zones/wohlben.eu/rrsets?type=A&type=AAAA&type=CNAME"
+                + "&label_selector=qits-exposure%20in%20%28private%2Cpublic%29"
                 + "&per_page=100&page=1");
     assertThat(requests.get(1).path()).endsWith("&page=2");
   }
@@ -78,7 +94,7 @@ class HetznerAddressRecordsTest {
   void createsALabelledARrsetWithTheShortTtl() throws Exception {
     var records = serve(request -> new Response(201, "{\"rrset\":{},\"action\":{}}"));
 
-    records.create("projects.qits", List.of("100.96.0.1"));
+    records.create("projects.qits", "A", List.of("100.96.0.1"), "private");
 
     assertThat(requests).hasSize(1);
     assertThat(requests.get(0).method()).isEqualTo("POST");
@@ -94,6 +110,53 @@ class HetznerAddressRecordsTest {
   }
 
   @Test
+  void createsAPublicCnameWithItsTrailingDotAndAPublicAaaa() throws Exception {
+    var records = serve(request -> new Response(201, "{\"rrset\":{},\"action\":{}}"));
+
+    records.create("ci.dev.qits", "CNAME", List.of("node.wohlben.eu"), "public");
+    records.create("node", "AAAA", List.of("2a01:4f8:c17:1::1"), "public");
+
+    ObjectMapper mapper = new ObjectMapper();
+    assertThat(mapper.readTree(requests.get(0).body()))
+        .isEqualTo(
+            mapper.readTree(
+                """
+                {"name":"ci.dev.qits","type":"CNAME","ttl":60,
+                 "labels":{"qits-exposure":"public"},"records":[{"value":"node.wohlben.eu."}]}
+                """));
+    assertThat(mapper.readTree(requests.get(1).body()))
+        .isEqualTo(
+            mapper.readTree(
+                """
+                {"name":"node","type":"AAAA","ttl":60,
+                 "labels":{"qits-exposure":"public"},"records":[{"value":"2a01:4f8:c17:1::1"}]}
+                """));
+  }
+
+  @Test
+  void anAbsoluteCnameValueKeepsItsOneDot() throws Exception {
+    var records = serve(request -> new Response(201, "{\"action\":{}}"));
+
+    records.setRecords("qits", "CNAME", List.of("node.wohlben.eu."));
+
+    assertThat(requests.get(0).path())
+        .isEqualTo("/v1/zones/wohlben.eu/rrsets/qits/CNAME/actions/set_records");
+    assertThat(requests.get(0).body())
+        .isEqualTo("{\"records\":[{\"value\":\"node.wohlben.eu.\"}]}");
+  }
+
+  @Test
+  void labelsTheApexByAPutOnItsOwnPath() throws Exception {
+    var records = serve(request -> new Response(200, "{\"rrset\":{}}"));
+
+    records.setLabels("@", "A", Map.of("qits-exposure", "public"));
+
+    assertThat(requests.get(0).method()).isEqualTo("PUT");
+    assertThat(requests.get(0).path()).isEqualTo("/v1/zones/wohlben.eu/rrsets/%40/A");
+    assertThat(requests.get(0).body()).isEqualTo("{\"labels\":{\"qits-exposure\":\"public\"}}");
+  }
+
+  @Test
   void setsRecordsChangesTheTtlAndDeletesByNameAndType() throws Exception {
     var records =
         serve(
@@ -102,9 +165,10 @@ class HetznerAddressRecordsTest {
                     ? new Response(404, "{\"error\":{\"code\":\"not_found\"}}")
                     : new Response(201, "{\"action\":{}}"));
 
-    records.setRecords("projects.qits", List.of("100.96.0.9", "100.96.0.10"));
-    records.changeTtl("projects.qits");
-    records.delete("projects.qits");
+    records.setRecords("projects.qits", "A", List.of("100.96.0.9", "100.96.0.10"));
+    records.changeTtl("projects.qits", "A");
+    records.delete("projects.qits", "A");
+    records.delete("qits", "CNAME");
 
     assertThat(requests)
         .extracting(Request::method, Request::path)
@@ -114,7 +178,9 @@ class HetznerAddressRecordsTest {
             org.assertj.core.groups.Tuple.tuple(
                 "POST", "/v1/zones/wohlben.eu/rrsets/projects.qits/A/actions/change_ttl"),
             org.assertj.core.groups.Tuple.tuple(
-                "DELETE", "/v1/zones/wohlben.eu/rrsets/projects.qits/A"));
+                "DELETE", "/v1/zones/wohlben.eu/rrsets/projects.qits/A"),
+            org.assertj.core.groups.Tuple.tuple(
+                "DELETE", "/v1/zones/wohlben.eu/rrsets/qits/CNAME"));
     assertThat(requests.get(0).body())
         .isEqualTo("{\"records\":[{\"value\":\"100.96.0.9\"},{\"value\":\"100.96.0.10\"}]}");
     assertThat(requests.get(1).body()).isEqualTo("{\"ttl\":60}");
@@ -159,7 +225,7 @@ class HetznerAddressRecordsTest {
         "{\"error\":{\"code\":\"invalid_input\",\"message\":\"" + "x".repeat(500) + "\"}}";
     var records = serve(request -> new Response(422, body));
 
-    assertThatThrownBy(() -> records.create("projects.qits", List.of("100.96.0.1")))
+    assertThatThrownBy(() -> records.create("projects.qits", "A", List.of("100.96.0.1"), "private"))
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("HTTP 422")
         .hasMessageContaining("invalid_input")
@@ -174,7 +240,7 @@ class HetznerAddressRecordsTest {
   void aMissingRrsetOnAnyOtherCallIsARefusal() throws Exception {
     var records = serve(request -> new Response(404, ""));
 
-    assertThatThrownBy(() -> records.setRecords("projects.qits", List.of("100.96.0.1")))
+    assertThatThrownBy(() -> records.setRecords("projects.qits", "A", List.of("100.96.0.1")))
         .hasMessageContaining("HTTP 404: (empty body)");
   }
 

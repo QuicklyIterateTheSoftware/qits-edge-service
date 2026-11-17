@@ -78,9 +78,10 @@ public class RouteTables {
   @Inject EdgeRoutes routes;
 
   /**
-   * Told when a new table may have moved a private withdrawal (qits-2273); unset in a bare test.
+   * Told when a new table may have moved a host or a private withdrawal (qits-2273, qits-2292);
+   * unset in a bare test.
    */
-  @Inject Instance<PrivateHostRecords> privateHosts;
+  @Inject Instance<HostRecords> hostRecords;
 
   Clock clock = Clock.systemUTC();
 
@@ -151,15 +152,15 @@ public class RouteTables {
       LOG.infof(
           "route table %s %d served from the cache: %d applications",
           edge(), version, table.getJsonArray("applications").size());
-      reconcilePrivateHosts();
+      reconcileHostRecords();
     } catch (SQLException failure) {
       throw new IllegalStateException("could not load the edge route table", failure);
     }
   }
 
-  private void reconcilePrivateHosts() {
-    if (privateHosts != null && privateHosts.isResolvable()) {
-      privateHosts.get().requestReconcile();
+  private void reconcileHostRecords() {
+    if (hostRecords != null && hostRecords.isResolvable()) {
+      hostRecords.get().requestReconcile();
     }
   }
 
@@ -259,7 +260,7 @@ public class RouteTables {
         routes.serve(version, table);
         LOG.infof(
             "route table %s %d -> %d: %d applications", edge(), previous, version, applications);
-        reconcilePrivateHosts();
+        reconcileHostRecords();
         return new Stored(previous, version, applications);
       } catch (SQLException | RuntimeException failure) {
         connection.rollback();

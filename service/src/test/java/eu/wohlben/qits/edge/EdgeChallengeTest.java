@@ -817,6 +817,25 @@ class EdgeChallengeTest {
         "a process with no QITS_ENVIRONMENT keeps the old default");
   }
 
+  /**
+   * The node address is the bootstrap's input (qits-2292, qits-2293): empty unless a deployment
+   * states it, and then the comma list {@code QITS_EDGE_DNS_NODE_ADDRESS} spells.
+   */
+  @Test
+  void theNodeAddressIsEmptyUntilTheDeploymentStatesIt() throws Exception {
+    assertEquals(
+        Optional.empty(),
+        applicationProperties(Map.of())
+            .build()
+            .getOptionalValues("qits.edge.dns.node-address", String.class));
+    assertEquals(
+        Optional.of(List.of("46.224.171.33", "2a01:4f8:c17:1::1")),
+        applicationProperties(
+                Map.of("QITS_EDGE_DNS_NODE_ADDRESS", "46.224.171.33,2a01:4f8:c17:1::1"))
+            .build()
+            .getOptionalValues("qits.edge.dns.node-address", String.class));
+  }
+
   private static String dialUrl(Map<String, String> env) throws Exception {
     return applicationProperties(env)
         .build()

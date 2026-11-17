@@ -98,8 +98,8 @@ deploy, and on each observation pass while the edge reports an older version.
 The platform labels are code for a second reason (qits-1403): the edge's own project and peer
 catch-ups dial qits-events, and qits-events fetches the keys it checks that call's token with from
 `https://idp.qits.<domain>/idp/jwks` — through the edge — so `idp` can never wait for anything the
-edge has not got yet. `PrivateHostRecords` decides nothing until a table is actually loaded: a public
-edge that has never received one knows of no private host, and deleting their DNS records on that
+edge has not got yet. `HostRecords` decides nothing until a table is actually loaded: a public
+edge that has never received one knows of no host, and deleting their DNS records on that
 word would be a wrong answer published to the internet.
 
 **Swarm's healthcheck is liveness, `/q/health/live`, not readiness** (qits-2160). A not-ready edge
@@ -307,7 +307,7 @@ them, through `EdgeRoutes.withdrawnHosts` — see below — and so does one refu
 
 **A private deployment's name on the public edge is `421 Misdirected Request`** (qits-2223), not
 the 404 an unknown label gets. Since qits-2273 the public zone answers a private name with the
-tunnel address too (see [Private host records in public DNS](#private-host-records-in-public-dns-qits-2273)),
+tunnel address too (see [Host records in public DNS](#host-records-in-public-dns-qits-2273-qits-2292)),
 so a request only lands here on an OLD or FILTERED answer: a resolver that cached the wildcard's
 public address from before the record existed, or one whose DNS-rebind protection dropped the
 `100.x` answer and fell back. The name does exist — on the other edge — so the
@@ -499,67 +499,104 @@ qits-events, and it needs `EventEnvelope` and `CanonicalJson$QitsEventMixin` in
 `EventWireReflection`: without them the native binary cannot serialize the PUT body, and the library
 reports that only at DEBUG while the outbox retries it forever (qits-edge-private 2026.1110.173435).
 
-### Private host records in public DNS (qits-2273)
+### Host records in public DNS (qits-2273, qits-2292)
 
-**What is written.** One DNS `A` RRSet in the public zone (`QITS_DOMAIN`, e.g. `wohlben.eu`) per
-private application host, whose value is the tunnel address the private edge announced:
-`projects.qits.wohlben.eu A 100.96.0.1`, TTL 60, labelled `qits-exposure=private`. The names are
-the ones the navigation document composes for a private withdrawal (`EdgeRoutes.withdrawnHosts`,
-exposure `private`): `<host>.<project>.<domain>` for an env-less project in the default
-environment, `<host>.<env>.<project>.<domain>` for one with environments — once per known project,
-because the grammar serves an application under every project's tier. An exact name outranks the
-zone's wildcard (`*`, i.e. `*.wohlben.eu` → the public edge), which keeps answering the public edge
-for every name that does not exist. The value is
-the newest `PrivateEdgeAnnounced.tunnelAddress` (any `/prefix` stripped), projected by
+**The edge owns every public name.** Until qits-2292 the public names resolved only because a person
+had typed wildcards into the zone (`@`, `*`, `*.dev`, `*.*`, `*.*.*`, `*.*.*.*`, and since qits-2280
+`qits` and `*.qits`). Nothing in the platform wrote them, so a fresh zone resolved nothing, and a
+made-up name such as `x.qits.wohlben.eu` got a TLS handshake and a 404. Worse, one exact name below
+a wildcard turns its parent into an empty non-terminal the wildcard stops answering for (RFC 4592):
+that mix caused the qits-2273 and qits-2280 outages, and the "shadow" records written to paper over
+it are gone. Now every host has an exact record, the edge writes no wildcard, and an unknown name is
+NXDOMAIN.
+
+**What is written** (`HostRecords`), in the public zone (`QITS_DOMAIN`, e.g. `wohlben.eu`), TTL 60:
+
+| Name | Type | Value | Label |
+| --- | --- | --- | --- |
+| `node.<domain>` | `A` (+ `AAAA`) | the node address, `QITS_EDGE_DNS_NODE_ADDRESS` | `qits-exposure=public` |
+| `<domain>` (the apex, `@`) | `A` (+ `AAAA`) | the node address — an apex cannot hold a CNAME | `qits-exposure=public` |
+| every public host, e.g. `ci.dev.qits.<domain>` | `CNAME` | `node.<domain>.` | `qits-exposure=public` |
+| every project door `<project>.<domain>`, and `<env>.<project>.<domain>` for a project with environments | `CNAME` | `node.<domain>.` | `qits-exposure=public` |
+| every private host, e.g. `projects.qits.<domain>` | `A` | the tunnel address, `100.96.0.1` | `qits-exposure=private` |
+
+The public hosts are the ones the served route table publishes (`EdgeRoutes.applicationHosts`) plus
+the `PlatformApps` labels the edge answers from code (`idp`, `registry`, `mirror`, `githost`),
+composed for every served environment and every known project exactly as the navigation document
+composes them (`EnvironmentAuthority.hostOrigin`): `<host>.<project>.<domain>` for an env-less
+project in the default environment, `<host>.<env>.<project>.<domain>` for one with environments, and
+`landing` is the door itself. The private hosts are composed the same way from the `private`
+withdrawals (`EdgeRoutes.withdrawnHosts`); their value is the newest
+`PrivateEdgeAnnounced.tunnelAddress` (any `/prefix` stripped), projected by
 `PrivateEdgeAddressSubscriber` (consumer `edge-private-edge-address`, replayed from the epoch) into
 `edge_private_edge_address` (V14); with several private edges the newest announcement overall wins.
-There is no setting.
+A renamed host needs no special code: the old name leaves the route table and its record is deleted.
+The DNS-01 TXT at `_acme-challenge.<name>` is a different name and sits beside a CNAME untouched.
 
-**Shadow records, and why they exist** (RFC 4592). A wildcard answers only for names that do NOT
-exist, and a name exists as soon as anything exists below it. The zone has one wildcard, `*`, which
-used to answer `qits.wohlben.eu`, `idp.qits.wohlben.eu` and the rest; creating `projects.qits`
-turned `qits` into an empty non-terminal, so `qits.wohlben.eu` answered NOERROR with no data and
-every other `<x>.qits.wohlben.eu` NXDOMAIN — `*` never synthesises at or below an existing name.
-That was the first rollout's public outage. So for every ancestor P strictly between a private name
-and the apex (`qits` for `projects.qits`; `acme` and `dev.acme` for `ci.dev.acme`) the edge restates
-what answered P before: the nearest UNLABELLED wildcard A walking up from P's parent (`*.<parent>`
-… `*`), written as two owned RRSets, `P` and `*.P`, with all of that wildcard's A values, TTL 60 and
-the same label. With no wildcard above P nothing answered P before and no shadow is written; a
-hand-made `A`/`CNAME` at `P` or `*.P` already does the job and is left alone (another type there,
-a TXT say, does not stop the shadow). Order is the safety: every shadow is created or set before
-any private record, a private record is written only when its shadows are in place, and deletes run
-private records first and a shadow only once nothing owned is left under it. A wildcard lookup that
-fails aborts the pass before any write.
+**The node address is the bootstrap's input.** `QITS_EDGE_DNS_NODE_ADDRESS`
+(`qits.edge.dns.node-address`) is a comma-separated list of IPv4 and/or IPv6 literals —
+`46.224.171.33` on the estate — and `qits-bootstrap-cli` sets it from its `--public-ip` through the
+deployment settings, beside the Hetzner token (qits-2293). It is never looked up or derived. So a new
+domain needs exactly two things: the Hetzner token and the node address; the edge writes everything
+else. Without an address the edge writes and deletes no public record and says so once at INFO; the
+private records do not need it. Likewise without a tunnel address the private records are neither
+written nor deleted, and the public ones still are. A project with the slug `node` would make its
+door a CNAME to itself, so while one exists no node record and no CNAME is written, with a WARN.
+
+**Order is the safety.** Every lookup comes before any write: the owned records are listed once per
+pass (every page, `type` A, AAAA and CNAME, `label_selector=qits-exposure in (private,public)`), and a
+name is looked up only when it is missing from that list — Hetzner allows 3600 requests an hour per
+token. A pass that cannot list or read the zone writes and deletes nothing. Then the node record; a
+CNAME only once the node is in place; the apex. Deletes come only after every create and set. A
+**type switch** at one name — an application that turns from private to public or back, or the old
+`qits` door `A` that is now a CNAME — is a delete and a create back to back in the same pass, logged:
+Hetzner refuses a CNAME beside an `A`, and the zone's negative TTL is an hour, so the gap must never
+be split across passes. A failed create is retried on the next trigger.
+
+**What it never touches.** Only RRSets labelled `qits-exposure` (`public` or `private`) are written or
+deleted; the label is checked again on each one, whatever the API's selector returned. Before a
+create the name is looked up, and an UNLABELLED record of a conflicting type there — a record a person
+made — is a WARN and the name is skipped. The migration below is the one exception.
+
+**The migration off the hand-made records** runs inside the normal pass and is idempotent:
+
+- owned shadow records (labelled `private`, e.g. `qits` and `*.qits`) are no longer wanted: a shadow at
+  a door is switched to its CNAME, the rest deleted — a wildcard, or anything with names below it,
+  only once every desired name below it is in place;
+- an unlabelled `A` at a name that is now a CNAME (the hand-made `qits` of qits-2280) is switched,
+  and an unlabelled `*.<project>` wildcard directly under a project door (`*.qits`) is deleted, each
+  only once every desired name below it is in place;
+- the hand-made apex `A` is adopted — its label set to `public` — when its values are the node
+  address, and left alone with a WARN when they are not;
+- `*`, `*.dev`, `*.*`, `*.*.*`, `*.*.*.*` and every other unlabelled record are never touched. One
+  INFO per boot names the root wildcards still there as no longer needed; the owner decides.
 
 **Who writes.** The PUBLIC edge (`qits-edge`), with the Hetzner token its DNS-01 orders already use
 (`qits.edge.acme.hetzner-token` / `-file`, the file winning) — whether or not ACME is enabled.
-`PrivateHostRecords` is inactive, and says why once at INFO, on the private edge and on an edge with
-no token.
+`HostRecords` is inactive, and says why once at INFO, on the private edge and on an edge with no
+token. The private edge's tunnel responder (`TunnelDns`) is unrelated and unchanged.
 
 **When.** A debounced reconcile (5 s) is requested whenever a route table is served — the cached
 one at boot and every newer one stored — when a new tunnel address is announced, and once the
 project projection reaches the log head at start; a 10-minute schedule is the backstop. Nothing is
-created or deleted before a route table is loaded and the project projection is authoritative, and
-nothing at all before a tunnel address is known. A reconcile that changed something logs one INFO line naming what it
-created, set and deleted; a Hetzner failure is a WARN with its status and body (the token is never
-logged) and is retried on the next trigger — routing and event consumption never see it.
-
-**What it never touches.** Only RRSets labelled `qits-exposure=private` are listed, set or deleted
-(the label is checked again on each one, whatever the API's `label_selector` returned). Before a
-create, the name is looked up: an UNLABELLED `A` or `CNAME` already there — a record a person made —
-is a WARN and the name is skipped. Anything unlabelled stays exactly as it is.
+created or deleted before a route table is loaded and the project projection is authoritative. A
+reconcile that changed something logs one INFO line, `host records reconciled: created …, set …,
+labelled …, switched …, deleted …`; a Hetzner failure is a WARN with its status and body (the token
+is never logged) and is retried on the next trigger — routing and event consumption never see it.
 
 **What it means for clients.**
 
+- Every public name is a CNAME to `node.<domain>`, and a name nobody serves is NXDOMAIN rather than a
+  404 from the edge — once the hand-made wildcards are gone.
 - Private names are visible in the public zone, and unreachable without the tunnel: `100.96.0.1`
   routes nowhere off it. Nothing behind them changes; authentication is still on every door.
-- Off the tunnel a private name now TIMES OUT (a connect to `100.96.0.1` that never answers) instead
-  of reaching the public edge's `421` page. The `421` is still answered when a resolver cached the
-  wildcard's public answer from before the record existed, or filtered the `100.x` answer.
-- **DNS-rebind protection drops these answers.** dnsmasq ≥ 2.93 (OpenWrt 25.12) discards answers in
-  `100.64.0.0/10` by default, and a FRITZ!Box with rebind protection may do the same, so a client
-  behind such a router gets no address for a private name from the public zone. The remedy is a
-  person adding the zone (e.g. `qits.wohlben.eu`) to the router's rebind exceptions — on a
+- Off the tunnel a private name TIMES OUT (a connect to `100.96.0.1` that never answers) instead
+  of reaching the public edge's `421` page. The `421` is still answered when a resolver cached a
+  public answer from before the record existed, or filtered the `100.x` answer.
+- **DNS-rebind protection drops the private answers.** dnsmasq ≥ 2.93 (OpenWrt 25.12) discards
+  answers in `100.64.0.0/10` by default, and a FRITZ!Box with rebind protection may do the same, so a
+  client behind such a router gets no address for a private name from the public zone. The remedy is
+  a person adding the zone (e.g. `qits.wohlben.eu`) to the router's rebind exceptions — on a
   FRITZ!Box: Heimnetz → Netzwerk → Netzwerkeinstellungen → DNS-Rebind-Schutz. The tunnel resolver
   `100.96.0.1` (split DNS) answers the same names on the tunnel and is unaffected either way.
 
@@ -803,6 +840,7 @@ a file.
 | `qits.edge.default-environment` | `QITS_EDGE_DEFAULT_ENVIRONMENT` | `prod` | Where the apex and every unmatched host go. **Must be in the list** |
 | `qits.edge.apps.<app>.hosts.<env>` | `QITS_EDGE_APPS_<APP>_HOSTS_<ENV>` | — | A local process's or a suite's override of one **platform** label in one environment, `host` or `host:port`. It cannot add a label; a live deployment sets none |
 | `qits.edge.exposure` | `QITS_EDGE_EXPOSURE` | `public` | Which variant this edge is, and so which route table it accepts, `public` or `private` — see *The exposure class* |
+| `qits.edge.dns.node-address` | `QITS_EDGE_DNS_NODE_ADDRESS` | — | The node's public address, IPv4 and/or IPv6 literals comma separated; the public edge writes it as `node.<domain>` and the apex, and every public name as a CNAME to `node.<domain>.`. Set by `qits-bootstrap-cli` (qits-2293); empty, no public record is written or deleted — see *Host records in public DNS* |
 | `qits.edge.listen.allowed-local-cidrs` | `QITS_EDGE_LISTEN_ALLOWED_LOCAL_CIDRS` | — (any) | Local addresses a connection may arrive on, as CIDR blocks; set, anything else is closed before routing and the loopback is always added |
 | `qits.edge.wireguard.peers` | `QITS_EDGE_WIREGUARD_PEERS` | — | Static peers, `name:base64PublicKey:tunnelIp` comma separated; names the caller in the private edge's peer log. A malformed entry is dropped with a WARN |
 | `qits.edge.peer-log.overlay-cidr` | `QITS_EDGE_PEER_LOG_OVERLAY_CIDR` | `10.231.0.0/20` | The `qits-private` overlay; a remote inside it is `peer=overlay` |
@@ -1281,9 +1319,9 @@ it created. ACME account state and certificates persist on the TLS volume. Succe
 are installed in immutable version directories and an atomic `current` symlink switch lets Quarkus'
 TLS registry reload them without restarting the edge.
 
-The same token also writes the private hosts' `A` records (labelled `qits-exposure=private`), and
-that does not depend on `QITS_EDGE_ACME_ENABLED` — see
-[Private host records in public DNS](#private-host-records-in-public-dns-qits-2273).
+The same token also writes every public name and the private hosts' `A` records (labelled
+`qits-exposure=public` / `private`), and that does not depend on `QITS_EDGE_ACME_ENABLED` — see
+[Host records in public DNS](#host-records-in-public-dns-qits-2273-qits-2292).
 
 `QITS_EDGE_ACME_ENABLED` and `QITS_EDGE_ACME_MODE` are the two keys that decide whether there is a
 certificate to own; the domain is not one of them any more. The image defaults them to `true` and
