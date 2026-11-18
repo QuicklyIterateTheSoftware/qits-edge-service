@@ -257,9 +257,8 @@ class HostRecordsTest {
   }
 
   @Test
-  void nothingIsWrittenOrDeletedBeforeTheProjectionIsAuthoritative() throws Exception {
+  void withoutANodeAddressNothingIsWrittenBeforeTheProjectionIsAuthoritative() throws Exception {
     estate.authoritative = false;
-    estate.node = List.of(NODE_IP);
     estate.withdraw("dev", "qits-projects", "projects", "private");
     zone.put("retired.qits", "A", 60, "private", TUNNEL);
 
@@ -450,6 +449,91 @@ class HostRecordsTest {
             new HostRecords.Want("projects.dev.acme", "A", List.of(TUNNEL), "private"),
             new HostRecords.Want("projects.qits", "A", List.of(TUNNEL), "private")),
         plan.privates());
+  }
+
+  @Test
+  void theDesiredSetHasACnamePerPlatformAppInEveryServedEnvironment() {
+    Map<String, List<String>> table = Map.of("dev", List.of("ci", "registry"));
+    Map<String, Boolean> projects = new LinkedHashMap<>();
+    projects.put("qits", false);
+    projects.put("acme", true);
+
+    HostRecords.Plan plan =
+        HostRecords.plan(
+            "wohlben.eu",
+            List.of("dev", "prod"),
+            "dev",
+            projects,
+            environment -> HostRecords.publicHosts(table.getOrDefault(environment, List.of())),
+            environment -> Map.of(),
+            List.of(NODE_IP),
+            Optional.empty(),
+            ignored -> {});
+
+    List<String> names = plan.cnames().stream().map(HostRecords.Want::name).toList();
+    for (String app : List.of("registry", "mirror", "githost", "idp")) {
+      for (String name : List.of(app + ".qits", app + ".dev.acme", app + ".prod.acme")) {
+        assertEquals(1, names.stream().filter(name::equals).count(), name + ", once");
+      }
+    }
+    assertTrue(names.contains("ci.qits"));
+    assertFalse(names.contains("ci.prod.acme"), "the table serves ci in dev only");
+  }
+
+  @Test
+  void theSeedPassWritesTheNodeTheApexAndThePlatformAppsAndDeletesNothing() throws Exception {
+    estate.authoritative = false;
+    estate.node = List.of(NODE_IP);
+    estate.projects = new LinkedHashMap<>();
+    estate.serve("dev", "ci");
+    estate.withdraw("dev", "qits-projects", "projects", "private");
+    zone.put("retired.qits", "CNAME", 60, "public", TARGET);
+    zone.put("stale.qits", "A", 60, "private", TUNNEL);
+
+    records.reconcile();
+
+    // No table and no project yet: qits is composed anyway, the way the edge already routes it.
+    assertEquals(
+        List.of(
+            "create node A " + NODE_IP,
+            "create githost.qits CNAME " + TARGET,
+            "create idp.qits CNAME " + TARGET,
+            "create mirror.qits CNAME " + TARGET,
+            "create registry.qits CNAME " + TARGET,
+            "create @ A " + NODE_IP),
+        zone.writes);
+    assertFalse(zone.writes.stream().anyMatch(write -> write.startsWith("delete ")));
+    assertTrue(zone.rrsets.containsKey("retired.qits/CNAME"));
+    assertTrue(zone.rrsets.containsKey("stale.qits/A"));
+
+    zone.writes.clear();
+    records.reconcile();
+    assertEquals(List.of(), zone.writes, "a seeded zone is left alone");
+
+    estate.authoritative = true;
+    estate.projects = new LinkedHashMap<>(Map.of("qits", false));
+    records.reconcile();
+    assertTrue(zone.writes.contains("delete retired.qits CNAME"), "the full pass takes over");
+  }
+
+  @Test
+  void theSeedPassSkipsACollidingUnlabelledRecordAndSwitchesNoType() throws Exception {
+    estate.authoritative = false;
+    estate.node = List.of(NODE_IP);
+    zone.put("registry.qits", "A", 300, null, "203.0.113.7");
+    zone.put("mirror.qits", "A", 60, "private", TUNNEL);
+
+    records.reconcile();
+
+    assertEquals(
+        List.of(
+            "create node A " + NODE_IP,
+            "create githost.qits CNAME " + TARGET,
+            "create idp.qits CNAME " + TARGET,
+            "create @ A " + NODE_IP),
+        zone.writes);
+    assertEquals(List.of("203.0.113.7"), zone.at("registry.qits", "A").values());
+    assertEquals(AddressRecords.PRIVATE, zone.at("mirror.qits", "A").exposure());
   }
 
   @Test

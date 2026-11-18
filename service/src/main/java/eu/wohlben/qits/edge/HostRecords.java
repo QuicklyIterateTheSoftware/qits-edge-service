@@ -87,11 +87,14 @@ import org.jboss.logging.Logger;
  * ACME is enabled. The private edge holds no token and projects nothing, so it is inactive by
  * construction; either reason is said once at INFO.
  *
- * <p><b>Nothing is decided before a route table is loaded and the project projection is
+ * <p><b>Nothing is deleted before a route table is loaded and the project projection is
  * authoritative.</b> A public edge that never received a table routes {@link PlatformApps} and
  * knows nothing of the other hosts, and a project projection behind its head may not have a project
- * yet; deleting a record then would be a wrong answer published to the internet, so a reconcile
- * before both returns and relies on the next trigger.
+ * yet; deleting a record then would be a wrong answer published to the internet. Until both are up
+ * a <b>seed pass</b> (qits-2293) writes only what code knows — the node, the apex and the {@link
+ * PlatformApps} CNAMEs — and deletes nothing, switches no type and migrates nothing: a fresh
+ * bootstrap waits for {@code registry.qits.<domain>} before the first deploy, and no deploy would
+ * ever push the table that names it.
  *
  * <p><b>Triggers</b>: {@link #requestReconcile()} — from {@link RouteTables} when it serves a table
  * (the cached one at boot, and every newer one stored), from the address listener, and from the
@@ -271,14 +274,10 @@ public class HostRecords {
 
           @Override
           public Collection<String> publicHosts(String environment) {
-            // PlatformApps answer from code on every tier, table or not — idp above all, whose
-            // name qits-events fetches its keys through — so they get their records whether or
-            // not the table lists them.
-            Set<String> hosts = new TreeSet<>(PlatformApps.labels());
-            routes.applicationHosts(environment).values().stream()
-                .map(EdgeRoutes.ServiceHost::host)
-                .forEach(hosts::add);
-            return hosts;
+            return HostRecords.publicHosts(
+                routes.applicationHosts(environment).values().stream()
+                    .map(EdgeRoutes.ServiceHost::host)
+                    .toList());
           }
 
           @Override
@@ -314,8 +313,8 @@ public class HostRecords {
 
   /**
    * One request at boot, which is what says at INFO why an edge is inactive; on a public edge with
-   * a token it returns at once until the projections are authoritative, and the bootstraps ask
-   * again then.
+   * a token it is a seed pass until the projections are authoritative, and the bootstraps ask again
+   * then.
    */
   void start(@Observes StartupEvent ignored) {
     requestReconcile();
@@ -402,13 +401,12 @@ public class HostRecords {
       note("edge", "host records are inactive: this deployment states no domain (QITS_DOMAIN)");
       return;
     }
+    notes.remove("edge");
     if (!estate.authoritative()) {
-      // Not note(): a wait is a window, not a state worth a line, and the table store and the
-      // project bootstrap ask again.
-      LOG.debug("host records wait for a route table and the project log head");
+      seed(token.orElseThrow(), domain);
       return;
     }
-    notes.remove("edge");
+    notes.remove("seed");
     Optional<String> tunnel = estate.tunnelAddress();
     if (tunnel.isEmpty()) {
       note(
@@ -456,10 +454,44 @@ public class HostRecords {
                     "host %s is outside the zone %s; no record is written for it",
                     outside, domain));
     AddressRecords zone = zones.apply(token.orElseThrow(), domain);
-    apply(zone, plan);
+    apply(zone, plan, false);
     if (plan.publicActive()) {
       reportRootWildcards(zone);
     }
+  }
+
+  /**
+   * The seed pass (qits-2293): before a route table and the project log head, only the names code
+   * knows — {@link #seedPlan} — are created or set. Nothing is deleted, no type switched and no
+   * hand-made record migrated, because what else the zone should hold is not known yet; the full
+   * pass takes over once both gates are up. The private half waits: its hosts come from the table.
+   */
+  private void seed(String token, String domain) throws Exception {
+    List<String> node = nodeAddresses(estate.nodeAddress(), this::warnInvalid);
+    if (node.isEmpty()) {
+      // Not note(): a wait is a window, not a state worth a line, and the table store and the
+      // project bootstrap ask again.
+      LOG.debug("host records wait for a route table and the project log head");
+      return;
+    }
+    note(
+        "seed",
+        "host records: no route table or project log head yet; a seed pass writes only the node,"
+            + " the apex and the platform applications' names "
+            + new TreeSet<>(PlatformApps.labels())
+            + ", and deletes nothing");
+    Plan plan =
+        seedPlan(
+            domain,
+            estate.environments(),
+            estate.defaultEnvironment(),
+            estate.projects(),
+            node,
+            outside ->
+                LOG.warnf(
+                    "host %s is outside the zone %s; no record is written for it",
+                    outside, domain));
+    apply(zones.apply(token, domain), plan, true);
   }
 
   /**
@@ -484,8 +516,12 @@ public class HostRecords {
    * owned record with names below it, since it may be what still answers them. The hand-made apex
    * (and node) is adopted by setting its label when its values already are the node's, and left
    * with a WARN when they are not.
+   *
+   * <p>A {@code seed} pass makes only the creates and sets: no delete, no type switch (an owned
+   * record of another type, or a hand-made {@code A} at a CNAME's name, waits for the full pass),
+   * and no wildcard is read.
    */
-  private void apply(AddressRecords zone, Plan plan) throws Exception {
+  private void apply(AddressRecords zone, Plan plan, boolean seed) throws Exception {
     // ---- reads: all of them, before any write ----
     Map<String, Map<String, AddressRecords.RrSet>> actual = new TreeMap<>();
     for (AddressRecords.RrSet rrset : zone.owned()) {
@@ -522,7 +558,7 @@ public class HostRecords {
       handMade.put(want.name() + "/" + want.type(), found);
     }
     Map<String, AddressRecords.RrSet> doorWildcards = new TreeMap<>();
-    if (plan.publicActive()) {
+    if (plan.publicActive() && !seed) {
       for (String door : plan.doors()) {
         String wildcard = "*." + door;
         if (wildcardsGone.contains(wildcard)) {
@@ -539,7 +575,7 @@ public class HostRecords {
     }
 
     // ---- writes, in order ----
-    Pass pass = new Pass(zone, actual, handMade);
+    Pass pass = new Pass(zone, actual, handMade, seed);
     boolean nodeInPlace = !plan.node().isEmpty();
     for (Want want : plan.node()) {
       nodeInPlace &= pass.put(want, plan) == Outcome.IN_PLACE;
@@ -561,6 +597,11 @@ public class HostRecords {
     }
     for (Want want : plan.apex()) {
       pass.put(want, plan);
+    }
+
+    if (seed) {
+      pass.report();
+      return;
     }
 
     // ---- deletes, after every create and set ----
@@ -627,6 +668,7 @@ public class HostRecords {
     final AddressRecords zone;
     final Map<String, Map<String, AddressRecords.RrSet>> actual;
     final Map<String, List<AddressRecords.RrSet>> handMade;
+    final boolean seed;
     final Map<String, Outcome> outcomes = new HashMap<>();
     final List<String> created = new ArrayList<>();
     final List<String> set = new ArrayList<>();
@@ -637,10 +679,12 @@ public class HostRecords {
     Pass(
         AddressRecords zone,
         Map<String, Map<String, AddressRecords.RrSet>> actual,
-        Map<String, List<AddressRecords.RrSet>> handMade) {
+        Map<String, List<AddressRecords.RrSet>> handMade,
+        boolean seed) {
       this.zone = zone;
       this.actual = actual;
       this.handMade = handMade;
+      this.seed = seed;
     }
 
     Outcome put(Want want, Plan plan) {
@@ -669,6 +713,12 @@ public class HostRecords {
           if (there.containsKey(other)) {
             old.add(other);
           }
+        }
+        if (seed && !old.isEmpty()) {
+          LOG.debugf(
+              "host record %s %s waits for the full pass: switching it from %s is not a seed write",
+              name, type, String.join("+", old));
+          return Outcome.HAND_MADE;
         }
         for (String other : old) {
           zone.delete(name, other);
@@ -744,7 +794,8 @@ public class HostRecords {
         return Outcome.HAND_MADE;
       }
       boolean switchable =
-          "CNAME".equals(type)
+          !seed
+              && "CNAME".equals(type)
               && unlabelled.stream().allMatch(rrset -> "A".equalsIgnoreCase(rrset.type()));
       if (switchable) {
         if (!allInPlaceBelow(name, plan)) {
@@ -819,8 +870,8 @@ public class HostRecords {
           || !switched.isEmpty()
           || !deleted.isEmpty()) {
         LOG.infof(
-            "host records reconciled: created %s, set %s, labelled %s, switched %s, deleted %s",
-            created, set, labelled, switched, deleted);
+            "host records %s: created %s, set %s, labelled %s, switched %s, deleted %s",
+            seed ? "seeded" : "reconciled", created, set, labelled, switched, deleted);
       }
     }
   }
@@ -932,6 +983,71 @@ public class HostRecords {
       List<String> node,
       Optional<String> tunnel,
       Consumer<String> outside) {
+    return plan(
+        domain,
+        environments,
+        defaultEnvironment,
+        projects,
+        publicHosts,
+        withdrawn,
+        node,
+        tunnel,
+        true,
+        outside);
+  }
+
+  /**
+   * The seed pass's plan (qits-2293): the node, the apex and every {@link PlatformApps} label
+   * composed exactly as {@link #plan} composes it — no project door, no private host. {@code qits},
+   * the platform project, is composed even while the projection does not know it, env-less, because
+   * the edge already answers {@code <label>.qits.<domain>} then ({@link
+   * HostEnvironments#PLATFORM_PROJECT}).
+   */
+  static Plan seedPlan(
+      String domain,
+      List<String> environments,
+      String defaultEnvironment,
+      Map<String, Boolean> projects,
+      List<String> node,
+      Consumer<String> outside) {
+    Map<String, Boolean> known = new LinkedHashMap<>(projects);
+    known.putIfAbsent(HostEnvironments.PLATFORM_PROJECT, false);
+    return plan(
+        domain,
+        environments,
+        defaultEnvironment,
+        known,
+        ignored -> PlatformApps.labels(),
+        ignored -> Map.of(),
+        node,
+        Optional.empty(),
+        false,
+        outside);
+  }
+
+  /**
+   * The public host labels of one environment: the route table's and every {@link PlatformApps}
+   * label, once each. PlatformApps answer from code on every tier, table or not — idp above all,
+   * whose name qits-events fetches its keys through — so they get their records whether or not the
+   * table lists them.
+   */
+  static Set<String> publicHosts(Collection<String> table) {
+    Set<String> hosts = new TreeSet<>(PlatformApps.labels());
+    hosts.addAll(table);
+    return hosts;
+  }
+
+  private static Plan plan(
+      String domain,
+      List<String> environments,
+      String defaultEnvironment,
+      Map<String, Boolean> projects,
+      Function<String, Collection<String>> publicHosts,
+      Function<String, Map<String, EdgeRoutes.Withdrawn>> withdrawn,
+      List<String> node,
+      Optional<String> tunnel,
+      boolean doors,
+      Consumer<String> outside) {
     boolean publicActive = !node.isEmpty();
     boolean privateActive = tunnel.isPresent();
     boolean reserved = publicActive && projects.containsKey(NODE);
@@ -968,7 +1084,8 @@ public class HostRecords {
     if (publicActive) {
       String target = NODE + "." + domain + ".";
       for (String name :
-          publicNames(domain, environments, defaultEnvironment, projects, publicHosts, outside)) {
+          publicNames(
+              domain, environments, defaultEnvironment, projects, publicHosts, doors, outside)) {
         if (privateNames.containsKey(name) || (reserved && NODE.equals(name))) {
           continue;
         }
@@ -980,7 +1097,7 @@ public class HostRecords {
         privates,
         cnames,
         apexWants,
-        new TreeSet<>(projects.keySet()),
+        doors ? new TreeSet<>(projects.keySet()) : Set.of(),
         reserved ? Set.of(NODE) : Set.of(),
         publicActive,
         privateActive);
@@ -988,8 +1105,8 @@ public class HostRecords {
 
   /**
    * Every public name, relative to {@code domain}, in name order: each public host composed for
-   * every served environment and project, each project door, and each environment door of a project
-   * that has environments.
+   * every served environment and project, and with {@code doors} each project door and each
+   * environment door of a project that has environments.
    */
   static Set<String> publicNames(
       String domain,
@@ -997,6 +1114,7 @@ public class HostRecords {
       String defaultEnvironment,
       Map<String, Boolean> projects,
       Function<String, Collection<String>> publicHosts,
+      boolean doors,
       Consumer<String> outside) {
     Set<String> names = new TreeSet<>();
     Set<String> reported = new HashSet<>();
@@ -1008,8 +1126,10 @@ public class HostRecords {
         if (authority == null) {
           continue;
         }
-        names.add(project.getKey());
-        names.add(authority.substring(0, authority.length() - suffix.length()));
+        if (doors) {
+          names.add(project.getKey());
+          names.add(authority.substring(0, authority.length() - suffix.length()));
+        }
         for (String host : hosts == null ? List.<String>of() : hosts) {
           if (host == null || host.isBlank()) {
             continue;

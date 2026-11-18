@@ -649,7 +649,12 @@ token. The private edge's tunnel responder (`TunnelDns`) is unrelated and unchan
 **When.** A debounced reconcile (5 s) is requested whenever a route table is served — the cached
 one at boot and every newer one stored — when a new tunnel address is announced, and once the
 project projection reaches the log head at start; a 10-minute schedule is the backstop. Nothing is
-created or deleted before a route table is loaded and the project projection is authoritative. A
+deleted before a route table is loaded and the project projection is authoritative. Until then a
+**seed pass** (qits-2293) creates or sets only the names code knows — the node, the apex and the
+`PlatformApps` CNAMEs (`registry`, `mirror`, `githost`, `idp`, e.g. `registry.qits.<domain>`) — and
+deletes nothing, switches no type and skips a hand-made record with the same WARN, so a fresh
+bootstrap's wait for `registry.qits.<domain>`, which runs before any deploy pushes a table, can pass;
+it logs `host records seeded: …`. A
 reconcile that changed something logs one INFO line, `host records reconciled: created …, set …,
 labelled …, switched …, deleted …`; a Hetzner failure is a WARN with its status and body (the token
 is never logged) and is retried on the next trigger — routing and event consumption never see it.
