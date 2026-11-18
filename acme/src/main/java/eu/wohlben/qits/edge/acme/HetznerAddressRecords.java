@@ -88,7 +88,11 @@ public final class HetznerAddressRecords implements AddressRecords {
     HttpResponse<String> response =
         call(
             "GET",
-            hetzner.rrsets() + "/" + HetznerApi.encode(name) + "/" + HetznerApi.encode(type),
+            hetzner.rrsets()
+                + "/"
+                + HetznerApi.encodePathSegment(name)
+                + "/"
+                + HetznerApi.encodePathSegment(type),
             null,
             true);
     if (response.statusCode() == 404) {
@@ -146,7 +150,11 @@ public final class HetznerAddressRecords implements AddressRecords {
   }
 
   private String rrset(String name, String type) {
-    return hetzner.rrsets() + "/" + HetznerApi.encode(name) + "/" + HetznerApi.encode(type);
+    return hetzner.rrsets()
+        + "/"
+        + HetznerApi.encodePathSegment(name)
+        + "/"
+        + HetznerApi.encodePathSegment(type);
   }
 
   private JsonNode get(String path) throws Exception {

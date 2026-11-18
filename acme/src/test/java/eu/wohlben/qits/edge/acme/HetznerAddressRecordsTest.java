@@ -152,8 +152,20 @@ class HetznerAddressRecordsTest {
     records.setLabels("@", "A", Map.of("qits-exposure", "public"));
 
     assertThat(requests.get(0).method()).isEqualTo("PUT");
-    assertThat(requests.get(0).path()).isEqualTo("/v1/zones/wohlben.eu/rrsets/%40/A");
+    // The apex's name is "@", and Hetzner matches the raw path: URLEncoder's %40 404s where the
+    // literal "@" matches (qits-2292). Never regress this back to "%40".
+    assertThat(requests.get(0).path()).isEqualTo("/v1/zones/wohlben.eu/rrsets/@/A");
     assertThat(requests.get(0).body()).isEqualTo("{\"labels\":{\"qits-exposure\":\"public\"}}");
+  }
+
+  @Test
+  void deletesTheApexByItsLiteralAtSignPath() throws Exception {
+    var records = serve(request -> new Response(404, "{\"error\":{\"code\":\"not_found\"}}"));
+
+    records.delete("@", "A");
+
+    assertThat(requests.get(0).method()).isEqualTo("DELETE");
+    assertThat(requests.get(0).path()).isEqualTo("/v1/zones/wohlben.eu/rrsets/@/A");
   }
 
   @Test
@@ -213,6 +225,28 @@ class HetznerAddressRecordsTest {
   }
 
   @Test
+  void getsTheApexByItsLiteralAtSignPathNeverTheEncodedOne() throws Exception {
+    var records =
+        serve(
+            request ->
+                request.path().equals("/v1/zones/wohlben.eu/rrsets/@/A")
+                    ? new Response(
+                        200,
+                        """
+                        {"rrset":{"name":"@","type":"A","ttl":300,"labels":{},
+                          "records":[{"value":"46.224.171.33"}]}}
+                        """)
+                    : new Response(404, "{\"error\":{\"code\":\"not_found\"}}"));
+
+    Optional<AddressRecords.RrSet> apex = records.get("@", "A");
+
+    assertThat(requests.get(0).method()).isEqualTo("GET");
+    assertThat(requests.get(0).path()).isEqualTo("/v1/zones/wohlben.eu/rrsets/@/A");
+    assertThat(apex)
+        .contains(new AddressRecords.RrSet("@", "A", 300, Map.of(), List.of("46.224.171.33")));
+  }
+
+  @Test
   void getAnyOtherRefusalThrows() throws Exception {
     var records = serve(request -> new Response(503, "busy"));
 
@@ -242,6 +276,17 @@ class HetznerAddressRecordsTest {
 
     assertThatThrownBy(() -> records.setRecords("projects.qits", "A", List.of("100.96.0.1")))
         .hasMessageContaining("HTTP 404: (empty body)");
+  }
+
+  @Test
+  void pathSegmentEncodingLeavesTheApexAndTheWildcardLiteralButEncodesEverythingElseLikeEncode() {
+    assertThat(HetznerApi.encodePathSegment("@")).isEqualTo("@");
+    assertThat(HetznerApi.encodePathSegment("*")).isEqualTo(HetznerApi.encode("*")).isEqualTo("*");
+    assertThat(HetznerApi.encodePathSegment("projects.qits"))
+        .isEqualTo(HetznerApi.encode("projects.qits"));
+    assertThat(HetznerApi.encodePathSegment("a b"))
+        .isEqualTo(HetznerApi.encode("a b"))
+        .isEqualTo("a%20b");
   }
 
   private HetznerAddressRecords serve(Function<Request, Response> answer) throws Exception {

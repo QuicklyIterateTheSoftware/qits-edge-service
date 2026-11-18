@@ -78,4 +78,18 @@ final class HetznerApi {
   static String encode(String value) {
     return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
   }
+
+  /**
+   * Percent-encodes a path segment the way {@link #encode} does, except it leaves {@code @}
+   * literal. Hetzner's RRSet API matches the raw request path rather than decoding it, so the zone
+   * apex's name, {@code @}, has to reach the path as-is: {@code @} is a legal {@code pchar} under
+   * RFC 3986, but {@link #encode} is a query encoder and turns it into {@code %40} anyway, which
+   * 404s where {@code @} would have matched (seen live 2026-11-18, qits-2292). The wildcard name,
+   * {@code *}, never had this problem — {@link URLEncoder} already leaves it alone — which is why
+   * only the apex ever tripped it. Use this for the name and type segments of an RRSet path; keep
+   * {@link #encode} for the {@code label_selector} query value.
+   */
+  static String encodePathSegment(String value) {
+    return encode(value).replace("%40", "@");
+  }
 }
