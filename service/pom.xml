@@ -37,7 +37,7 @@
         <failsafe-plugin.version>${surefire-plugin.version}</failsafe-plugin.version>
         <spotless-plugin.version>2.44.5</spotless-plugin.version>
         <google-java-format.version>1.28.0</google-java-format.version>
-        <qits.eventstream.version>2026.1110.232501</qits.eventstream.version>
+        <qits.eventstream.version>2026.1118.215113</qits.eventstream.version>
         <!-- qits-telemetry-core (epic qits-428, qits-2188): the three OTLP/HTTP exporters as CDI
              beans whose header supplier attaches the `qits` oidc client's current bearer, so
              traces, logs and metrics reach qits-observability however this process is dialling it
