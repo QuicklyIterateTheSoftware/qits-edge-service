@@ -7,13 +7,13 @@
     <parent>
         <groupId>eu.wohlben</groupId>
         <artifactId>qits-platform-edge-parent</artifactId>
-        <version>2026.1119.125317</version>
+        <version>2026.1119.142125</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <groupId>eu.wohlben</groupId>
     <artifactId>qits-platform-edge</artifactId>
-    <version>2026.1119.125317</version>
+    <version>2026.1119.142125</version>
     <packaging>quarkus</packaging>
 
     <name>qits-platform-edge</name>
