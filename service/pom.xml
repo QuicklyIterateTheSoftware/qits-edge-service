@@ -81,7 +81,7 @@
         <!-- qits-deployments' recorded answers, test scope: DeploymentsConsumerPactTest builds the
              private edge's pact on GET /deployments/api/edge-routes/private from them (epic
              qits-2174). Moves like every internal pin, by a qits-maintenance bump. -->
-        <qits.deployments-golden-masters.version>2026.1119.842</qits.deployments-golden-masters.version>
+        <qits.deployments-golden-masters.version>2026.1119.133938</qits.deployments-golden-masters.version>
         <!-- THE CONSUMER PACTS ConsumerPactVerificationTest verifies (ticket qits-1284): fourteen
              frontends, each through @qits/ui-components' main-navigation call, each publishing
              eu.wohlben.qits:qits-<frontend>-pacts-qits-edge-service carrying
@@ -100,7 +100,7 @@
         <qits.observability-frontend-pacts-qits-edge-service.version>2026.1119.82946</qits.observability-frontend-pacts-qits-edge-service.version>
         <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1117.43834</qits.orchestrator-frontend-pacts-qits-edge-service.version>
         <qits.system-frontend-pacts-qits-edge-service.version>2026.1119.82734</qits.system-frontend-pacts-qits-edge-service.version>
-        <qits.idp-frontend-pacts-qits-edge-service.version>2026.1117.65745</qits.idp-frontend-pacts-qits-edge-service.version>
+        <qits.idp-frontend-pacts-qits-edge-service.version>2026.1119.131854</qits.idp-frontend-pacts-qits-edge-service.version>
         <qits.landing-app-pacts-qits-edge-service.version>2026.1116.153804</qits.landing-app-pacts-qits-edge-service.version>
         <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
         <qits.pact-consumer.version>2026.1106.507</qits.pact-consumer.version>
