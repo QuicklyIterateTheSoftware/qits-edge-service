@@ -101,7 +101,7 @@
         <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1119.163018</qits.orchestrator-frontend-pacts-qits-edge-service.version>
         <qits.system-frontend-pacts-qits-edge-service.version>2026.1119.82734</qits.system-frontend-pacts-qits-edge-service.version>
         <qits.idp-frontend-pacts-qits-edge-service.version>2026.1119.131854</qits.idp-frontend-pacts-qits-edge-service.version>
-        <qits.landing-app-pacts-qits-edge-service.version>2026.1116.153804</qits.landing-app-pacts-qits-edge-service.version>
+        <qits.landing-app-pacts-qits-edge-service.version>2026.1119.211316</qits.landing-app-pacts-qits-edge-service.version>
         <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
         <qits.pact-consumer.version>2026.1106.507</qits.pact-consumer.version>
 
