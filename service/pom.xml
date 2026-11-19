@@ -93,13 +93,13 @@
         <qits.docs-frontend-pacts-qits-edge-service.version>2026.1117.114611</qits.docs-frontend-pacts-qits-edge-service.version>
         <qits.events-frontend-pacts-qits-edge-service.version>2026.1117.45012</qits.events-frontend-pacts-qits-edge-service.version>
         <qits.githost-frontend-pacts-qits-edge-service.version>2026.1117.114747</qits.githost-frontend-pacts-qits-edge-service.version>
-        <qits.maintenance-frontend-pacts-qits-edge-service.version>2026.1117.43725</qits.maintenance-frontend-pacts-qits-edge-service.version>
+        <qits.maintenance-frontend-pacts-qits-edge-service.version>2026.1119.90507</qits.maintenance-frontend-pacts-qits-edge-service.version>
         <qits.artifacts-frontend-pacts-qits-edge-service.version>2026.1117.24628</qits.artifacts-frontend-pacts-qits-edge-service.version>
-        <qits.deployments-frontend-pacts-qits-edge-service.version>2026.1117.44127</qits.deployments-frontend-pacts-qits-edge-service.version>
+        <qits.deployments-frontend-pacts-qits-edge-service.version>2026.1119.115920</qits.deployments-frontend-pacts-qits-edge-service.version>
         <qits.mirror-frontend-pacts-qits-edge-service.version>2026.1117.43741</qits.mirror-frontend-pacts-qits-edge-service.version>
-        <qits.observability-frontend-pacts-qits-edge-service.version>2026.1117.2657</qits.observability-frontend-pacts-qits-edge-service.version>
+        <qits.observability-frontend-pacts-qits-edge-service.version>2026.1119.82946</qits.observability-frontend-pacts-qits-edge-service.version>
         <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1117.43834</qits.orchestrator-frontend-pacts-qits-edge-service.version>
-        <qits.system-frontend-pacts-qits-edge-service.version>2026.1117.44000</qits.system-frontend-pacts-qits-edge-service.version>
+        <qits.system-frontend-pacts-qits-edge-service.version>2026.1119.82734</qits.system-frontend-pacts-qits-edge-service.version>
         <qits.idp-frontend-pacts-qits-edge-service.version>2026.1117.65745</qits.idp-frontend-pacts-qits-edge-service.version>
         <qits.landing-app-pacts-qits-edge-service.version>2026.1116.153804</qits.landing-app-pacts-qits-edge-service.version>
         <!-- The shared golden-master reader (qits-integrations-quarkus-javalib), test scope. -->
