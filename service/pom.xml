@@ -98,7 +98,7 @@
         <qits.deployments-frontend-pacts-qits-edge-service.version>2026.1119.115920</qits.deployments-frontend-pacts-qits-edge-service.version>
         <qits.mirror-frontend-pacts-qits-edge-service.version>2026.1117.43741</qits.mirror-frontend-pacts-qits-edge-service.version>
         <qits.observability-frontend-pacts-qits-edge-service.version>2026.1119.82946</qits.observability-frontend-pacts-qits-edge-service.version>
-        <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1117.43834</qits.orchestrator-frontend-pacts-qits-edge-service.version>
+        <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1119.163018</qits.orchestrator-frontend-pacts-qits-edge-service.version>
         <qits.system-frontend-pacts-qits-edge-service.version>2026.1119.82734</qits.system-frontend-pacts-qits-edge-service.version>
         <qits.idp-frontend-pacts-qits-edge-service.version>2026.1119.131854</qits.idp-frontend-pacts-qits-edge-service.version>
         <qits.landing-app-pacts-qits-edge-service.version>2026.1116.153804</qits.landing-app-pacts-qits-edge-service.version>
