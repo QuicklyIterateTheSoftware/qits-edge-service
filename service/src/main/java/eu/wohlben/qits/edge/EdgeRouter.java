@@ -1458,7 +1458,18 @@ public class EdgeRouter {
       return published;
     }
     String fallback = hostEnvironments.defaultEnvironment();
-    return fallback.equals(environment) ? null : publishedLoginOrigin(request, fallback);
+    String atDefault =
+        fallback.equals(environment) ? null : publishedLoginOrigin(request, fallback);
+    if (atDefault != null) {
+      return atDefault;
+    }
+    // The private edge routes no public deployment, so idp's route is not in its table. idp is a
+    // platform app at a fixed label, so its host is still known. Without this the private edge
+    // sends the browser to the login page on its own door, which it also refuses: a loop.
+    return config.exposure() == ExposureClass.PRIVATE
+            && PlatformApps.owns(PlatformApps.IDP, sessions.loginPath())
+        ? authorityOf(request).hostOrigin(PlatformApps.IDP)
+        : null;
   }
 
   /** One environment's answer: who owns the login path there, and the name they publish. */
