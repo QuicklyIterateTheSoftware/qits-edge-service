@@ -37,7 +37,7 @@
         <failsafe-plugin.version>${surefire-plugin.version}</failsafe-plugin.version>
         <spotless-plugin.version>2.44.5</spotless-plugin.version>
         <google-java-format.version>1.28.0</google-java-format.version>
-        <qits.eventstream.version>2026.1120.94334</qits.eventstream.version>
+        <qits.eventstream.version>2026.1125.142425</qits.eventstream.version>
         <!-- qits-telemetry-core (epic qits-428, qits-2188): the three OTLP/HTTP exporters as CDI
              beans whose header supplier attaches the `qits` oidc client's current bearer, so
              traces, logs and metrics reach qits-observability however this process is dialling it
@@ -77,11 +77,11 @@
         <!-- qits-idp's recorded answers (golden-masters/), test scope: consumer/IdpContract builds
              the edge's pact against qits-idp from them (ticket qits-1149). Moves like every
              internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
-        <qits.idp-golden-masters.version>2026.1123.194348</qits.idp-golden-masters.version>
+        <qits.idp-golden-masters.version>2026.1125.71255</qits.idp-golden-masters.version>
         <!-- qits-deployments' recorded answers, test scope: DeploymentsConsumerPactTest builds the
              private edge's pact on GET /deployments/api/edge-routes/private from them (epic
              qits-2174). Moves like every internal pin, by a qits-maintenance bump. -->
-        <qits.deployments-golden-masters.version>2026.1119.141022</qits.deployments-golden-masters.version>
+        <qits.deployments-golden-masters.version>2026.1125.94623</qits.deployments-golden-masters.version>
         <!-- THE CONSUMER PACTS ConsumerPactVerificationTest verifies (ticket qits-1284): fourteen
              frontends, each through @qits/ui-components' main-navigation call, each publishing
              eu.wohlben.qits:qits-<frontend>-pacts-qits-edge-service carrying
@@ -96,7 +96,7 @@
         <qits.maintenance-frontend-pacts-qits-edge-service.version>2026.1123.85455</qits.maintenance-frontend-pacts-qits-edge-service.version>
         <qits.artifacts-frontend-pacts-qits-edge-service.version>2026.1123.85546</qits.artifacts-frontend-pacts-qits-edge-service.version>
         <qits.deployments-frontend-pacts-qits-edge-service.version>2026.1123.103719</qits.deployments-frontend-pacts-qits-edge-service.version>
-        <qits.mirror-frontend-pacts-qits-edge-service.version>2026.1124.235416</qits.mirror-frontend-pacts-qits-edge-service.version>
+        <qits.mirror-frontend-pacts-qits-edge-service.version>2026.1125.185740</qits.mirror-frontend-pacts-qits-edge-service.version>
         <qits.observability-frontend-pacts-qits-edge-service.version>2026.1123.93025</qits.observability-frontend-pacts-qits-edge-service.version>
         <qits.orchestrator-frontend-pacts-qits-edge-service.version>2026.1123.93148</qits.orchestrator-frontend-pacts-qits-edge-service.version>
         <qits.system-frontend-pacts-qits-edge-service.version>2026.1123.85159</qits.system-frontend-pacts-qits-edge-service.version>
