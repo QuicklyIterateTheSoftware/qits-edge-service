@@ -9,23 +9,33 @@ import java.net.http.HttpResponse;
 import java.util.List;
 import java.util.Map;
 
-/** DNS-01 mutations through Hetzner Cloud's RRSet API. */
+/**
+ * DNS-01 mutations through Hetzner Cloud's RRSet API, at the base URL and with the bearer the
+ * service hands in (qits-2617): the qits-egress gateway with the edge's own qits token, or — the
+ * seed edge only — api.hetzner.cloud with the Hetzner token. A refused call throws {@link
+ * HetznerApi#refusal}, which the certificate reconcile logs and retries.
+ */
 @RawHttpClient(
     reason =
-        "api.hetzner.cloud is the DNS provider API, not a qits service: no trace or caller header belongs on it")
+        "the request is bound for api.hetzner.cloud, the DNS provider API — directly or relayed by"
+            + " qits-egress, which reads only the bearer: no trace or caller header belongs on it")
 public final class HetznerDnsChallengeProvider implements DnsChallengeProvider {
 
   private final HetznerApi hetzner;
   private final ObjectMapper json;
   private final String zone;
 
-  public HetznerDnsChallengeProvider(String token, String zone) {
-    this(HetznerApi.defaultClient(), new ObjectMapper(), HetznerApi.DEFAULT_API, token, zone);
+  /**
+   * @param api the RRSet API's base, ending in {@code /v1/}
+   * @param bearer what that base accepts — see {@link HetznerBearer}
+   */
+  public HetznerDnsChallengeProvider(URI api, HetznerBearer bearer, String zone) {
+    this(HetznerApi.defaultClient(), new ObjectMapper(), api, bearer, zone);
   }
 
   HetznerDnsChallengeProvider(
-      HttpClient http, ObjectMapper json, URI api, String token, String zone) {
-    this.hetzner = new HetznerApi(http, json, api, token, zone);
+      HttpClient http, ObjectMapper json, URI api, HetznerBearer bearer, String zone) {
+    this.hetzner = new HetznerApi(http, json, api, bearer, zone);
     this.json = json;
     this.zone = hetzner.zone();
   }
@@ -105,8 +115,7 @@ public final class HetznerDnsChallengeProvider implements DnsChallengeProvider {
     if (response.statusCode() / 100 == 2 || (acceptMissing && response.statusCode() == 404)) {
       return response;
     }
-    throw new IllegalStateException(
-        "Hetzner DNS request failed with HTTP " + response.statusCode());
+    throw hetzner.refusal(method, path, response);
   }
 
   private String relativeName(String fqdn) {

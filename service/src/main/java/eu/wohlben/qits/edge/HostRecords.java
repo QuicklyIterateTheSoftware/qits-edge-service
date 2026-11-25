@@ -2,6 +2,7 @@ package eu.wohlben.qits.edge;
 
 import eu.wohlben.qits.edge.acme.AddressRecords;
 import eu.wohlben.qits.edge.acme.HetznerAddressRecords;
+import eu.wohlben.qits.edge.acme.HetznerBearer;
 import eu.wohlben.qits.edge.wireguard.PrivateEdgeAddressProjection;
 import io.quarkus.runtime.StartupEvent;
 import io.quarkus.scheduler.Scheduled;
@@ -82,10 +83,11 @@ import org.jboss.logging.Logger;
  * other unlabelled record are never touched; one INFO per boot names the remaining root wildcards
  * as no longer needed, and the owner decides.
  *
- * <p><b>Who writes.</b> The PUBLIC edge, and only while it holds a Hetzner token — the same token,
- * read the same way ({@link HetznerToken}), that its DNS-01 orders use, and independent of whether
- * ACME is enabled. The private edge holds no token and projects nothing, so it is inactive by
- * construction; either reason is said once at INFO.
+ * <p><b>Who writes.</b> The PUBLIC edge, independent of whether ACME is enabled, through the same
+ * base URL and bearer its DNS-01 orders use ({@link HetznerAccess}): the qits-egress gateway with
+ * the edge's own qits token, or — the seed edge only — api.hetzner.cloud with the Hetzner token
+ * (qits-2617). The private edge projects nothing, so it is inactive by construction, said once at
+ * INFO.
  *
  * <p><b>Nothing is deleted before a route table is loaded and the project projection is
  * authoritative.</b> A public edge that never received a table routes {@link PlatformApps} and
@@ -101,8 +103,8 @@ import org.jboss.logging.Logger;
  * project bootstrap once it is authoritative — and the {@link #scheduledReconcile 10-minute
  * backstop}. A Hetzner failure is a WARN with its status and body and is retried on the next
  * trigger; nothing here ever throws into routing or event consumption. Hetzner allows 3600 requests
- * an hour per token, so the owned set is listed once per pass and a name is looked up only when it
- * is missing from it.
+ * an hour per token — the gateway spends the same token for every caller — so the owned set is
+ * listed once per pass and a name is looked up only when it is missing from it.
  */
 @ApplicationScoped
 public class HostRecords {
@@ -139,13 +141,14 @@ public class HostRecords {
 
   /**
    * Everything a reconcile reads, behind one seam so it can be pinned without a boot. {@link
-   * #token()} may throw: an unreadable or empty secret file is a refusal, not an absence.
+   * #bearer()} may throw: an unreadable or empty secret file is a refusal.
    */
   interface Estate {
 
     ExposureClass exposure();
 
-    Optional<String> token() throws Exception;
+    /** The bearer for this pass — see {@link HetznerAccess#bearer()}. */
+    HetznerBearer bearer() throws Exception;
 
     /** The zone, {@code QITS_DOMAIN} normalised — the one {@code EdgeCertificateManager} uses. */
     String domain();
@@ -212,7 +215,7 @@ public class HostRecords {
   }
 
   private final Estate estate;
-  private final BiFunction<String, String, AddressRecords> zones;
+  private final BiFunction<HetznerBearer, String, AddressRecords> zones;
   private final Duration debounce;
   private final AtomicBoolean running = new AtomicBoolean();
   private final AtomicBoolean pending = new AtomicBoolean();
@@ -235,7 +238,7 @@ public class HostRecords {
   @Inject
   HostRecords(
       EdgeConfig config,
-      AcmeConfig acme,
+      HetznerAccess hetzner,
       EdgeRoutes routes,
       EdgeProjects projects,
       ProjectSansBootstrap projectSans,
@@ -248,8 +251,8 @@ public class HostRecords {
           }
 
           @Override
-          public Optional<String> token() throws Exception {
-            return HetznerToken.of(acme);
+          public HetznerBearer bearer() throws Exception {
+            return hetzner.bearer();
           }
 
           @Override
@@ -300,21 +303,21 @@ public class HostRecords {
             return config.dns().nodeAddress().orElse(List.of());
           }
         },
-        HetznerAddressRecords::new,
+        (bearer, zone) -> new HetznerAddressRecords(hetzner.api(), bearer, zone),
         DEBOUNCE);
   }
 
-  /** For a suite: the estate, the zone client per (token, zone), and the debounce window. */
-  HostRecords(Estate estate, BiFunction<String, String, AddressRecords> zones, Duration debounce) {
+  /** For a suite: the estate, the zone client per (bearer, zone), and the debounce window. */
+  HostRecords(
+      Estate estate, BiFunction<HetznerBearer, String, AddressRecords> zones, Duration debounce) {
     this.estate = estate;
     this.zones = zones;
     this.debounce = debounce;
   }
 
   /**
-   * One request at boot, which is what says at INFO why an edge is inactive; on a public edge with
-   * a token it is a seed pass until the projections are authoritative, and the bootstraps ask again
-   * then.
+   * One request at boot, which is what says at INFO why an edge is inactive; on a public edge it is
+   * a seed pass until the projections are authoritative, and the bootstraps ask again then.
    */
   void start(@Observes StartupEvent ignored) {
     requestReconcile();
@@ -388,14 +391,6 @@ public class HostRecords {
               + " edge, and only the public edge writes them");
       return;
     }
-    Optional<String> token = estate.token();
-    if (token.isEmpty()) {
-      note(
-          "edge",
-          "host records are inactive: no Hetzner token is configured"
-              + " (qits.edge.acme.hetzner-token or -file)");
-      return;
-    }
     String domain = estate.domain();
     if (domain == null || domain.isEmpty()) {
       note("edge", "host records are inactive: this deployment states no domain (QITS_DOMAIN)");
@@ -403,7 +398,7 @@ public class HostRecords {
     }
     notes.remove("edge");
     if (!estate.authoritative()) {
-      seed(token.orElseThrow(), domain);
+      seed(estate.bearer(), domain);
       return;
     }
     notes.remove("seed");
@@ -453,7 +448,7 @@ public class HostRecords {
                 LOG.warnf(
                     "host %s is outside the zone %s; no record is written for it",
                     outside, domain));
-    AddressRecords zone = zones.apply(token.orElseThrow(), domain);
+    AddressRecords zone = zones.apply(estate.bearer(), domain);
     apply(zone, plan, false);
     if (plan.publicActive()) {
       reportRootWildcards(zone);
@@ -466,7 +461,7 @@ public class HostRecords {
    * hand-made record migrated, because what else the zone should hold is not known yet; the full
    * pass takes over once both gates are up. The private half waits: its hosts come from the table.
    */
-  private void seed(String token, String domain) throws Exception {
+  private void seed(HetznerBearer bearer, String domain) throws Exception {
     List<String> node = nodeAddresses(estate.nodeAddress(), this::warnInvalid);
     if (node.isEmpty()) {
       // Not note(): a wait is a window, not a state worth a line, and the table store and the
@@ -491,7 +486,7 @@ public class HostRecords {
                 LOG.warnf(
                     "host %s is outside the zone %s; no record is written for it",
                     outside, domain));
-    apply(zones.apply(token, domain), plan, true);
+    apply(zones.apply(bearer, domain), plan, true);
   }
 
   /**

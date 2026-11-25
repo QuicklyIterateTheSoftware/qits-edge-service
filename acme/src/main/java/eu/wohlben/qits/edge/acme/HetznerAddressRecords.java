@@ -16,15 +16,17 @@ import java.util.stream.Collectors;
 
 /**
  * {@link AddressRecords} — A, AAAA and CNAME — through Hetzner Cloud's RRSet API, the same API and
- * bearer the DNS-01 challenge uses ({@link HetznerDnsChallengeProvider}).
+ * base URL and bearer the DNS-01 challenge uses ({@link HetznerDnsChallengeProvider}).
  *
- * <p>A refused call throws with the method, the path, the status and the response body cut to
- * {@link #BODY_LIMIT} characters — what Hetzner said is the diagnosis. The bearer is a header and
- * never part of either.
+ * <p>A refused call throws {@link HetznerApi#refusal}: the method, the path, who answered, the
+ * status and the response body cut to {@link #BODY_LIMIT} characters — what Hetzner, or the
+ * qits-egress gateway in front of it, said is the diagnosis. The bearer is a header and never part
+ * of either.
  */
 @RawHttpClient(
     reason =
-        "api.hetzner.cloud is the DNS provider API, not a qits service: no trace or caller header belongs on it")
+        "the request is bound for api.hetzner.cloud, the DNS provider API — directly or relayed by"
+            + " qits-egress, which reads only the bearer: no trace or caller header belongs on it")
 public final class HetznerAddressRecords implements AddressRecords {
 
   /**
@@ -38,19 +40,25 @@ public final class HetznerAddressRecords implements AddressRecords {
   static final String TYPE_FILTER =
       new TreeSet<>(TYPES).stream().map(type -> "type=" + type).collect(Collectors.joining("&"));
 
-  static final int BODY_LIMIT = 300;
+  static final int BODY_LIMIT = HetznerApi.BODY_LIMIT;
 
   private static final int PAGE_SIZE = 100;
 
   private final HetznerApi hetzner;
   private final ObjectMapper json;
 
-  public HetznerAddressRecords(String token, String zone) {
-    this(HetznerApi.defaultClient(), new ObjectMapper(), HetznerApi.DEFAULT_API, token, zone);
+  /**
+   * @param api the RRSet API's base, ending in {@code /v1/}: the qits-egress gateway's {@code
+   *     hetzner} route or api.hetzner.cloud itself
+   * @param bearer what that base accepts — see {@link HetznerBearer}
+   */
+  public HetznerAddressRecords(URI api, HetznerBearer bearer, String zone) {
+    this(HetznerApi.defaultClient(), new ObjectMapper(), api, bearer, zone);
   }
 
-  HetznerAddressRecords(HttpClient http, ObjectMapper json, URI api, String token, String zone) {
-    this.hetzner = new HetznerApi(http, json, api, token, zone);
+  HetznerAddressRecords(
+      HttpClient http, ObjectMapper json, URI api, HetznerBearer bearer, String zone) {
+    this.hetzner = new HetznerApi(http, json, api, bearer, zone);
     this.json = json;
   }
 
@@ -169,23 +177,7 @@ public final class HetznerAddressRecords implements AddressRecords {
     if (status / 100 == 2 || (acceptMissing && status == 404)) {
       return response;
     }
-    throw new IllegalStateException(
-        "Hetzner DNS "
-            + method
-            + " "
-            + path
-            + " failed with HTTP "
-            + status
-            + ": "
-            + truncated(response.body()));
-  }
-
-  static String truncated(String body) {
-    if (body == null || body.isBlank()) {
-      return "(empty body)";
-    }
-    String flat = body.strip().replaceAll("\\s+", " ");
-    return flat.length() <= BODY_LIMIT ? flat : flat.substring(0, BODY_LIMIT) + "...";
+    throw hetzner.refusal(method, path, response);
   }
 
   private static List<RrSet> rrsets(JsonNode body) {

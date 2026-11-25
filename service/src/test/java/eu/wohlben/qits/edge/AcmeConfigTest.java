@@ -102,6 +102,6 @@ class AcmeConfigTest {
             .withConverter(Duration.class, 200, new DurationConverter())
             .build();
     return new EdgeCertificateManager(
-        of(Map.of()), config.getConfigMapping(EdgeConfig.class), null, null);
+        of(Map.of()), config.getConfigMapping(EdgeConfig.class), null, null, null);
   }
 }

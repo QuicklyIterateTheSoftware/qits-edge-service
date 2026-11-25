@@ -34,7 +34,26 @@ public interface AcmeConfig {
 
   Optional<String> email();
 
+  /**
+   * The Hetzner token by value — the SEED edge's direct mode only (qits-2617), and only where no
+   * {@link #hetznerTokenFile()} is set. Absent is the ordinary deployed edge: its DNS calls go
+   * through qits-egress with its own qits bearer, and qits-egress holds the token. See {@link
+   * HetznerAccess}.
+   */
   Optional<String> hetznerToken();
+
+  /**
+   * The base of Hetzner's RRSet API, ending in {@code /v1/} (qits-2617).
+   *
+   * <p>By default the qits-egress gateway's {@code hetzner} route on qits-net, which forwards
+   * {@code /hetzner/v1/zones/...} to {@code https://api.hetzner.cloud/v1/zones/...} and injects the
+   * Hetzner token (the grant is this repository's {@code .config/qits/egress.yml}). The seed edge a
+   * bootstrap starts is given {@code QITS_EDGE_ACME_HETZNER_API_URL=https://api.hetzner.cloud/v1/}
+   * together with its token file, because qits-egress does not exist yet when it needs its first
+   * certificate.
+   */
+  @WithDefault("http://${QITS_ENVIRONMENT:dev}-qits-egress:8081/hetzner/v1/")
+  String hetznerApiUrl();
 
   /**
    * The names this certificate must carry beyond the wildcard set the edge derives for itself.
@@ -75,7 +94,8 @@ public interface AcmeConfig {
   Duration reconcileDebounce();
 
   /**
-   * Docker/Kubernetes secret file; preferred over exposing the token in the process environment.
+   * The Hetzner token as a Docker/Kubernetes secret file; wins over {@link #hetznerToken()}, and an
+   * empty file is a refusal. The seed edge's direct mode only — see {@link #hetznerToken()}.
    */
   Optional<Path> hetznerTokenFile();
 

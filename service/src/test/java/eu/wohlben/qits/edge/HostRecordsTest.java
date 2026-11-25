@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import eu.wohlben.qits.edge.acme.AddressRecords;
+import eu.wohlben.qits.edge.acme.HetznerBearer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -104,7 +105,8 @@ class HostRecordsTest {
   static final class Estate implements HostRecords.Estate {
 
     ExposureClass exposure = ExposureClass.PUBLIC;
-    Optional<String> token = Optional.of("not-a-real-token");
+    HetznerBearer bearer = () -> "not-a-real-token";
+    Exception refusal;
     boolean authoritative = true;
     Optional<String> tunnel = Optional.of(TUNNEL);
     List<String> node = List.of();
@@ -130,8 +132,11 @@ class HostRecordsTest {
     }
 
     @Override
-    public Optional<String> token() {
-      return token;
+    public HetznerBearer bearer() throws Exception {
+      if (refusal != null) {
+        throw refusal;
+      }
+      return bearer;
     }
 
     @Override
@@ -294,14 +299,37 @@ class HostRecordsTest {
   }
 
   @Test
-  void anEdgeWithoutAHetznerTokenIsInactive() throws Exception {
-    estate.token = Optional.empty();
-    estate.node = List.of(NODE_IP);
+  void anEdgeWithoutAHetznerTokenStillWritesThroughTheGateway() throws Exception {
+    // qits-2617: the deployed edge holds no Hetzner token; its bearer is its own qits token and
+    // qits-egress holds the Hetzner one. No token is no longer a reason to do nothing.
+    HetznerBearer gateway = () -> "qits-jwt";
+    estate.bearer = gateway;
     estate.withdraw("dev", "qits-projects", "projects", "private");
+    List<HetznerBearer> handed = new ArrayList<>();
+    HostRecords records =
+        new HostRecords(
+            estate,
+            (bearer, domain) -> {
+              handed.add(bearer);
+              return zone;
+            },
+            Duration.ofDays(1));
 
     records.reconcile();
 
+    assertEquals(List.of(gateway), handed);
+    assertEquals(List.of("create projects.qits A 100.96.0.1"), zone.writes);
+  }
+
+  @Test
+  void anUnreadableBearerIsARefusalAndWritesNothing() throws Exception {
+    // An empty token file is refused in HetznerAccess; here it arrives as the estate throwing.
+    estate.refusal = new IllegalStateException("The configured Hetzner token secret file is empty");
+    estate.withdraw("dev", "qits-projects", "projects", "private");
+
+    org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, records::reconcile);
     assertEquals(List.of(), zonesAskedFor);
+    assertEquals(List.of(), zone.writes);
   }
 
   @Test

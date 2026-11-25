@@ -4,6 +4,7 @@ import eu.wohlben.qits.edge.acme.AcmeCertificateIssuer;
 import eu.wohlben.qits.edge.acme.AuthoritativeDnsPropagation;
 import eu.wohlben.qits.edge.acme.CertificateNames;
 import eu.wohlben.qits.edge.acme.CertificateRequest;
+import eu.wohlben.qits.edge.acme.HetznerBearer;
 import eu.wohlben.qits.edge.acme.HetznerDnsChallengeProvider;
 import eu.wohlben.qits.edge.acme.PemCertificateStore;
 import io.quarkus.runtime.StartupEvent;
@@ -60,14 +61,21 @@ public class EdgeCertificateManager {
   private final EdgeConfig edge;
   private final AcmeLease lease;
   private final EdgeProjects projects;
+  private final HetznerAccess hetzner;
   private final AtomicBoolean running = new AtomicBoolean();
   private final AtomicBoolean pending = new AtomicBoolean();
 
-  EdgeCertificateManager(AcmeConfig acme, EdgeConfig edge, AcmeLease lease, EdgeProjects projects) {
+  EdgeCertificateManager(
+      AcmeConfig acme,
+      EdgeConfig edge,
+      AcmeLease lease,
+      EdgeProjects projects,
+      HetznerAccess hetzner) {
     this.acme = acme;
     this.edge = edge;
     this.lease = lease;
     this.projects = projects;
+    this.hetzner = hetzner;
   }
 
   void start(@Observes StartupEvent ignored) {
@@ -200,7 +208,9 @@ public class EdgeCertificateManager {
       throw new IllegalStateException(
           "ACME is on but this deployment states no domain: set QITS_DOMAIN.");
     }
-    String token = hetznerToken();
+    // Decided per pass: an empty token file refuses here, before anything is ordered. No token is
+    // not a refusal — the DNS-01 calls then go through qits-egress with the edge's own bearer.
+    HetznerBearer bearer = hetzner.bearer();
     CertificateNames.Names derived =
         CertificateNames.capped(
             domain,
@@ -271,7 +281,7 @@ public class EdgeCertificateManager {
       String email = acme.email().map(String::strip).orElse("hostmaster@" + domain);
       var issuer =
           new AcmeCertificateIssuer(
-              new HetznerDnsChallengeProvider(token, domain),
+              new HetznerDnsChallengeProvider(hetzner.api(), bearer, domain),
               new AuthoritativeDnsPropagation(),
               store);
       issuer.issue(
@@ -285,11 +295,5 @@ public class EdgeCertificateManager {
     } finally {
       lease.release();
     }
-  }
-
-  private String hetznerToken() throws Exception {
-    return HetznerToken.of(acme)
-        .orElseThrow(
-            () -> new IllegalStateException("ACME is enabled but the Hetzner token is absent"));
   }
 }

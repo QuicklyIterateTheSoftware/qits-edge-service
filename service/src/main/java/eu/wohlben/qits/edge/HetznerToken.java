@@ -6,9 +6,14 @@ import java.nio.file.Path;
 import java.util.Optional;
 
 /**
- * The one reading of the Hetzner DNS token, for both of its users: the certificate's DNS-01 orders
- * ({@link EdgeCertificateManager}) and the zone's address records ({@link HostRecords}, qits-2273
- * and qits-2292).
+ * The one reading of the Hetzner DNS token, which {@link HetznerAccess} turns into the bearer for
+ * both of its users: the certificate's DNS-01 orders ({@link EdgeCertificateManager}) and the
+ * zone's address records ({@link HostRecords}, qits-2273 and qits-2292).
+ *
+ * <p><b>Only the SEED edge has one</b> (qits-2617): the edge a bootstrap starts from its stack
+ * file, which calls api.hetzner.cloud directly because qits-egress does not exist yet. The deployed
+ * edge has none, and its DNS calls go through qits-egress with its own qits bearer. Absent is
+ * therefore the ordinary answer and never a refusal.
  *
  * <p>The secret FILE wins over the value: when {@link AcmeConfig#hetznerTokenFile()} is set it is
  * read, stripped, and an empty file is a refusal rather than a fall-back to {@link

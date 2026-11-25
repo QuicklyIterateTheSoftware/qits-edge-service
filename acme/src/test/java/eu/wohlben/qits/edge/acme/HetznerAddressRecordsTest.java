@@ -271,6 +271,75 @@ class HetznerAddressRecordsTest {
   }
 
   @Test
+  void anEgressRefusalNamesTheGatewayItsStatusAndItsBody() throws Exception {
+    // qits-egress answers a call it will not relay itself — 403 without a grant, 502 without the
+    // secret — and its body says which; that is what the WARN must carry (qits-2617).
+    var records = serve(request -> new Response(502, "{\"error\":\"secret not configured\"}"));
+
+    assertThatThrownBy(() -> records.owned())
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("via 127.0.0.1:" + server.getAddress().getPort())
+        .hasMessageContaining("HTTP 502: {\"error\":\"secret not configured\"}")
+        .hasMessageNotContaining(TOKEN);
+  }
+
+  @Test
+  void throughTheGatewayEveryCallCarriesTheQitsBearerUnderTheHetznerRoute() throws Exception {
+    // The deployed edge's base is http://<env>-qits-egress:8081/hetzner/v1/ and its bearer the
+    // edge's own qits token; the gateway maps /hetzner/v1/zones/... onto api.hetzner.cloud/v1/...
+    List<String> authorizations = new ArrayList<>();
+    server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/",
+        exchange -> {
+          synchronized (requests) {
+            requests.add(
+                new Request(exchange.getRequestMethod(), exchange.getRequestURI().toString(), ""));
+            authorizations.add(exchange.getRequestHeaders().getFirst("Authorization"));
+          }
+          exchange.getRequestBody().readAllBytes();
+          exchange.sendResponseHeaders(201, -1);
+          exchange.close();
+        });
+    server.start();
+    // No trailing slash, as a hand-set value might read: the base still keeps its last segment.
+    URI gateway = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/hetzner/v1");
+    int[] minted = {0};
+    var records =
+        new HetznerAddressRecords(
+            HttpClient.newHttpClient(),
+            new ObjectMapper(),
+            gateway,
+            () -> "qits-jwt-" + ++minted[0],
+            "wohlben.eu");
+
+    records.create("projects.qits", "A", List.of("100.96.0.1"), "private");
+    records.delete("projects.qits", "A");
+
+    assertThat(requests)
+        .extracting(Request::method, Request::path)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple("POST", "/hetzner/v1/zones/wohlben.eu/rrsets"),
+            org.assertj.core.groups.Tuple.tuple(
+                "DELETE", "/hetzner/v1/zones/wohlben.eu/rrsets/projects.qits/A"));
+    // Asked per request, so a renewed token is used the moment it exists.
+    assertThat(authorizations).containsExactly("Bearer qits-jwt-1", "Bearer qits-jwt-2");
+  }
+
+  @Test
+  void aCallWithoutABearerIsRefusedBeforeItIsSent() throws Exception {
+    serve(request -> new Response(200, "{}"));
+    URI api = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/");
+    var records =
+        new HetznerAddressRecords(
+            HttpClient.newHttpClient(), new ObjectMapper(), api, () -> " ", "wohlben.eu");
+
+    assertThatThrownBy(() -> records.delete("projects.qits", "A"))
+        .hasMessageContaining("no bearer");
+    assertThat(requests).isEmpty();
+  }
+
+  @Test
   void aMissingRrsetOnAnyOtherCallIsARefusal() throws Exception {
     var records = serve(request -> new Response(404, ""));
 
@@ -312,7 +381,7 @@ class HetznerAddressRecordsTest {
     server.start();
     URI api = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/v1/");
     return new HetznerAddressRecords(
-        HttpClient.newHttpClient(), new ObjectMapper(), api, TOKEN, "wohlben.eu");
+        HttpClient.newHttpClient(), new ObjectMapper(), api, () -> TOKEN, "wohlben.eu");
   }
 
   private record Request(String method, String path, String body) {}

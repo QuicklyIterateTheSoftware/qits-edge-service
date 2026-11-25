@@ -1,0 +1,18 @@
+# Routes qits-edge sends through qits-egress (qits-2523). Each route is a grant:
+# (application:qits-edge, route, methods). The secret's VALUE never appears here: it is the
+# qits-egress setting QITS_EGRESS_SECRET_HETZNER_DNS, and the gateway injects it as the bearer.
+#
+# hetzner: the DNS-01 TXT records (HetznerDnsChallengeProvider) and the A/AAAA/CNAME host records
+# (HetznerAddressRecords), both on zones/<zone>/rrsets. The edge dials
+# http://<env>-qits-egress:8081/hetzner/v1/..., which the gateway forwards to
+# https://api.hetzner.cloud/v1/... — so the target carries no /v1. The methods are exactly the ones
+# HetznerApi sends: GET (find, list, get), POST (create, add/remove/set_records, change_ttl),
+# PUT (labels) and DELETE (an RRSet). Only the deployed edge uses the route; the seed edge a
+# bootstrap starts calls api.hetzner.cloud directly with its own swarm secret.
+version: 1
+routes:
+  - name: hetzner
+    target: https://api.hetzner.cloud
+    secret: HETZNER_DNS
+    inject: bearer
+    methods: [GET, POST, PUT, DELETE]

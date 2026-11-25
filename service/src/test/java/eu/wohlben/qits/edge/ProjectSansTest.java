@@ -59,7 +59,7 @@ class ProjectSansTest {
     final AtomicInteger requests = new AtomicInteger();
 
     RecordingCertificates() {
-      super(null, null, null, null);
+      super(null, null, null, null, null);
     }
 
     @Override

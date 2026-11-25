@@ -62,7 +62,7 @@ class EdgeCertificateDebounceTest {
     volatile boolean holdTheOrderOpen;
 
     CountingManager(AcmeConfig acme) {
-      super(acme, null, null, null);
+      super(acme, null, null, null, null);
     }
 
     /** Counted and then DELEGATED: the guard, and losing to it, are still the real ones. */
