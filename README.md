@@ -606,9 +606,9 @@ The DNS-01 TXT at `_acme-challenge.<name>` is a different name and sits beside a
 **The node address is the bootstrap's input.** `QITS_EDGE_DNS_NODE_ADDRESS`
 (`qits.edge.dns.node-address`) is a comma-separated list of IPv4 and/or IPv6 literals —
 `46.224.171.33` on the estate — and `qits-bootstrap-cli` sets it from its `--public-ip` through the
-deployment settings, beside the Hetzner token (qits-2293). It is never looked up or derived. So a new
-domain needs exactly two things: the Hetzner token and the node address; the edge writes everything
-else. Without an address the edge writes and deletes no public record and says so once at INFO; the
+deployment settings (qits-2293). It is never looked up or derived. So a new domain needs exactly two
+things: the Hetzner token (held by qits-egress, or the seed edge's swarm secret on a cold boot) and the
+node address; the edge writes everything else. Without an address the edge writes and deletes no public record and says so once at INFO; the
 private records do not need it. Likewise without a tunnel address the private records are neither
 written nor deleted, and the public ones still are. A project with the slug `node` would make its
 door a CNAME to itself, so while one exists no node record and no CNAME is written, with a WARN.
@@ -641,10 +641,11 @@ made — is a WARN and the name is skipped. The migration below is the one excep
 - `*`, `*.dev`, `*.*`, `*.*.*`, `*.*.*.*` and every other unlabelled record are never touched. One
   INFO per boot names the root wildcards still there as no longer needed; the owner decides.
 
-**Who writes.** The PUBLIC edge (`qits-edge`), with the Hetzner token its DNS-01 orders already use
-(`qits.edge.acme.hetzner-token` / `-file`, the file winning) — whether or not ACME is enabled.
-`HostRecords` is inactive, and says why once at INFO, on the private edge and on an edge with no
-token. The private edge's tunnel responder (`TunnelDns`) is unrelated and unchanged.
+**Who writes.** The PUBLIC edge (`qits-edge`), through the same base URL and bearer its DNS-01 orders
+use (`HetznerAccess`, see [Who holds the Hetzner token](#who-holds-the-hetzner-token-qits-2617)) —
+whether or not ACME is enabled. `HostRecords` is inactive, and says why once at INFO, on the private
+edge; an edge with no Hetzner token is not inactive, it writes through qits-egress. The private
+edge's tunnel responder (`TunnelDns`) is unrelated and unchanged.
 
 **When.** A debounced reconcile (5 s) is requested whenever a route table is served — the cached
 one at boot and every newer one stored — when a new tunnel address is announced, and once the
@@ -656,8 +657,8 @@ deletes nothing, switches no type and skips a hand-made record with the same WAR
 bootstrap's wait for `registry.qits.<domain>`, which runs before any deploy pushes a table, can pass;
 it logs `host records seeded: …`. A
 reconcile that changed something logs one INFO line, `host records reconciled: created …, set …,
-labelled …, switched …, deleted …`; a Hetzner failure is a WARN with its status and body (the token
-is never logged) and is retried on the next trigger — routing and event consumption never see it.
+labelled …, switched …, deleted …`; a Hetzner or qits-egress failure is a WARN with the authority that
+answered, its status and its body (no bearer is ever logged) and is retried on the next trigger — routing and event consumption never see it.
 
 **What it means for clients.**
 
@@ -1388,13 +1389,14 @@ reconcile to say so. The apex, `*.<domain>`, the environment tiers and the addit
 never dropped — when they alone exceed 100 the derivation still throws, because that is a
 deployment to correct rather than a projection that grew. The manager still warns at 90.
 
-The manager writes short-lived `_acme-challenge` TXT values through Hetzner's Cloud API, waits until
+The manager writes short-lived `_acme-challenge` TXT values through Hetzner's Cloud API — through
+the qits-egress gateway on the deployed edge, directly on the seed edge (see below) — waits until
 both Cloudflare and Google public DNS-over-HTTPS resolvers observe them, and removes only the value
 it created. ACME account state and certificates persist on the TLS volume. Successful certificates
 are installed in immutable version directories and an atomic `current` symlink switch lets Quarkus'
 TLS registry reload them without restarting the edge.
 
-The same token also writes every public name and the private hosts' `A` records (labelled
+The same API path also writes every public name and the private hosts' `A` records (labelled
 `qits-exposure=public` / `private`), and that does not depend on `QITS_EDGE_ACME_ENABLED` — see
 [Host records in public DNS](#host-records-in-public-dns-qits-2273-qits-2292).
 
@@ -1409,11 +1411,48 @@ refuses to start when the PEM files cannot be read, so a variant without a certi
 must override the key store too. `deployments.yml` declares the same five values as
 `image_defaults:`, so the deployer retires any stored setting that merely restates one, once a
 deployment is ACTIVE; on 2026-11-10 that retired the five rows imported from qits-configuration,
-leaving `QITS_EDGE_ACME_EMAIL` and the Hetzner token as the edge's only settings. Change a default
-in `application.properties` and its `image_defaults` pair together. A non-expiring production certificate is never replaced by
-staging. `QITS_DNS_HETZNER_TOKEN` is a
-secret and must be supplied by deployment configuration, never committed or logged. Replicas use a
-database lease so only one of them can place an order or renew at a time.
+leaving `QITS_EDGE_ACME_EMAIL` and the Hetzner token as the edge's only settings — and the token has
+since moved to qits-egress (qits-2617, below). Change a default in `application.properties` and its
+`image_defaults` pair together. A non-expiring production certificate is never replaced by staging.
+Replicas use a database lease so only one of them can place an order or renew at a time.
+
+#### Who holds the Hetzner token (qits-2617)
+
+Every Hetzner call — the DNS-01 TXT (`HetznerDnsChallengeProvider`) and the host records
+(`HetznerAddressRecords`), all on `zones/<zone>/rrsets` — goes to
+`qits.edge.acme.hetzner-api-url` (`QITS_EDGE_ACME_HETZNER_API_URL`) with the bearer `HetznerAccess`
+decides per pass:
+
+| edge | base URL | bearer | who holds the Hetzner token |
+| --- | --- | --- | --- |
+| **deployed** `qits-edge` | default `http://${QITS_ENVIRONMENT}-qits-egress:8081/hetzner/v1/` | the edge's own `qits` oidc-client access token (sub `<env>-qits-edge`), kept until a minute before it expires | qits-egress only: its secret setting `QITS_EGRESS_SECRET_HETZNER_DNS` |
+| **seed** edge of a bootstrap stack | `https://api.hetzner.cloud/v1/`, set by the stack | the Hetzner token from `QITS_EDGE_ACME_HETZNER_TOKEN_FILE=/run/secrets/qits-dns-hetzner-token` | the bootstrap's swarm secret |
+
+The gateway authenticates the edge from its bearer, strips it, injects the Hetzner token for the
+`hetzner` route and forwards `/hetzner/v1/zones/…` to `https://api.hetzner.cloud/v1/zones/…`. The
+grant is this repository's `.config/qits/egress.yml`: route `hetzner`, target
+`https://api.hetzner.cloud`, secret `HETZNER_DNS`, inject `bearer`, methods `GET, POST, PUT, DELETE`
+— exactly the methods `HetznerApi` sends. A new Hetzner call with another method needs that list
+widened in the same change.
+
+**Direct mode is the seed edge's, and only because of the cold boot.** The seed edge needs a real
+certificate before anything can be pulled or deployed, and qits-egress is deployed only by the
+train through that edge; so the stack keeps a token there (owner decision on qits-2523). The mode is
+chosen by whether a token is configured: `QITS_EDGE_ACME_HETZNER_TOKEN_FILE` (wins, read on every
+pass) or `QITS_EDGE_ACME_HETZNER_TOKEN` / `QITS_DNS_HETZNER_TOKEN` by value. No token is the ordinary
+deployed edge and is **not** a refusal — ACME being enabled no longer requires one. An EMPTY token
+file still is: a mounted secret that came up empty is a broken deployment, and falling quietly to the
+gateway would hide it. The token goes only where `QITS_EDGE_ACME_HETZNER_API_URL` points, so a
+configured token with the default URL would send it to the gateway, which refuses it (no qits
+identity) — direct mode needs both keys, as the seed stack sets them.
+
+**When the gateway refuses.** qits-egress answers 403 for a call without a grant (the edge's
+`egress.yml` not yet in the deployer's table), 502 `secret not configured` before
+`QITS_EGRESS_SECRET_HETZNER_DNS` exists, 503 without a grant table; a 4xx from Hetzner comes back
+through it unchanged. Each is thrown with the method, the path, the authority that answered, the
+status and the body (no secret in either), and handled exactly like a Hetzner error: the certificate
+reconcile logs it at ERROR and keeps the current certificate until its next run, `HostRecords` at
+WARN until its next trigger.
 
 ### Deployment
 
@@ -1585,6 +1624,9 @@ bug where a WebSocket upgrade only survives the first application start in a JVM
 this file that names it is history.
 
 ### The Hetzner token, deployer-era (2026-08-31)
+
+*History since qits-2617: the deployed edge holds no Hetzner token any more; it calls Hetzner
+through qits-egress, which holds it. See [Who holds the Hetzner token](#who-holds-the-hetzner-token-qits-2617).*
 
 The deployer-managed edge container has no swarm secrets — qits-deployments'
 extras grammar carries env, mounts, publishes, aliases and groups, and nothing

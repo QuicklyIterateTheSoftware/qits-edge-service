@@ -35,6 +35,13 @@ application: qits-edge
 # that is idp's public name, served by this very process, so the edge dials idp on its internal
 # alias instead (qits.edge.idp.dial-url, qits-1403).
 #
+# The same client is the edge's identity at qits-egress (qits-2617): its Hetzner DNS calls (DNS-01 and
+# host records) go to http://<env>-qits-egress:8081/hetzner/v1/ with this client's token, under the
+# grant in .config/qits/egress.yml. The deployed edge therefore holds NO Hetzner token and none is a
+# setting of it: the token is qits-egress's secret setting QITS_EGRESS_SECRET_HETZNER_DNS. Only the
+# bootstrap's seed edge, which runs before qits-egress exists, still gets one (a swarm secret, with
+# QITS_EDGE_ACME_HETZNER_API_URL=https://api.hetzner.cloud/v1/), from the bootstrap's stack file.
+#
 # Ticket qits-162, epic qits-540 contract C3.
 resources: postgresql:edge:qits_edge, postgresql:eventstream:qits_edge_eventstream, idp:client
 
