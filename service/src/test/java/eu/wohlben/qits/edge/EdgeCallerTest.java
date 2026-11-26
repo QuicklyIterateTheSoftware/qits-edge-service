@@ -279,6 +279,64 @@ class EdgeCallerTest {
     assertFalse(browser.contains("X-Qits-Roles"));
   }
 
+  // --- the chain headers (qits-2542) ----------------------------------------------------------
+
+  private static final String ORIGIN = "4bf92f3577b34da6a3ce929d0e0e4736";
+
+  /** A chain's two headers as a service stamps them, spelled in mixed case like a client might. */
+  private static MultiMap chainHeaders() {
+    MultiMap headers = MultiMap.caseInsensitiveMultiMap();
+    headers.add("x-qits-origin-trace-id", ORIGIN);
+    headers.add("X-QITS-ON-BEHALF-OF", "9b2c6a1e-6f0e-4c4b-9a55-0a4d6f1c2b3d");
+    return headers;
+  }
+
+  @Test
+  void aServiceBearersChainHeadersReachTheUpstreamAsSent() {
+    MultiMap headers = chainHeaders();
+
+    EdgeHeaders.applyIdentity(headers, null, true);
+
+    assertEquals(List.of(ORIGIN), headers.getAll(EdgeHeaders.ORIGIN_TRACE_ID));
+    assertEquals(
+        List.of("9b2c6a1e-6f0e-4c4b-9a55-0a4d6f1c2b3d"), headers.getAll(EdgeHeaders.ON_BEHALF_OF));
+  }
+
+  @Test
+  void everyOtherCallersChainHeadersAreStripped() {
+    // A browser session, a person's JWT, an opaque token and an agent's token all arrive here with
+    // serviceBearer false — the router asks EdgeAuth.isServiceBearer, pinned below — so none of
+    // them may state an origin or the user a chain acts for.
+    for (String caller : new String[] {"qits-landing", null}) {
+      MultiMap headers = chainHeaders();
+
+      EdgeHeaders.applyIdentity(headers, caller, false);
+
+      assertFalse(headers.contains(EdgeHeaders.ORIGIN_TRACE_ID), "origin for " + caller);
+      assertFalse(headers.contains(EdgeHeaders.ON_BEHALF_OF), "on-behalf-of for " + caller);
+    }
+  }
+
+  @Test
+  void aSessionAPersonsJwtAnOpaqueTokenAndAnAgentAreNoServiceBearers() {
+    String issuer = "https://idp.qits." + DOMAIN;
+    List<String> platform = List.of(PlatformApps.PLATFORM_AUDIENCE);
+    // The credentials that must keep the strip, each asked the way EdgeRouter asks.
+    assertFalse(EdgeAuth.isServiceBearer(null), "a browser session presents no bearer");
+    assertFalse(
+        EdgeAuth.isServiceBearer(
+            "Bearer " + TestTokens.withRoles(issuer, platform, List.of("qits:user"))),
+        "a person's JWT");
+    assertFalse(
+        EdgeAuth.isServiceBearer(
+            "Bearer " + TokenValue.PREFIX + "abcdefghijklmnopqrstuvwxyz0123456789"),
+        "an opaque token");
+    assertFalse(
+        EdgeAuth.isServiceBearer(
+            "Bearer " + TestTokens.withRoles(issuer, platform, List.of("qits:agent"))),
+        "an agent's token");
+  }
+
   @Test
   void onlyAPresentedJwtWithTheSystemRoleIsAServiceBearer() {
     String issuer = "https://idp.qits." + DOMAIN;

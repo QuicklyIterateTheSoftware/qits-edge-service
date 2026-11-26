@@ -693,8 +693,8 @@ answered, its status and its body (no bearer is ever logged) and is retried on t
   `X-Qits-User`, `X-Qits-User-Id` or `X-Qits-Roles`, for a session or a bearer. A service
   authenticates only the bearer it is sent and reads nobody from a header. What the edge does write
   after the strip is attribution: `X-Qits-Caller` for a platform page, and a `qits:system` bearer's
-  own `X-Qits-Causation-Id`, `X-Qits-Caller` and `X-Qits-Environment` (see *A service's own name,
-  gated per request*). `Authorization`, `Cookie` and every custom header pass through untouched.
+  own `X-Qits-Causation-Id`, `X-Qits-Caller`, `X-Qits-Environment`, `X-Qits-Origin-Trace-Id` and
+  `X-Qits-On-Behalf-Of` (see *A service's own name, gated per request*). `Authorization`, `Cookie` and every custom header pass through untouched.
 - **No UI, no SPA, no landing page, no `/api`.** The paths this process answers are `/q` (on its own
   names only),
   `/main-navigation`, `/upstream-pools`, and, on a configured application vhost only, `/token`. It knows nothing about
@@ -979,7 +979,7 @@ itself (a `client_credentials` pair at `/idp/token`, its own Basic at the intros
 own Bearer on reads), so the edge checks, spends, mints and rewrites nothing there and refuses
 nothing; spending a Basic pair and forwarding the minted JWT instead would break every grant made on
 idp's public name. The `X-Qits-*` namespace is still stripped, attribution included: keeping a
-service bearer's three headers would need the credential checked. This holds whether the name came
+service bearer's attribution headers would need the credential checked. This holds whether the name came
 from the route table or from `PlatformApps`, with a table and without one. `PlatformApps` states idp's own route, `/idp`, so that "on the
 name that owns them" holds without a table; once idp is in one, its published `idp` host must point
 at the same `<env>-qits-idp:8080` or the table is refused, as for `registry`.
@@ -1211,7 +1211,18 @@ dropped first, whatever the outcome, and no identity header is written back on a
    `qits:system`, its `X-Qits-Causation-Id`, `X-Qits-Caller` and `X-Qits-Environment` pass as sent,
    so a service's call to a peer's public name traces like its call on qits-net did. Nothing else
    qualifies — a client secret, a git `oauth2:` pair, an opaque `qits_tok_` token (whatever JWT idp
-   stands it for) and a JWT without the role all keep the strip;
+   stands it for) and a JWT without the role all keep the strip.
+
+   **The two call-chain headers pass on the same terms** (qits-2542): `X-Qits-Origin-Trace-Id`, the
+   trace id of the chain's first call, and `X-Qits-On-Behalf-Of`, the bearer `sub` of the person or
+   agent the chain acts for. Services reach their peers through these public names, so without them
+   in the kept list every hop would start a new chain and lose its user — and qits-toggles freezes an
+   evaluation per origin and matches its user rule on that user. `X-Qits-On-Behalf-Of` names a user,
+   but it is **not an identity the edge asserts**: it is a service bearer's own statement, which the
+   receiving integration library honours only because the bearer carrying it is a plain `qits:system`
+   client. Keeping it for nobody else is the first wall against impersonation — a browser, a
+   person's CLI or an agent's token can never get either header past the edge; the receiver's own
+   rule is the second wall, for any path that does not cross the edge;
 2. otherwise, with the session gate on, a `qits-session` **cookie** is introspected at idp and a
    live one is let through — a **gate, not an identity**: nothing about the person is written
    upstream. It is what keeps full pages such as a docs bundle or swagger-ui private. **The cookie

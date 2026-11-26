@@ -94,15 +94,40 @@ final class EdgeHeaders implements ProxyInterceptor {
   static final String ENVIRONMENT = RESERVED_PREFIX + "Environment";
 
   /**
+   * The trace id of the FIRST call of a call chain — 32 lowercase hex, the W3C trace id — which
+   * every later hop of that chain carries unchanged (qits-2542). Set by the integration library of
+   * the service that started the chain and inherited by every call it makes; qits-toggles freezes
+   * an evaluation per value of it, so every hop of one request sees the same answer.
+   */
+  static final String ORIGIN_TRACE_ID = RESERVED_PREFIX + "Origin-Trace-Id";
+
+  /**
+   * The bearer {@code sub} of the person or agent a call chain acts for, stated by the service that
+   * received that person's or agent's own call and passed on by every later hop (qits-2542). It is
+   * a service's statement, not an identity this process asserts — see {@link #SERVICE_ATTRIBUTION}.
+   */
+  static final String ON_BEHALF_OF = RESERVED_PREFIX + "On-Behalf-Of";
+
+  /**
    * The attribution a SERVICE states about its own call, kept as sent when — and only when — the
    * request carries an accepted {@code qits:system} JWT of its own (qits-1403). Every service
    * stamps these on its outbound calls, and once those calls reach a peer through this process
    * rather than on qits-net the strip would erase them: a trace would lose who asked and why. A
    * service bearer is a credential idp minted for a platform service, checked here in full, so its
-   * statement about itself is as good as the one it made on qits-net. No identity header is ever in
-   * this list: a machine's identity is its token, and the receiving service reads it there.
+   * statement about itself is as good as the one it made on qits-net.
+   *
+   * <p><b>The two chain headers</b> (qits-2542), {@link #ORIGIN_TRACE_ID} and {@link
+   * #ON_BEHALF_OF}, are kept on the same terms. {@code X-Qits-On-Behalf-Of} names a user, but it is
+   * not an identity this process asserts and no service authenticates anybody by it: it is a
+   * service bearer's statement of whom its chain acts for, which a receiver honours only because
+   * the bearer carrying it is a plain {@code qits:system} client. Keeping it for nobody else is the
+   * first wall of the anti-impersonation rule — a browser, a person's CLI or an agent's token never
+   * gets either header past this process; the receiving integration library's own rule is the
+   * second, for any path that skips the edge. The edge still writes no identity of its own: a
+   * machine's identity is its token, and the receiving service reads it there.
    */
-  static final List<String> SERVICE_ATTRIBUTION = List.of(CAUSATION_ID, CALLER, ENVIRONMENT);
+  static final List<String> SERVICE_ATTRIBUTION =
+      List.of(CAUSATION_ID, CALLER, ENVIRONMENT, ORIGIN_TRACE_ID, ON_BEHALF_OF);
 
   /**
    * Whether a header name belongs to the reserved namespace. Case-insensitive: header names are,
