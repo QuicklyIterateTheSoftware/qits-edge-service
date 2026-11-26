@@ -424,7 +424,11 @@ public class EdgeRouter {
       long since = pool.pools().acquiring();
       return client
           .request(originRequestOptions(upstream))
-          .onSuccess(request -> pool.pools().granted(upstream, since, request, lease, false))
+          .onSuccess(
+              request -> {
+                pool.pools().granted(upstream, since, request, lease, false);
+                UpstreamCloses.watch(request, context.request().proxiedRequest(), upstream);
+              })
           .onFailure(
               failure -> {
                 pool.pools().failed(upstream, since);
