@@ -1,5 +1,6 @@
 package eu.wohlben.qits.edge;
 
+import io.vertx.core.Handler;
 import io.vertx.core.http.HttpClient;
 import io.vertx.core.http.HttpClientRequest;
 import io.vertx.core.http.HttpClientResponse;
@@ -11,6 +12,7 @@ import io.vertx.core.http.RequestOptions;
 import io.vertx.core.net.NetSocket;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.jboss.logging.Logger;
 
 /**
@@ -130,6 +132,16 @@ final class EdgeWebSocketUpgrade {
       // qits.bearer is the edge's own subprotocol, answered by the edge — see upgraded(). The token
       // that followed it was moved into Authorization at the gate.
       EdgeWebSocketBearer.forwardedOffer(handshake.headers());
+      // A connect() request is never ended, so a connection that closes under it — any socket
+      // ending, a refused upgrade being closed — reaches it as an exception. Without a handler
+      // Vert.x logs that at ERROR on its own logger, once per socket (qits-2717): see
+      // UpstreamCloses. The connection gets the same handler for a reset it is told of itself.
+      AtomicBoolean accepted = new AtomicBoolean();
+      Handler<Throwable> ended = UpstreamCloses.socket(upstream, request.path(), accepted::get);
+      handshake.exceptionHandler(ended);
+      if (handshake.connection() != null) {
+        handshake.connection().exceptionHandler(ended);
+      }
       handshake
           .connect()
           .onFailure(
@@ -138,7 +150,11 @@ final class EdgeWebSocketUpgrade {
                 LOG.warnf("the WebSocket handshake to %s failed: %s", upstream, failure);
                 refuse(request, 502);
               })
-          .onSuccess(response -> upgraded(request, upstream, handshake, response));
+          .onSuccess(
+              response -> {
+                accepted.set(response.statusCode() == 101);
+                upgraded(request, upstream, handshake, response);
+              });
     } catch (RuntimeException failure) {
       // Nothing before this point may leave the acquired connection dangling, whatever throws.
       close(handshake);
