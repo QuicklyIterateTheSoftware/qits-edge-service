@@ -124,7 +124,27 @@ class EdgeRoutingTest {
                       .add(
                           endpoint(
                               "/", upstream("qits.test.environment-upstreams." + environment)))));
+      publishMirror(environment);
     }
+  }
+
+  /**
+   * The mirror's host, published as qits-deployments publishes it (qits-2744): `mirror` is no
+   * longer a platform label in code, so the edge reaches it only through the route table.
+   */
+  private void publishMirror(String environment) {
+    seed.deploy(
+        new JsonObject()
+            .put("applicationName", "qits-mirror")
+            .put("environmentName", environment)
+            .put("browserHost", "mirror")
+            .put(
+                "endpoints",
+                new io.vertx.core.json.JsonArray()
+                    .add(
+                        endpoint(
+                            "/mirror",
+                            upstream("qits.test.app-upstreams.mirror." + environment)))));
   }
 
   // --- the door, which serves nothing -----------------------------------------------------------
@@ -212,7 +232,7 @@ class EdgeRoutingTest {
             .put(
                 "endpoints",
                 new io.vertx.core.json.JsonArray()
-                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev")))
+                    .add(endpoint("/ci", upstream("qits.test.app-upstreams.mirror.dev")))
                     .add(endpoint("/hooks", upstream("qits.edge.apps.registry.hosts.dev")))));
 
     assertEquals(
@@ -363,7 +383,7 @@ class EdgeRoutingTest {
             .put(
                 "endpoints",
                 new io.vertx.core.json.JsonArray()
-                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev"))))
+                    .add(endpoint("/ci", upstream("qits.test.app-upstreams.mirror.dev"))))
             .put(
                 "navigation",
                 // Declared out of order on purpose: the vocabulary decides the render order,
@@ -418,7 +438,7 @@ class EdgeRoutingTest {
             .put(
                 "endpoints",
                 new io.vertx.core.json.JsonArray()
-                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev"))))
+                    .add(endpoint("/ci", upstream("qits.test.app-upstreams.mirror.dev"))))
             .put(
                 "navigation",
                 new io.vertx.core.json.JsonArray().add(placement("app.details", "Docs", 1))));
@@ -534,7 +554,7 @@ class EdgeRoutingTest {
             .put(
                 "endpoints",
                 new io.vertx.core.json.JsonArray()
-                    .add(endpoint("/workspaces", upstream("qits.edge.apps.mirror.hosts.dev"))))
+                    .add(endpoint("/workspaces", upstream("qits.test.app-upstreams.mirror.dev"))))
             .put(
                 "navigation",
                 new io.vertx.core.json.JsonArray()
@@ -564,7 +584,9 @@ class EdgeRoutingTest {
                 .put(
                     "endpoints",
                     new io.vertx.core.json.JsonArray()
-                        .add(endpoint("/workspaces", upstream("qits.edge.apps.mirror.hosts.dev"))))
+                        .add(
+                            endpoint(
+                                "/workspaces", upstream("qits.test.app-upstreams.mirror.dev"))))
                 .put(
                     "navigation",
                     new io.vertx.core.json.JsonArray()
@@ -591,7 +613,7 @@ class EdgeRoutingTest {
             .put(
                 "endpoints",
                 new io.vertx.core.json.JsonArray()
-                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev")))));
+                    .add(endpoint("/ci", upstream("qits.test.app-upstreams.mirror.dev")))));
 
     JsonObject document =
         new JsonObject(client().get("dev.acme.example.com", "/main-navigation").body());
@@ -1463,7 +1485,7 @@ class EdgeRoutingTest {
             .put(
                 "endpoints",
                 new io.vertx.core.json.JsonArray()
-                    .add(endpoint("/acme", upstream("qits.edge.apps.mirror.hosts.dev")))));
+                    .add(endpoint("/acme", upstream("qits.test.app-upstreams.mirror.dev")))));
 
     EdgeClient.Answer answer = client().get(PROJECT + ".example.com", "/acme", token());
     assertEquals(404, answer.status());
@@ -1788,7 +1810,8 @@ class EdgeRoutingTest {
                 new io.vertx.core.json.JsonArray()
                     .add(
                         endpoint(
-                            path, upstream("qits.edge.apps." + app + ".hosts." + environment)))));
+                            path,
+                            upstream("qits.test.app-upstreams." + app + "." + environment)))));
   }
 
   @Test
@@ -2114,7 +2137,7 @@ class EdgeRoutingTest {
             .put(
                 "endpoints",
                 new io.vertx.core.json.JsonArray()
-                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts.dev"))))
+                    .add(endpoint("/ci", upstream("qits.test.app-upstreams.mirror.dev"))))
             .put(
                 "navigation",
                 new io.vertx.core.json.JsonArray().add(placement("services.details", "CI", 2)));
@@ -2162,7 +2185,8 @@ class EdgeRoutingTest {
             .put(
                 "endpoints",
                 new io.vertx.core.json.JsonArray()
-                    .add(endpoint("/ci", upstream("qits.edge.apps.mirror.hosts." + environment))))
+                    .add(
+                        endpoint("/ci", upstream("qits.test.app-upstreams.mirror." + environment))))
             .put(
                 "navigation",
                 new io.vertx.core.json.JsonArray().add(placement("services.details", "CI", 2))));
@@ -2181,7 +2205,7 @@ class EdgeRoutingTest {
             .put(
                 "endpoints",
                 new io.vertx.core.json.JsonArray()
-                    .add(endpoint("/workspaces", upstream("qits.edge.apps.mirror.hosts.dev"))))
+                    .add(endpoint("/workspaces", upstream("qits.test.app-upstreams.mirror.dev"))))
             .put(
                 "navigation",
                 new io.vertx.core.json.JsonArray()

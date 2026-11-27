@@ -53,15 +53,7 @@ final class PlatformApps {
 
   /** App label → the application behind it. */
   private static final Map<String, String> APPLICATIONS =
-      Map.of(
-          "registry",
-          "qits-artifacts",
-          "mirror",
-          "qits-mirror",
-          "githost",
-          "qits-githost",
-          IDP,
-          "qits-idp");
+      Map.of("registry", "qits-artifacts", "githost", "qits-githost", IDP, "qits-idp");
 
   /**
    * The route a platform application owns, where the edge has to know it without the projection:

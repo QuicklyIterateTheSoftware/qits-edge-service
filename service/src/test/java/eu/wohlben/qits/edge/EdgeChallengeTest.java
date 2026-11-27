@@ -39,10 +39,12 @@ class EdgeChallengeTest {
   // -------------------------------
 
   @Test
-  void thePlatformAppVhostsAreExactlyTheFourPlatformApplications() {
-    // idp joined the three machine vhosts (qits-1403): its name must answer before any route table
-    // is served, so it cannot wait for a table to name it.
-    assertEquals(Set.of("registry", "mirror", "githost", "idp"), PlatformApps.labels());
+  void thePlatformAppVhostsAreExactlyThePlatformApplications() {
+    // idp joined the machine vhosts (qits-1403): its name must answer before any route table is
+    // served, so it cannot wait for a table to name it. mirror left them (qits-2744): it is a
+    // private deployment, reached through the route table like any other.
+    assertEquals(Set.of("registry", "githost", "idp"), PlatformApps.labels());
+    assertFalse(PlatformApps.contains("mirror"), "mirror is published, not code (qits-2744)");
     assertTrue(PlatformApps.contains("IDP"), "a Host name arrives in any case");
     assertEquals("qits-idp", PlatformApps.application("idp"));
   }
@@ -71,8 +73,6 @@ class EdgeChallengeTest {
         new Upstream("dev-qits-artifacts", 8080),
         EdgeRouter.appUpstream("registry", "dev", Map.of()));
     assertEquals(
-        new Upstream("dev-qits-mirror", 8080), EdgeRouter.appUpstream("mirror", "dev", Map.of()));
-    assertEquals(
         new Upstream("dev-qits-githost", 8080), EdgeRouter.appUpstream("githost", "dev", Map.of()));
     assertEquals(
         new Upstream("prod-qits-artifacts", 8080),
@@ -83,16 +83,15 @@ class EdgeChallengeTest {
   @Test
   void aLocalOverrideReAddressesOneLabelInOneEnvironmentOnly() {
     Map<String, EdgeConfig.App> overrides =
-        Map.of("mirror", hosts(Map.of("dev", "127.0.0.1:4711")));
+        Map.of("registry", hosts(Map.of("dev", "127.0.0.1:4711")));
 
     assertEquals(
-        new Upstream("127.0.0.1", 4711), EdgeRouter.appUpstream("mirror", "dev", overrides));
+        new Upstream("127.0.0.1", 4711), EdgeRouter.appUpstream("registry", "dev", overrides));
     assertEquals(
-        new Upstream("prod-qits-mirror", 8080),
-        EdgeRouter.appUpstream("mirror", "prod", overrides));
+        new Upstream("prod-qits-artifacts", 8080),
+        EdgeRouter.appUpstream("registry", "prod", overrides));
     assertEquals(
-        new Upstream("dev-qits-artifacts", 8080),
-        EdgeRouter.appUpstream("registry", "dev", overrides));
+        new Upstream("dev-qits-idp", 8080), EdgeRouter.appUpstream("idp", "dev", overrides));
   }
 
   @Test
@@ -130,8 +129,8 @@ class EdgeChallengeTest {
 
     EdgeRouter.requirePlatformLabels(config.apps());
     assertEquals(
-        new Upstream("dev-qits-mirror", 8080),
-        EdgeRouter.appUpstream("mirror", "dev", config.apps()));
+        new Upstream("dev-qits-artifacts", 8080),
+        EdgeRouter.appUpstream("registry", "dev", config.apps()));
   }
 
   // --- the platform audience ---------------------------------------------------------------------

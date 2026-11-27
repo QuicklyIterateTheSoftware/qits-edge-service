@@ -53,10 +53,9 @@ import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
  *       profile is instantiated in more than one classloader and a field written by one copy is not
  *       the field another reads.
  *   <li><b>The environment list and FOUR application vhosts</b> — the environments stated exactly
- *       as {@code QITS_EDGE_ENVIRONMENTS} states them; three hosts seeded into the route table (see
- *       below) and the mirror, a platform label, re-addressed by its {@code hosts.dev} override.
- *       The mirror's derived alias is a name nothing here resolves: a request that reached it would
- *       be a resolution bug rather than a test that happened to pass.
+ *       as {@code QITS_EDGE_ENVIRONMENTS} states them; four hosts seeded into the route table (see
+ *       below), the mirror among them: it is no longer a platform label (qits-2744), so it is
+ *       published like any other application.
  *       <ul>
  *         <li>{@code tracker} and {@code docs} are two ordinary services, gated identically, and
  *             they exist as a PAIR: they answer the same paths, so which of them received a request
@@ -149,7 +148,7 @@ public class StoryProfile implements QuarkusTestProfile {
 
     config.put("qits.edge.environments", "prod," + StoryTarget.ENVIRONMENT);
     config.put("qits.edge.default-environment", "prod");
-    // Three published hosts, written into the route table before the launch (see the class
+    // Four published hosts, written into the route table before the launch (see the class
     // javadoc).
     seedPublishedHosts(
         edgeUrl,
@@ -157,12 +156,10 @@ public class StoryProfile implements QuarkusTestProfile {
             new Published(StoryTarget.PROJECTS, StoryTarget.PROJECTS_APP, projects.address()),
             new Published(StoryTarget.DOCS, StoryTarget.DOCS_APP, docs.address()),
             new Published(
-                StoryTarget.OFFLINE, StoryTarget.OFFLINE_APP, StoryTarget.CLOSED_PORT_ADDRESS)));
-    // The mirror is a PLATFORM app label: where it goes is code (dev-qits-mirror), so the stand-in
-    // reaches it through the one override that exists for a local process and a suite.
-    config.put(
-        "qits.edge.apps." + StoryTarget.MIRROR_APP + ".hosts." + StoryTarget.ENVIRONMENT,
-        mirror.address());
+                StoryTarget.OFFLINE, StoryTarget.OFFLINE_APP, StoryTarget.CLOSED_PORT_ADDRESS),
+            // The mirror is published like the others (qits-2744): it is no longer a platform
+            // label in code, so the route table is the only way the edge reaches it.
+            new Published(StoryTarget.MIRROR, StoryTarget.MIRROR_APP, mirror.address())));
     // ONE of the four, which is the point: the exemption is per app label, so the catalogue has a
     // vhost whose reads are open beside three that are gated on every method.
     config.put("qits.edge.auth.anonymous-read-apps", StoryTarget.MIRROR_APP);

@@ -323,11 +323,15 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
     for (String environment : List.of("prod", "dev")) {
       config.put(
           "qits.test.environment-upstreams." + environment, "127.0.0.1:" + listen(environment));
-      for (String app : List.of("registry", "mirror")) {
-        config.put(
-            "qits.edge.apps." + app + ".hosts." + environment,
-            "127.0.0.1:" + listen(app + "-" + environment));
-      }
+      // registry is a platform label, re-addressed by its override. mirror is not one any more
+      // (qits-2744): its stub's address is a test key, and a suite publishes the `mirror` host
+      // through the route table, as qits-deployments does for any other application.
+      config.put(
+          "qits.edge.apps.registry.hosts." + environment,
+          "127.0.0.1:" + listen("registry-" + environment));
+      config.put(
+          "qits.test.app-upstreams.mirror." + environment,
+          "127.0.0.1:" + listen("mirror-" + environment));
     }
     // idp's platform label in ONE environment, so a suite can reach it with no route table at all
     // (qits-1403). Only dev: prod keeps the derived alias, which is what the provider states'

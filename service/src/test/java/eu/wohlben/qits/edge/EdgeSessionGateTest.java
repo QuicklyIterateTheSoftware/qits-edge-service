@@ -132,7 +132,7 @@ class EdgeSessionGateTest {
     // browser host through the derived wildcard — three labels in front of `example.com` — and
     // nothing about it is configured in qits.edge.apps.
     String ci =
-        ConfigProvider.getConfig().getValue("qits.edge.apps.mirror.hosts.dev", String.class);
+        ConfigProvider.getConfig().getValue("qits.test.app-upstreams.mirror.dev", String.class);
     seed.deploy(
         TableSeed.deployment(
                 "dev", "session-test-ci", "ci", TableSeed.endpoint("/ci", Upstream.parse(ci, 8080)))
@@ -140,6 +140,14 @@ class EdgeSessionGateTest {
                 "navigation",
                 new io.vertx.core.json.JsonArray()
                     .add(TableSeed.placement("services.details", "CI", 2))));
+    // The mirror's host, published as qits-deployments publishes it (qits-2744): `mirror` is no
+    // longer a platform label in code, so the edge reaches it only through the route table.
+    seed.deploy(
+        TableSeed.deployment(
+            "dev",
+            "qits-mirror",
+            "mirror",
+            TableSeed.endpoint("/mirror", Upstream.parse(ci, 8080))));
   }
 
   @AfterEach
