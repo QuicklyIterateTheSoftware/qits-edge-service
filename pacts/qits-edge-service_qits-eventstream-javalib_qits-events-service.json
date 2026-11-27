@@ -18,7 +18,7 @@
           "qits-via": {
             "artifact": "eu.wohlben.qits:qits-eventstream",
             "repository": "qits-eventstream-javalib",
-            "version": "2026.1126.170951"
+            "version": "2026.1126.192104"
           }
         }
       },
@@ -90,7 +90,7 @@
           "qits-via": {
             "artifact": "eu.wohlben.qits:qits-eventstream",
             "repository": "qits-eventstream-javalib",
-            "version": "2026.1126.170951"
+            "version": "2026.1126.192104"
           }
         }
       },
@@ -162,7 +162,7 @@
           "qits-via": {
             "artifact": "eu.wohlben.qits:qits-eventstream",
             "repository": "qits-eventstream-javalib",
-            "version": "2026.1126.170951"
+            "version": "2026.1126.192104"
           }
         }
       },
@@ -234,7 +234,7 @@
           "qits-via": {
             "artifact": "eu.wohlben.qits:qits-eventstream",
             "repository": "qits-eventstream-javalib",
-            "version": "2026.1126.170951"
+            "version": "2026.1126.192104"
           }
         }
       },
@@ -256,6 +256,8 @@
             "environment": null,
             "name": "DeploymentActive",
             "occurredAt": "2026-01-01T00:00:00Z",
+            "onBehalfOf": null,
+            "originTraceId": null,
             "parentId": null,
             "payload": "{\"application\":\"qits-eventstream-pact\"}",
             "publisher": "eu.wohlben.qits:qits-eventstream-pact"
@@ -298,7 +300,7 @@
           "qits-via": {
             "artifact": "eu.wohlben.qits:qits-eventstream",
             "repository": "qits-eventstream-javalib",
-            "version": "2026.1126.170951"
+            "version": "2026.1126.192104"
           }
         }
       },
@@ -320,6 +322,8 @@
             "environment": null,
             "name": "DeploymentActive",
             "occurredAt": "2026-01-01T00:00:00Z",
+            "onBehalfOf": null,
+            "originTraceId": null,
             "parentId": null,
             "payload": "{\"application\":\"qits-eventstream-pact\"}",
             "publisher": "eu.wohlben.qits:qits-eventstream-pact"
