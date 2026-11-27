@@ -37,7 +37,7 @@
         <failsafe-plugin.version>${surefire-plugin.version}</failsafe-plugin.version>
         <spotless-plugin.version>2.44.5</spotless-plugin.version>
         <google-java-format.version>1.28.0</google-java-format.version>
-        <qits.eventstream.version>2026.1127.60632</qits.eventstream.version>
+        <qits.eventstream.version>2026.1127.202344</qits.eventstream.version>
         <!-- qits-telemetry-core (epic qits-428, qits-2188): the three OTLP/HTTP exporters as CDI
              beans whose header supplier attaches the `qits` oidc client's current bearer, so
              traces, logs and metrics reach qits-observability however this process is dialling it
@@ -77,7 +77,7 @@
         <!-- qits-idp's recorded answers (golden-masters/), test scope: consumer/IdpContract builds
              the edge's pact against qits-idp from them (ticket qits-1149). Moves like every
              internal pin, by a qits-maintenance bump; do not hand-edit it to chase a release. -->
-        <qits.idp-golden-masters.version>2026.1125.71255</qits.idp-golden-masters.version>
+        <qits.idp-golden-masters.version>2026.1127.193523</qits.idp-golden-masters.version>
         <!-- qits-deployments' recorded answers, test scope: DeploymentsConsumerPactTest builds the
              private edge's pact on GET /deployments/api/edge-routes/private from them (epic
              qits-2174). Moves like every internal pin, by a qits-maintenance bump. -->
