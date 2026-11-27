@@ -95,7 +95,7 @@ deploy, and on each observation pass while the edge reports an older version.
 - **the public edge** is ready with a table, **or with none ever received**. The deployer pushes its
   first table only once the edge reports healthy, so a public edge that waited for that push would
   wait forever. A cold start — an empty database — therefore serves the **platform app labels**
-  (`PlatformApps`: `registry`, `mirror`, `githost`, `idp`) from code, every other name as the `404`
+  (`PlatformApps`: `registry`, `mirror`, `idp`) from code, every other name as the `404`
   it is until the first push a few seconds later, and an empty `/main-navigation`.
 
 The platform labels are code for a second reason (qits-1403): the edge's own project and peer
@@ -234,7 +234,8 @@ what is left, because a slug and a published browser host are the same shape and
 projection knows the second set.
 
 **A name reaches a service two ways.** The platform app labels are the first — `registry`,
-`mirror`, `githost` and `idp` under the platform project, and the auth attributes that go with them,
+`mirror` and `idp` under the platform project (`githost` left them in qits-2743: it is private, so
+only the route table serves it), and the auth attributes that go with them,
 in code (`PlatformApps`). The route table is the other: a service
 publishes the name it answers to, and that name then serves its SPA at `/` and every wire route it
 owns. The two are the same kind of vhost, so everything below treats them alike.
@@ -324,7 +325,7 @@ streams. Only a public edge answers it, and only for a withdrawal whose declared
 `private`; a label nobody publishes or withdraws keeps the 404. `EdgeRouter.reach`, and so the
 tunnel DNS, is unchanged.
 
-**The platform app labels are public-edge code.** On a private edge `registry`, `mirror`, `githost`
+**The platform app labels are public-edge code.** On a private edge `registry`, `mirror`
 and `idp` are ordinary unknown names — a 404 unless a private or `both` deployment publishes one —
 and the qits-1403 exception that answers them with no table does not apply: the private edge
 is off `qits-net` (qits-2174) and dials qits-events and idp by their PUBLIC names, over the apex the
@@ -591,7 +592,7 @@ NXDOMAIN.
 | every private host, e.g. `projects.qits.<domain>` | `A` | the tunnel address, `100.96.0.1` | `qits-exposure=private` |
 
 The public hosts are the ones the served route table publishes (`EdgeRoutes.applicationHosts`) plus
-the `PlatformApps` labels the edge answers from code (`idp`, `registry`, `mirror`, `githost`),
+the `PlatformApps` labels the edge answers from code (`idp`, `registry`, `mirror`),
 composed for every served environment and every known project exactly as the navigation document
 composes them (`EnvironmentAuthority.hostOrigin`): `<host>.<project>.<domain>` for an env-less
 project in the default environment, `<host>.<env>.<project>.<domain>` for one with environments, and
@@ -652,7 +653,7 @@ one at boot and every newer one stored — when a new tunnel address is announce
 project projection reaches the log head at start; a 10-minute schedule is the backstop. Nothing is
 deleted before a route table is loaded and the project projection is authoritative. Until then a
 **seed pass** (qits-2293) creates or sets only the names code knows — the node, the apex and the
-`PlatformApps` CNAMEs (`registry`, `mirror`, `githost`, `idp`, e.g. `registry.qits.<domain>`) — and
+`PlatformApps` CNAMEs (`registry`, `mirror`, `idp`, e.g. `registry.qits.<domain>`) — and
 deletes nothing, switches no type and skips a hand-made record with the same WARN, so a fresh
 bootstrap's wait for `registry.qits.<domain>`, which runs before any deploy pushes a table, can pass;
 it logs `host records seeded: …`. A
@@ -967,10 +968,9 @@ gives every service on qits-net:
 |---|---|---|
 | `registry` | `qits-artifacts` | `dev-qits-artifacts:8080` |
 | `mirror` | `qits-mirror` | `dev-qits-mirror:8080` |
-| `githost` | `qits-githost` | `dev-qits-githost:8080` |
 | `idp` | `qits-idp` | `dev-qits-idp:8080` |
 
-`idp` joined the three byte-plane labels in qits-1403 so its name answers with no route table at
+`idp` joined the byte-plane labels in qits-1403 (then three; `githost` left in qits-2743) so its name answers with no route table at
 all (see *Startup serves the cached table*). Its gate is the one it had as a published host — the
 anonymous prefixes (`/idp/`, so the login page and `/idp/jwks`) on its own name, the session gate
 for a cookie, the ordinary service-vhost gate off its route — with one addition: **under idp's own

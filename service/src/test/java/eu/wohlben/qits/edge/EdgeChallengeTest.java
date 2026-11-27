@@ -41,9 +41,10 @@ class EdgeChallengeTest {
   @Test
   void thePlatformAppVhostsAreExactlyThePlatformApplications() {
     // idp joined the machine vhosts (qits-1403): its name must answer before any route table is
-    // served, so it cannot wait for a table to name it. mirror left them (qits-2744): it is a
-    // private deployment, reached through the route table like any other.
-    assertEquals(Set.of("registry", "githost", "idp"), PlatformApps.labels());
+    // served, so it cannot wait for a table to name it. githost (qits-2743) and mirror (qits-2744)
+    // left them: both are private, so only their route tables may serve them.
+    assertEquals(Set.of("registry", "idp"), PlatformApps.labels());
+    assertFalse(PlatformApps.contains("githost"));
     assertFalse(PlatformApps.contains("mirror"), "mirror is published, not code (qits-2744)");
     assertTrue(PlatformApps.contains("IDP"), "a Host name arrives in any case");
     assertEquals("qits-idp", PlatformApps.application("idp"));
@@ -73,7 +74,7 @@ class EdgeChallengeTest {
         new Upstream("dev-qits-artifacts", 8080),
         EdgeRouter.appUpstream("registry", "dev", Map.of()));
     assertEquals(
-        new Upstream("dev-qits-githost", 8080), EdgeRouter.appUpstream("githost", "dev", Map.of()));
+        new Upstream("dev-qits-idp", 8080), EdgeRouter.appUpstream("idp", "dev", Map.of()));
     assertEquals(
         new Upstream("prod-qits-artifacts", 8080),
         EdgeRouter.appUpstream("registry", "prod", Map.of()),
@@ -98,12 +99,20 @@ class EdgeChallengeTest {
   void anOverrideCannotAddAVhost() {
     // Which names the edge serves on its own is code. A key for any other label is a typo or a
     // second route table, and it fails the startup rather than routing anything.
-    EdgeRouter.requirePlatformLabels(Map.of("githost", hosts(Map.of())));
+    EdgeRouter.requirePlatformLabels(Map.of("registry", hosts(Map.of())));
     IllegalArgumentException refused =
         assertThrows(
             IllegalArgumentException.class,
             () -> EdgeRouter.requirePlatformLabels(Map.of("brochure", hosts(Map.of()))));
     assertTrue(refused.getMessage().contains("qits.edge.apps.brochure"), refused.getMessage());
+    // githost is a projected name now (qits-2743), so an override for it is refused like any other.
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> EdgeRouter.requirePlatformLabels(Map.of("githost", hosts(Map.of()))));
+    // And so is mirror (qits-2744).
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> EdgeRouter.requirePlatformLabels(Map.of("mirror", hosts(Map.of()))));
   }
 
   @Test
