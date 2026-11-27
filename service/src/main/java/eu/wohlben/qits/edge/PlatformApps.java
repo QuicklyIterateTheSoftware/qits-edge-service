@@ -51,25 +51,24 @@ final class PlatformApps {
    */
   static final String IDP = "idp";
 
-  /** App label → the application behind it. */
+  /**
+   * App label → the application behind it.
+   *
+   * <p>{@code githost} is not here any more (qits-2743): qits-githost is served by the private edge
+   * only, so a public edge that answered its label from code dialled an alias that no longer
+   * resolves on qits-net and kept a public CNAME for a name that belongs to the tunnel. It is now
+   * an ordinary projected name: the route table serves it, or withdraws it to the private edge.
+   */
   private static final Map<String, String> APPLICATIONS =
-      Map.of(
-          "registry",
-          "qits-artifacts",
-          "mirror",
-          "qits-mirror",
-          "githost",
-          "qits-githost",
-          IDP,
-          "qits-idp");
+      Map.of("registry", "qits-artifacts", "mirror", "qits-mirror", IDP, "qits-idp");
 
   /**
    * The route a platform application owns, where the edge has to know it without the projection:
    * idp's {@code /idp} (its {@code deployments.yml} {@code routes:}). It is what lets the anonymous
    * prefixes ({@code qits.edge.sessions.anonymous-prefixes}, {@code /idp/}) be served on idp's own
    * name before idp's deployment has been replayed — the same "on the name that OWNS them" rule the
-   * projection answers once it has. A label with no entry owns no anonymous path here; registry,
-   * mirror and githost need none.
+   * projection answers once it has. A label with no entry owns no anonymous path here; registry and
+   * mirror need none.
    */
   private static final Map<String, String> ROUTES = Map.of(IDP, "/idp");
 

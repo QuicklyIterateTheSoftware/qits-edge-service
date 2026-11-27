@@ -2867,7 +2867,6 @@ class EdgeRoutingTest {
         client()
             .send(HttpMethod.POST, "mirror.dev.acme.example.com", "/v2/blob", "x", aliases)
             .status());
-    assertEquals(401, client().get("githost.dev.acme.example.com", "/", aliases).status());
   }
 
   @Test

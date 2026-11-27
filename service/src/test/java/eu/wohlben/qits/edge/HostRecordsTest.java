@@ -499,7 +499,7 @@ class HostRecordsTest {
             ignored -> {});
 
     List<String> names = plan.cnames().stream().map(HostRecords.Want::name).toList();
-    for (String app : List.of("registry", "mirror", "githost", "idp")) {
+    for (String app : List.of("registry", "mirror", "idp")) {
       for (String name : List.of(app + ".qits", app + ".dev.acme", app + ".prod.acme")) {
         assertEquals(1, names.stream().filter(name::equals).count(), name + ", once");
       }
@@ -524,7 +524,6 @@ class HostRecordsTest {
     assertEquals(
         List.of(
             "create node A " + NODE_IP,
-            "create githost.qits CNAME " + TARGET,
             "create idp.qits CNAME " + TARGET,
             "create mirror.qits CNAME " + TARGET,
             "create registry.qits CNAME " + TARGET,
@@ -555,10 +554,7 @@ class HostRecordsTest {
 
     assertEquals(
         List.of(
-            "create node A " + NODE_IP,
-            "create githost.qits CNAME " + TARGET,
-            "create idp.qits CNAME " + TARGET,
-            "create @ A " + NODE_IP),
+            "create node A " + NODE_IP, "create idp.qits CNAME " + TARGET, "create @ A " + NODE_IP),
         zone.writes);
     assertEquals(List.of("203.0.113.7"), zone.at("registry.qits", "A").values());
     assertEquals(AddressRecords.PRIVATE, zone.at("mirror.qits", "A").exposure());
