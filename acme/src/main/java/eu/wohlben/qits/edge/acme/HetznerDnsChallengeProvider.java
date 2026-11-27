@@ -33,10 +33,19 @@ public final class HetznerDnsChallengeProvider implements DnsChallengeProvider {
     this(HetznerApi.defaultClient(), new ObjectMapper(), api, bearer, zone);
   }
 
+  /** Every request asks {@code route} where it goes and with what (qits-2760). */
+  public HetznerDnsChallengeProvider(HetznerRoute route, String zone) {
+    this(new HetznerApi(new ObjectMapper(), route, zone));
+  }
+
   HetznerDnsChallengeProvider(
       HttpClient http, ObjectMapper json, URI api, HetznerBearer bearer, String zone) {
-    this.hetzner = new HetznerApi(http, json, api, bearer, zone);
-    this.json = json;
+    this(new HetznerApi(http, json, api, bearer, zone));
+  }
+
+  private HetznerDnsChallengeProvider(HetznerApi hetzner) {
+    this.hetzner = hetzner;
+    this.json = hetzner.json();
     this.zone = hetzner.zone();
   }
 

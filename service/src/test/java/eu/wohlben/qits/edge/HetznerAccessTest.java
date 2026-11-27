@@ -162,4 +162,71 @@ class HetznerAccessTest {
     assertTrue(refused.getMessage().contains("empty"), refused.getMessage());
     assertEquals(List.of(), minted, "a broken secret never falls back to the gateway");
   }
+
+  // --- by certificate (qits-2760) ---------------------------------------------------------------
+
+  private HetznerAccess access(Map<String, String> environment, boolean held) throws Exception {
+    javax.net.ssl.SSLContext context = javax.net.ssl.SSLContext.getDefault();
+    return new HetznerAccess(acme(environment), idp(), () -> held, () -> context);
+  }
+
+  @Test
+  void theCertificateBaseIsEgressTlsProxyListenerInThisEnvironment() throws Exception {
+    assertEquals(
+        URI.create("https://dev-qits-egress:8082/hetzner/v1/"),
+        access(Map.of(), true).certificateApi());
+    assertEquals(
+        URI.create("https://prod-qits-egress:8082/hetzner/v1/"),
+        access(Map.of("QITS_ENVIRONMENT", "prod"), true).certificateApi());
+  }
+
+  @Test
+  void withACertificateHeldTheCallsGoTo8082WithNoBearer() throws Exception {
+    HetznerAccess access = access(Map.of(), true);
+    var hop = access.route(access.bearer()).hop();
+    assertEquals(URI.create("https://dev-qits-egress:8082/hetzner/v1/"), hop.api());
+    assertEquals(null, hop.bearer(), "the certificate proves the edge; no bearer is sent");
+    assertEquals(List.of(), minted, "and none is minted");
+  }
+
+  @Test
+  void withoutACertificateTheCallsKeepThe8081GatewayAndTheBearer() throws Exception {
+    HetznerAccess access = access(Map.of(), false);
+    var hop = access.route(access.bearer()).hop();
+    assertEquals(URI.create("http://dev-qits-egress:8081/hetzner/v1/"), hop.api());
+    assertEquals("qits-jwt-1", hop.bearer().token());
+  }
+
+  @Test
+  void theWayOutIsDecidedPerRequest() throws Exception {
+    java.util.concurrent.atomic.AtomicBoolean held =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    javax.net.ssl.SSLContext context = javax.net.ssl.SSLContext.getDefault();
+    HetznerAccess access = new HetznerAccess(acme(Map.of()), idp(), held::get, () -> context);
+    var route = access.route(access.bearer());
+    assertEquals(8081, route.hop().api().getPort(), "a cold boot: no certificate yet");
+    held.set(true);
+    assertEquals(8082, route.hop().api().getPort(), "the same pass, once one is held");
+    held.set(false);
+    assertEquals(8081, route.hop().api().getPort(), "and back when it lapses");
+  }
+
+  @Test
+  void theSeedEdgesDirectModeNeverTakesTheCertificatePath() throws Exception {
+    HetznerAccess access =
+        access(
+            Map.of(
+                "QITS_EDGE_ACME_HETZNER_TOKEN", "not-a-real-token",
+                "QITS_EDGE_ACME_HETZNER_API_URL", "https://api.hetzner.cloud/v1/"),
+            true);
+    var hop = access.route(access.bearer()).hop();
+    assertEquals(URI.create("https://api.hetzner.cloud/v1/"), hop.api());
+    assertEquals("not-a-real-token", hop.bearer().token());
+  }
+
+  @Test
+  void theCertificatePathCanBeSwitchedOff() throws Exception {
+    HetznerAccess access = access(Map.of("QITS_EDGE_ACME_HETZNER_BY_CERTIFICATE", "false"), true);
+    assertEquals(8081, access.route(access.bearer()).hop().api().getPort());
+  }
 }

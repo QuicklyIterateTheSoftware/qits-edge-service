@@ -1,6 +1,8 @@
 package eu.wohlben.qits.edge;
 
 import eu.wohlben.qits.edge.acme.HetznerBearer;
+import eu.wohlben.qits.edge.acme.HetznerRoute;
+import eu.wohlben.qits.trust.WorkloadCertificate;
 import io.quarkus.oidc.client.OidcClients;
 import io.quarkus.oidc.client.Tokens;
 import jakarta.inject.Inject;
@@ -9,6 +11,10 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
+import javax.net.ssl.SSLContext;
+import org.jboss.logging.Logger;
 
 /**
  * Where the edge's Hetzner DNS calls go and what they carry, for both of their users: the
@@ -32,6 +38,14 @@ import java.util.Optional;
  *       which holds no Hetzner token at all.
  * </ul>
  *
+ * <p><b>By certificate</b> (qits-2760): in gateway mode, while the edge holds its workload
+ * certificate ({@link WorkloadCertificate}, {@code application:qits-edge}), the calls go to the
+ * same route on qits-egress' TLS proxy listener, {@link AcmeConfig#hetznerCertificateApiUrl()}
+ * ({@code https://<env>-qits-egress:8082/hetzner/v1/}), with the certificate and NO bearer. With
+ * none held — a cold boot before qits-certificates answers, or a certificate past its notAfter —
+ * they use the 8081 gateway with the bearer, so the edge's first ACME order never waits on the CA.
+ * {@link #route} decides per request; one INFO line names the path whenever it changes.
+ *
  * <p>No token is therefore not a refusal. An EMPTY token file still is: a mounted secret that came
  * up empty is a broken deployment, and quietly falling to the gateway would hide it.
  *
@@ -47,14 +61,89 @@ public class HetznerAccess {
   /** How long one token request to idp may take before the DNS call fails and is retried. */
   static final Duration TOKEN_TIMEOUT = Duration.ofSeconds(10);
 
+  private static final Logger LOG = Logger.getLogger(HetznerAccess.class);
+
   private final AcmeConfig acme;
   private final OidcClients oidcClients;
+  private final BooleanSupplier certificateHeld;
+  private final Supplier<SSLContext> certificateContext;
   private volatile Tokens tokens;
+  private volatile java.net.http.HttpClient plain;
+  private volatile java.net.http.HttpClient certified;
+  private volatile String path;
 
   @Inject
+  HetznerAccess(AcmeConfig acme, OidcClients oidcClients, WorkloadCertificate workload) {
+    this(acme, oidcClients, () -> workload.current().isPresent(), workload::sslContext);
+  }
+
+  /** For a suite: an edge that never holds a certificate. */
   HetznerAccess(AcmeConfig acme, OidcClients oidcClients) {
+    this(acme, oidcClients, () -> false, () -> null);
+  }
+
+  /** For a suite: whether a certificate is held, and its TLS context. */
+  HetznerAccess(
+      AcmeConfig acme,
+      OidcClients oidcClients,
+      BooleanSupplier certificateHeld,
+      Supplier<SSLContext> certificateContext) {
     this.acme = acme;
     this.oidcClients = oidcClients;
+    this.certificateHeld = certificateHeld;
+    this.certificateContext = certificateContext;
+  }
+
+  /**
+   * Where each request of this pass goes, decided per request: by certificate to 8082 with no
+   * bearer while one is held and no Hetzner token is configured, else {@link #api()} with {@code
+   * bearer}.
+   */
+  public HetznerRoute route(HetznerBearer bearer) {
+    return () -> {
+      if (acme.hetznerByCertificate() && !direct() && certificateHeld.getAsBoolean()) {
+        URI api = certificateApi();
+        said("by its workload certificate, no bearer", api);
+        return new HetznerRoute.Hop(certifiedClient(), api, null);
+      }
+      URI api = api();
+      said(direct() ? "with the configured Hetzner token" : "with the edge's qits bearer", api);
+      return new HetznerRoute.Hop(plainClient(), api, bearer);
+    };
+  }
+
+  /** The certificate path's base, ending in {@code /v1/}. */
+  public URI certificateApi() {
+    String url = acme.hetznerCertificateApiUrl().strip();
+    return URI.create(url.endsWith("/") ? url : url + "/");
+  }
+
+  /** One INFO line whenever the path changes. */
+  private void said(String how, URI api) {
+    String now = api.getScheme() + "://" + api.getAuthority() + " " + how;
+    if (!now.equals(path)) {
+      path = now;
+      LOG.infof("Hetzner DNS calls go to %s", now);
+    }
+  }
+
+  private java.net.http.HttpClient plainClient() {
+    java.net.http.HttpClient current = plain;
+    if (current == null) {
+      current = HetznerRoute.plainClient();
+      plain = current;
+    }
+    return current;
+  }
+
+  /** Built on first use, at run time: the keeper's context, rotating its key with each renewal. */
+  private java.net.http.HttpClient certifiedClient() {
+    java.net.http.HttpClient current = certified;
+    if (current == null) {
+      current = HetznerRoute.certificateClient(certificateContext.get());
+      certified = current;
+    }
+    return current;
   }
 
   /** The RRSet API's base, ending in {@code /v1/}. */

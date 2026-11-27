@@ -217,6 +217,12 @@
             <version>${qits.telemetry-core.version}</version>
         </dependency>
         <dependency>
+            <!-- WorkloadCertificate: the hetzner route to qits-egress' 8082 by certificate (qits-2760). -->
+            <groupId>eu.wohlben.qits</groupId>
+            <artifactId>qits-trust-core</artifactId>
+            <version>${qits.trust-core.version}</version>
+        </dependency>
+        <dependency>
             <!-- The private edge's tunnel DNS responder (TunnelDns, epic qits-1976): netty's DNS
                  codec over UDP and TCP. Already on the classpath through Vert.x's resolver; stated
                  because this code uses it directly. Version managed by the platform BOM. -->

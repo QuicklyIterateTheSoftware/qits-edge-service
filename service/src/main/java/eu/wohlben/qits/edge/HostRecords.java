@@ -303,7 +303,7 @@ public class HostRecords {
             return config.dns().nodeAddress().orElse(List.of());
           }
         },
-        (bearer, zone) -> new HetznerAddressRecords(hetzner.api(), bearer, zone),
+        (bearer, zone) -> new HetznerAddressRecords(hetzner.route(bearer), zone),
         DEBOUNCE);
   }
 

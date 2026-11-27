@@ -1446,6 +1446,28 @@ grant is this repository's `.config/qits/egress.yml`: route `hetzner`, target
 — exactly the methods `HetznerApi` sends. A new Hetzner call with another method needs that list
 widened in the same change.
 
+**By certificate, no bearer (epic qits-2626, qits-2760).** The deployed edge keeps a workload
+certificate for `application:qits-edge` (qits-trust-core's `WorkloadCertificate`,
+`qits.workload-certificate.enabled=true`): made in memory at boot, issued by qits-certificates for
+its `qits` client's bearer, renewed at 2/3 of its day. While it holds one and no Hetzner token is
+configured, every Hetzner request goes to the same route on qits-egress' TLS proxy listener,
+`qits.edge.acme.hetzner-certificate-api-url` (default
+`https://${QITS_ENVIRONMENT}-qits-egress:8082/hetzner/v1/`), with the certificate and **no
+`Authorization`** — egress' audit line names it `principal=application:qits-edge
+auth=certificate clientSerial=<hex>`. The client trusts the JDK's CAs or the platform anchors
+(`PlatformTrust`), and checks the host name against egress' `DNS:<env>-qits-egress`.
+
+- **Decided per request** (`HetznerAccess.route`, `HetznerRoute` in the acme module), so a
+  certificate obtained or lapsed mid-pass changes the next call, not a later pass.
+- **A cold boot never waits on the CA**: with no certificate held the calls take the 8081 gateway
+  with the bearer, as above — which is how the edge's first ACME order goes out before
+  qits-certificates answers.
+- **One INFO line** names the path whenever it changes: `Hetzner DNS calls go to
+  https://<env>-qits-egress:8082 by its workload certificate, no bearer` (or `… with the edge's qits
+  bearer`).
+- **Never in direct mode**: the seed edge sends its Hetzner token to api.hetzner.cloud whatever it
+  holds. `qits.edge.acme.hetzner-by-certificate=false` switches the certificate path off.
+
 **Direct mode is the seed edge's, and only because of the cold boot.** The seed edge needs a real
 certificate before anything can be pulled or deployed, and qits-egress is deployed only by the
 train through that edge; so the stack keeps a token there (owner decision on qits-2523). The mode is

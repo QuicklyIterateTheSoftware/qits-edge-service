@@ -56,10 +56,19 @@ public final class HetznerAddressRecords implements AddressRecords {
     this(HetznerApi.defaultClient(), new ObjectMapper(), api, bearer, zone);
   }
 
+  /** Every request asks {@code route} where it goes and with what (qits-2760). */
+  public HetznerAddressRecords(HetznerRoute route, String zone) {
+    this(new HetznerApi(new ObjectMapper(), route, zone));
+  }
+
   HetznerAddressRecords(
       HttpClient http, ObjectMapper json, URI api, HetznerBearer bearer, String zone) {
-    this.hetzner = new HetznerApi(http, json, api, bearer, zone);
-    this.json = json;
+    this(new HetznerApi(http, json, api, bearer, zone));
+  }
+
+  private HetznerAddressRecords(HetznerApi hetzner) {
+    this.hetzner = hetzner;
+    this.json = hetzner.json();
   }
 
   @Override

@@ -281,7 +281,7 @@ public class EdgeCertificateManager {
       String email = acme.email().map(String::strip).orElse("hostmaster@" + domain);
       var issuer =
           new AcmeCertificateIssuer(
-              new HetznerDnsChallengeProvider(hetzner.api(), bearer, domain),
+              new HetznerDnsChallengeProvider(hetzner.route(bearer), domain),
               new AuthoritativeDnsPropagation(),
               store);
       issuer.issue(

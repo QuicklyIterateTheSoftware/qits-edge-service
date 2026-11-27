@@ -56,6 +56,19 @@ public interface AcmeConfig {
   String hetznerApiUrl();
 
   /**
+   * The same {@code hetzner} route on qits-egress' TLS proxy listener (qits-2760), where the edge
+   * proves itself with its workload certificate and sends no bearer. Used instead of {@link
+   * #hetznerApiUrl()} while a certificate is held and no Hetzner token is configured; never by the
+   * seed edge's direct mode.
+   */
+  @WithDefault("https://${QITS_ENVIRONMENT:dev}-qits-egress:8082/hetzner/v1/")
+  String hetznerCertificateApiUrl();
+
+  /** false: never the certificate path, always {@link #hetznerApiUrl()} with the bearer. */
+  @WithDefault("true")
+  boolean hetznerByCertificate();
+
+  /**
    * The names this certificate must carry beyond the wildcard set the edge derives for itself.
    *
    * <p>A wildcard is leftmost-only, so {@code *.<domain>} answers for {@code idp.<domain>} and for

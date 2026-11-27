@@ -32,17 +32,18 @@ final class HetznerApi {
   /** How much of a refusal's body reaches the message. */
   static final int BODY_LIMIT = 300;
 
-  private final HttpClient http;
   private final ObjectMapper json;
-  private final URI api;
-  private final HetznerBearer bearer;
+  private final HetznerRoute route;
   private final String zone;
 
   HetznerApi(HttpClient http, ObjectMapper json, URI api, HetznerBearer bearer, String zone) {
-    this.http = http;
+    this(json, HetznerRoute.fixed(http, api, bearer), zone);
+  }
+
+  /** Every request asks {@code route} where it goes (qits-2760). */
+  HetznerApi(ObjectMapper json, HetznerRoute route, String zone) {
     this.json = json;
-    this.api = withTrailingSlash(api);
-    this.bearer = bearer;
+    this.route = route;
     this.zone = zone.toLowerCase(Locale.ROOT);
   }
 
@@ -52,8 +53,20 @@ final class HetznerApi {
     return base.endsWith("/") ? api : URI.create(base + "/");
   }
 
+  /** The client of the 8081 gateway and of api.hetzner.cloud: the JVM's trust, no key. */
   static HttpClient defaultClient() {
     return HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
+  }
+
+  /**
+   * The client of qits-egress' TLS proxy listener (qits-2760): {@code context} presents the edge's
+   * workload certificate and trusts the platform CA. Built at run time, never statically.
+   */
+  static HttpClient client(javax.net.ssl.SSLContext context) {
+    return HttpClient.newBuilder()
+        .sslContext(context)
+        .connectTimeout(Duration.ofSeconds(15))
+        .build();
   }
 
   ObjectMapper json() {
@@ -69,17 +82,25 @@ final class HetznerApi {
     return "zones/" + encode(zone) + "/rrsets";
   }
 
-  /** One request, answered whatever its status; the bearer is the only header that is secret. */
+  /**
+   * One request, answered whatever its status; the bearer is the only header that is secret. A
+   * {@link HetznerRoute.Hop} with no bearer sends no {@code Authorization}: its client certificate
+   * is the credential.
+   */
   HttpResponse<String> send(String method, String path, byte[] body) throws Exception {
-    String token = bearer.token();
-    if (token == null || token.isBlank()) {
-      throw new IllegalStateException("no bearer for the Hetzner DNS API");
-    }
+    HetznerRoute.Hop hop = route.hop();
+    URI api = withTrailingSlash(hop.api());
     var builder =
         HttpRequest.newBuilder(api.resolve(path))
             .timeout(Duration.ofSeconds(30))
-            .header("Authorization", "Bearer " + token)
             .header("Accept", "application/json");
+    if (hop.bearer() != null) {
+      String token = hop.bearer().token();
+      if (token == null || token.isBlank()) {
+        throw new IllegalStateException("no bearer for the Hetzner DNS API");
+      }
+      builder.header("Authorization", "Bearer " + token);
+    }
     if (body == null) {
       builder.method(method, HttpRequest.BodyPublishers.noBody());
     } else {
@@ -87,7 +108,7 @@ final class HetznerApi {
           .header("Content-Type", "application/json")
           .method(method, HttpRequest.BodyPublishers.ofByteArray(body));
     }
-    return http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    return hop.http().send(builder.build(), HttpResponse.BodyHandlers.ofString());
   }
 
   /**
@@ -104,7 +125,7 @@ final class HetznerApi {
             + " "
             + path
             + " via "
-            + api.getAuthority()
+            + response.uri().getAuthority()
             + " failed with HTTP "
             + response.statusCode()
             + ": "

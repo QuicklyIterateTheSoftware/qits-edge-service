@@ -28,6 +28,11 @@
         <qits.eventstream.version>2026.1018.151251</qits.eventstream.version>
         <!-- qits-http-core: only its @RawHttpClient, on the acme module's two clients to external hosts. -->
         <qits.http-core.version>2026.1127.195930</qits.http-core.version>
+        <!-- qits-trust-core: the edge's workload certificate (WorkloadCertificate, qits-2758) and
+             PlatformTrust, for its Hetzner calls to qits-egress' TLS proxy listener (qits-2760).
+             FIRST ADOPTION, pinned by hand at the release matching http-core (it links that very
+             release); qits-maintenance's bumps move it with http-core from here on. -->
+        <qits.trust-core.version>2026.1127.195930</qits.trust-core.version>
         <qits.maven.repository.url>https://registry.qits.wohlben.eu/artifacts/maven/maven</qits.maven.repository.url>
         <zonky.embedded-postgres.version>2.2.2</zonky.embedded-postgres.version>
         <zonky.postgres-binaries.version>18.6.0</zonky.postgres-binaries.version>
