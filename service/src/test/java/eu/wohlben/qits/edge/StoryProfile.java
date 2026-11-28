@@ -183,6 +183,11 @@ public class StoryProfile implements QuarkusTestProfile {
     config.put("qits.events.url", StoryTarget.CLOSED_PORT_URL);
     config.put("qits.edge.catchup.required", "false");
     config.put("quarkus.otel.sdk.disabled", "true");
+    // qits-trust-core (qits-2760) in %prod: the workload certificate keeper and the anchors poller
+    // would each mint a `qits` client token at boot (POST /idp/token on the mock idp) and dial a
+    // qits-certificates that does not exist here — an edge no story declares. Neither is a story.
+    config.put("qits.workload-certificate.enabled", "false");
+    config.put("qits.trust.enabled", "false");
 
     // The image owns its certificate in %prod (qits-2009), and this is the %prod profile. ACME is
     // off because there is no Hetzner and no Let's Encrypt here; the PEM pair is a throwaway
