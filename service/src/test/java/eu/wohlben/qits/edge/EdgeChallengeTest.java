@@ -41,11 +41,10 @@ class EdgeChallengeTest {
   @Test
   void thePlatformAppVhostsAreExactlyThePlatformApplications() {
     // idp joined the machine vhosts (qits-1403): its name must answer before any route table is
-    // served, so it cannot wait for a table to name it. githost (qits-2743) and mirror (qits-2744)
-    // left them: both are private, so only their route tables may serve them.
-    assertEquals(Set.of("registry", "idp"), PlatformApps.labels());
+    // served, so it cannot wait for a table to name it. githost left them (qits-2743). mirror stays
+    // until the edge answers docker's /token on every host (qits-2744).
+    assertEquals(Set.of("registry", "mirror", "idp"), PlatformApps.labels());
     assertFalse(PlatformApps.contains("githost"));
-    assertFalse(PlatformApps.contains("mirror"), "mirror is published, not code (qits-2744)");
     assertTrue(PlatformApps.contains("IDP"), "a Host name arrives in any case");
     assertEquals("qits-idp", PlatformApps.application("idp"));
   }
@@ -109,10 +108,6 @@ class EdgeChallengeTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> EdgeRouter.requirePlatformLabels(Map.of("githost", hosts(Map.of()))));
-    // And so is mirror (qits-2744).
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> EdgeRouter.requirePlatformLabels(Map.of("mirror", hosts(Map.of()))));
   }
 
   @Test

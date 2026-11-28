@@ -499,13 +499,11 @@ class HostRecordsTest {
             ignored -> {});
 
     List<String> names = plan.cnames().stream().map(HostRecords.Want::name).toList();
-    for (String app : List.of("registry", "idp")) {
+    for (String app : List.of("registry", "mirror", "idp")) {
       for (String name : List.of(app + ".qits", app + ".dev.acme", app + ".prod.acme")) {
         assertEquals(1, names.stream().filter(name::equals).count(), name + ", once");
       }
     }
-    // qits-2744: mirror is not a platform label any more, so only the table can want its name.
-    assertFalse(names.contains("mirror.qits"), "nothing publishes mirror here");
     assertTrue(names.contains("ci.qits"));
     assertFalse(names.contains("ci.prod.acme"), "the table serves ci in dev only");
   }
@@ -527,6 +525,7 @@ class HostRecordsTest {
         List.of(
             "create node A " + NODE_IP,
             "create idp.qits CNAME " + TARGET,
+            "create mirror.qits CNAME " + TARGET,
             "create registry.qits CNAME " + TARGET,
             "create @ A " + NODE_IP),
         zone.writes);
