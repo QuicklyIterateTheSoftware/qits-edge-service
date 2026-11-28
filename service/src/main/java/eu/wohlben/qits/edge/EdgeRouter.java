@@ -675,11 +675,15 @@ public class EdgeRouter {
       return;
     }
 
-    if (named.toApp() && EdgeAuth.isTokenRequest(request)) {
+    if (target.service() && EdgeAuth.isTokenRequest(request)) {
       // The docker Bearer flow's own endpoint, advertised in the challenge below. It carries the
       // credential that BUYS a token, so it is the one path on an app vhost that cannot require
-      // one. Platform vhosts only: it is the challenge's realm that names it, and only a platform
-      // label carries the auth attributes that challenge is built from.
+      // one. Every service host, not only a platform label (qits-2744): the challenge names
+      // `https://<this host>/token` on every gated service host, a code label or a published one,
+      // in every variant. Answered for code labels alone, a published host's realm fell through to
+      // its service — qits-mirror's SPA answered it with index.html once `mirror` left
+      // PlatformApps, and every docker pull through it failed at "invalid character '<'"
+      // (2026.1127.222912). `target` is the joined route, so a published name reads as an app here.
       auth.token(request);
       return;
     }
