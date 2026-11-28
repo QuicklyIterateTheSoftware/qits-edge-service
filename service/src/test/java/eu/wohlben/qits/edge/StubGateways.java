@@ -331,9 +331,6 @@ public class StubGateways implements QuarkusTestResourceLifecycleManager {
           "127.0.0.1:" + listen("registry-" + environment));
       String mirror = "127.0.0.1:" + listen("mirror-" + environment);
       config.put("qits.test.app-upstreams.mirror." + environment, mirror);
-      // mirror is a code label again (qits-2744), so its stub is re-addressed by the override too,
-      // and the host the suites publish in the table points at the same address.
-      config.put("qits.edge.apps.mirror.hosts." + environment, mirror);
     }
     // idp's platform label in ONE environment, so a suite can reach it with no route table at all
     // (qits-1403). Only dev: prod keeps the derived alias, which is what the provider states'

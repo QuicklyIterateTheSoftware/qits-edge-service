@@ -59,12 +59,13 @@ final class PlatformApps {
    * resolves on qits-net and kept a public CNAME for a name that belongs to the tunnel. It is now
    * an ordinary projected name: the route table serves it, or withdraws it to the private edge.
    *
-   * <p>{@code mirror} stays for now (qits-2744): the edge answers docker's Bearer {@code /token}
-   * realm itself only on a code label, so without it every docker pull through the mirror failed at
-   * the token fetch (2026.1127.222912). It leaves once the realm is answered on every host.
+   * <p>{@code mirror} left for the same reason (qits-2744), once the edge answered docker's Bearer
+   * {@code /token} realm on every service host rather than only on a code label (2026.1128.81337).
+   * The first removal, before that, broke every docker pull through the mirror at the token fetch
+   * (2026.1127.222912): a label here is also where that realm used to live.
    */
   private static final Map<String, String> APPLICATIONS =
-      Map.of("registry", "qits-artifacts", "mirror", "qits-mirror", IDP, "qits-idp");
+      Map.of("registry", "qits-artifacts", IDP, "qits-idp");
 
   /**
    * The route a platform application owns, where the edge has to know it without the projection:

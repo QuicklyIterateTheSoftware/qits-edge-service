@@ -160,10 +160,6 @@ public class StoryProfile implements QuarkusTestProfile {
             // The mirror is published like the others (qits-2744): it is no longer a platform
             // label in code, so the route table is the only way the edge reaches it.
             new Published(StoryTarget.MIRROR, StoryTarget.MIRROR_APP, mirror.address())));
-    // mirror is a code label again (qits-2744): the override re-addresses it to the same stand-in.
-    config.put(
-        "qits.edge.apps." + StoryTarget.MIRROR_APP + ".hosts." + StoryTarget.ENVIRONMENT,
-        mirror.address());
     // ONE of the four, which is the point: the exemption is per app label, so the catalogue has a
     // vhost whose reads are open beside three that are gated on every method.
     config.put("qits.edge.auth.anonymous-read-apps", StoryTarget.MIRROR_APP);

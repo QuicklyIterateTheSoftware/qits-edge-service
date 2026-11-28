@@ -3377,6 +3377,44 @@ class EdgeRoutingTest {
   }
 
   @Test
+  void theMirrorPublishedByTheTableAloneAnswersDockersTokenFlowAtTheEdge() throws Exception {
+    // qits-2744, the exact request that broke on 2026.1127.222912: buildkit's realm call on the
+    // mirror's host, once `mirror` is not a PlatformApps label. The suite publishes `mirror`
+    // through
+    // the route table only (publishMirror). It must be the edge's JSON token — never the mirror's
+    // own answer, which on the estate was its SPA's index.html.
+    assertFalse(PlatformApps.contains("mirror"), "this test is about a table-only mirror");
+    Thread.sleep(tokenCacheTtlMs() + 400);
+    EdgeClient.Answer challenged =
+        client().send(HttpMethod.POST, "mirror.dev.acme.example.com", "/v2/blob", "x", Map.of());
+    assertEquals(401, challenged.status(), challenged.body());
+    String realm = challenged.headers().get("www-authenticate").split("realm=\"")[1].split("\"")[0];
+    assertEquals("http://mirror.dev.acme.example.com/token", realm);
+
+    EdgeClient.Answer answer =
+        client()
+            .get(
+                "mirror.dev.acme.example.com",
+                "/token?service=mirror.dev.acme.example.com"
+                    + "&scope=repository:quay/quarkus/ubi10-quarkus-graalvmce-builder-image:pull",
+                basic("token", StubGateways.TOKEN));
+    assertEquals(200, answer.status(), answer.body());
+    assertNull(answer.line("upstream"), "the edge answered it, not qits-mirror");
+    assertTrue(
+        answer.headers().get("content-type").startsWith("application/json"),
+        answer.headers().get("content-type"));
+    String jwt = new JsonObject(answer.body()).getString("token");
+    assertFalse(jwt.startsWith(TokenValue.PREFIX), "docker is handed the JWT, not the token");
+
+    assertEquals(
+        "mirror-dev",
+        client()
+            .send(HttpMethod.POST, "mirror.dev.acme.example.com", "/v2/blob", "x", bearer(jwt))
+            .line("upstream"),
+        "and the mirror takes it as the Bearer it is");
+  }
+
+  @Test
   void theTokenEndpointRefusesATokenIdpDoesNotKnow() {
     EdgeClient.Answer answer =
         client()
