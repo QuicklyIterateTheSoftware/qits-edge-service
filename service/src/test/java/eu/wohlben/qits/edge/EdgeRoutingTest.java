@@ -3337,6 +3337,46 @@ class EdgeRoutingTest {
   }
 
   @Test
+  void aPublishedHostThatIsNoPlatformLabelAnswersDockersTokenFlowItself() throws Exception {
+    // qits-2744: the challenge names `<host>/token` on every gated service host, so the realm must
+    // be the edge's on every one of them — not only on a PlatformApps label. `ci` is published by
+    // the route table alone and its upstream is a stub that would answer /token itself; when the
+    // edge left it to the service, qits-mirror's SPA answered with index.html and docker died on
+    // "invalid character '<'" (2026.1127.222912).
+    activateCi();
+    Thread.sleep(tokenCacheTtlMs() + 400);
+    EdgeClient.Answer challenged = client().get("ci.dev.acme.example.com", "/v2/");
+    assertEquals(401, challenged.status(), challenged.body());
+    String realm = challenged.headers().get("www-authenticate").split("realm=\"")[1].split("\"")[0];
+    assertEquals("http://ci.dev.acme.example.com/token", realm);
+
+    EdgeClient.Answer answer =
+        client()
+            .get(
+                "ci.dev.acme.example.com",
+                "/token?service=ci.dev.acme.example.com&scope=repository:quay/x:pull",
+                basic("token", StubGateways.TOKEN));
+    assertEquals(200, answer.status(), answer.body());
+    assertNull(answer.line("upstream"), "the edge answered it, not the service behind the host");
+    assertTrue(
+        answer.headers().get("content-type").startsWith("application/json"),
+        answer.headers().get("content-type"));
+    String jwt = new JsonObject(answer.body()).getString("token");
+    assertFalse(jwt.startsWith(TokenValue.PREFIX), "docker is handed the JWT, not the token");
+
+    assertEquals(
+        "mirror-dev",
+        client().get("ci.dev.acme.example.com", "/ci/v2/", bearer(jwt)).line("upstream"),
+        "and the published host takes it as the Bearer it is");
+
+    EdgeClient.Answer unknown =
+        client()
+            .get("ci.dev.acme.example.com", "/token", basic("token", StubGateways.UNKNOWN_TOKEN));
+    assertEquals(401, unknown.status(), unknown.body());
+    assertNull(unknown.line("upstream"), "a refused realm call never reaches the service either");
+  }
+
+  @Test
   void theTokenEndpointRefusesATokenIdpDoesNotKnow() {
     EdgeClient.Answer answer =
         client()
